@@ -1,7 +1,7 @@
 const express = require('express');
 const fs = require('fs').promises;
 const path = require('path');
-const { PDFDocument } = require('pdf-lib');
+const { PDFDocument, StandardFonts } = require('pdf-lib');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
@@ -77,41 +77,70 @@ app.post('/api/fill-pdf', async (req, res) => {
         const form = pdfDoc.getForm();
         const fields = form.getFields();
         
-        // Get field information for debugging
+        // Field info for debugging / returned to client
         const fieldInfo = fields.map(field => ({
             name: field.getName(),
-            type: field.constructor.name
+            type: field.constructor ? field.constructor.name : typeof field
         }));
 
-        // Fill the form fields with data from JSON
+        // Build a lookup map for exact and case-insensitive names
+        const fieldMap = {};
+        fields.forEach(f => {
+            const name = f.getName();
+            fieldMap[name] = f;
+            fieldMap[name.toLowerCase()] = f;
+        });
+
+        // Fill the form fields with data from JSON (try flexible matching)
         let filledCount = 0;
         for (const [key, value] of Object.entries(data)) {
+            let field = fieldMap[key] || fieldMap[String(key).toLowerCase()];
+            if (!field) {
+                // Try partial match (suffix / contains) if exact not found
+                field = fields.find(f => {
+                    const n = f.getName();
+                    return n === key || n.endsWith(key) || n.toLowerCase().includes(String(key).toLowerCase());
+                });
+            }
+            if (!field) {
+                console.log(`No field matched for JSON key: '${key}'`);
+                continue;
+            }
+
             try {
-                const field = form.getField(key);
-                const fieldType = field.constructor.name;
-                
-                if (fieldType === 'PDFTextField') {
+                // Prefer calling available methods rather than relying on constructor name
+                if (typeof field.setText === 'function') {
                     field.setText(String(value));
                     filledCount++;
-                } else if (fieldType === 'PDFCheckBox') {
-                    if (value === true || value === 'true' || value === '1' || value === 1) {
+                } else if (typeof field.check === 'function' || typeof field.uncheck === 'function') {
+                    // Treat truthy values as checked
+                    const shouldCheck = value === true || value === 'true' || value === '1' || value === 1;
+                    if (shouldCheck && typeof field.check === 'function') {
                         field.check();
                         filledCount++;
-                    } else {
+                    } else if (!shouldCheck && typeof field.uncheck === 'function') {
                         field.uncheck();
                     }
-                } else if (fieldType === 'PDFRadioGroup') {
+                } else if (typeof field.select === 'function') {
                     field.select(String(value));
                     filledCount++;
-                } else if (fieldType === 'PDFDropdown') {
-                    field.select(String(value));
-                    filledCount++;
+                } else {
+                    console.log(`Unsupported field methods for '${field.getName()}'`);
                 }
-            } catch (error) {
-                console.log(`Field '${key}' not found or error filling: ${error.message}`);
+            } catch (err) {
+                console.log(`Error filling field '${field.getName()}' (json key '${key}'): ${err.message}`);
             }
         }
 
+        // Ensure appearances are updated so the filled text is visible.
+        // Embed a standard font and update appearances before saving.
+        try {
+            const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            form.updateFieldAppearances(helvetica);
+        } catch (err) {
+            console.log('Warning: failed to update field appearances:', err.message);
+        }
+        
         // Save the filled PDF (keep form fields editable - don't flatten)
         const pdfBytes = await pdfDoc.save();
         
