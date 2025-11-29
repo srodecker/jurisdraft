@@ -165,6 +165,131 @@ app.post('/api/fill-pdf', async (req, res) => {
     }
 });
 
+// Auto-fill PDF with predefined dummy data
+app.post('/api/auto-fill-pdf', async (req, res) => {
+    const { templateName } = req.body;
+
+    if (!templateName) {
+        return res.status(400).json({ error: 'Template name is required' });
+    }
+
+    const dummyData = {
+        "[ATTY_NAME]": "Auto Test Attorney",
+        "[DEFENDANT_NAME]": "Auto Test Debtor",
+        "[CASE_NUMBER]": "AUTO-TEST-123",
+        "[JUDGMENT_TOTAL_AMOUNT]": "12345.67",
+        // Add more realistic fields as needed
+        "[ADDRESS]": "123 Auto Lane",
+        "[CITY]": "Autoville",
+        "[STATE]": "CA",
+        "[ZIP_CODE]": "12345",
+        "[PHONE_NUMBER]": "555-1234",
+        "[EMAIL]": "auto@test.com"
+    };
+
+    const jsonData = JSON.stringify(dummyData);
+
+    try {
+        const templatePath = path.join(__dirname, 'templates', templateName);
+        
+        // Check if file exists
+        await fs.access(templatePath);
+
+        // Read the PDF template
+        const existingPdfBytes = await fs.readFile(templatePath);
+        
+        // Load the PDF
+        const pdfDoc = await PDFDocument.load(existingPdfBytes);
+        
+        // Get the form from the PDF
+        const form = pdfDoc.getForm();
+        const fields = form.getFields();
+        
+        // Field info for debugging / returned to client
+        const fieldInfo = fields.map(field => ({
+            name: field.getName(),
+            type: field.constructor ? field.constructor.name : typeof field
+        }));
+
+        // Build a lookup map for exact and case-insensitive names
+        const fieldMap = {};
+        fields.forEach(f => {
+            const name = f.getName();
+            fieldMap[name] = f;
+            fieldMap[name.toLowerCase()] = f;
+        });
+
+        // Fill the form fields with data from JSON (try flexible matching)
+        let filledCount = 0;
+        for (const [key, value] of Object.entries(JSON.parse(jsonData))) {
+            let field = fieldMap[key] || fieldMap[String(key).toLowerCase()];
+            if (!field) {
+                // Try partial match (suffix / contains) if exact not found
+                field = fields.find(f => {
+                    const n = f.getName();
+                    return n === key || n.endsWith(key) || n.toLowerCase().includes(String(key).toLowerCase());
+                });
+            }
+            if (!field) {
+                console.log(`No field matched for JSON key: '${key}'`);
+                continue;
+            }
+
+            try {
+                // Prefer calling available methods rather than relying on constructor name
+                if (typeof field.setText === 'function') {
+                    field.setText(String(value));
+                    filledCount++;
+                } else if (typeof field.check === 'function' || typeof field.uncheck === 'function') {
+                    const shouldCheck = value === true || value === 'true' || value === '1' || value === 1;
+                    if (shouldCheck && typeof field.check === 'function') {
+                        field.check();
+                        filledCount++;
+                    } else if (!shouldCheck && typeof field.uncheck === 'function') {
+                        field.uncheck();
+                    }
+                } else if (typeof field.select === 'function') {
+                    field.select(String(value));
+                    filledCount++;
+                } else {
+                    console.log(`Unsupported field methods for '${field.getName()}'`);
+                }
+            } catch (err) {
+                console.log(`Error filling field '${field.getName()}' (json key '${key}'): ${err.message}`);
+            }
+        }
+
+        // Ensure appearances are updated so the filled text is visible.
+        try {
+            const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+            form.updateFieldAppearances(helvetica);
+        } catch (err) {
+            console.log('Warning: failed to update field appearances:', err.message);
+        }
+        
+        // Save the filled PDF (keep form fields editable - don't flatten)
+        const pdfBytes = await pdfDoc.save();
+        
+        // Store in memory for preview and download
+        currentFilledPDF = Buffer.from(pdfBytes);
+        currentPDFName = templateName.replace('.pdf', '_filled.pdf');
+
+        // Send back as base64 for preview
+        const base64PDF = currentFilledPDF.toString('base64');
+        
+        res.json({ 
+            success: true, 
+            pdfData: base64PDF,
+            filledFields: filledCount,
+            totalFields: fields.length,
+            availableFields: fieldInfo
+        });
+    } catch (error) {
+        console.error('Error filling PDF:', error);
+        res.status(500).json({ error: 'Failed to fill PDF: ' + error.message });
+    }
+});
+
 // Download the filled PDF
 app.get('/api/download', (req, res) => {
     if (!currentFilledPDF) {
