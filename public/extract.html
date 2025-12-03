@@ -96,6 +96,10 @@ function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 
 uploadBtn.addEventListener('click', async () => {
     if (files.length===0) return;
+    
+    // Clear previous data to prevent conflicts
+    localStorage.removeItem('extractedJson');
+    
     uploadBtn.disabled = true; note.textContent = 'Uploading and extracting...';
 
     const form = new FormData();
