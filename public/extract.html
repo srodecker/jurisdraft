@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>JurisDraft — Extract</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background:#f4f6fb; margin:0; padding:24px }
+        .card { max-width:900px; margin:24px auto; background:white; border-radius:10px; padding:20px; box-shadow:0 6px 24px rgba(20,20,40,0.08) }
+        h1 { font-size:20px; margin-bottom:8px }
+        .drop { border:2px dashed #c7cbe6; border-radius:10px; padding:28px; text-align:center; color:#333 }
+        .drop.dragover { background:#eef2ff; border-color:#6c7cff }
+        .files { margin-top:12px }
+        .file { display:flex; justify-content:space-between; padding:8px 10px; border-radius:6px; background:#fafbff; margin-top:8px }
+        button { background:#667eea; color:white; border:none; padding:12px 16px; border-radius:8px; cursor:pointer }
+        .note { margin-top:10px; color:#555 }
+        .small { font-size:0.9em; color:#666 }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Extract Data from Documents</h1>
+        <p class="small">Drop files here or click to select. Supported: PDF, DOCX, TXT, JPG, PNG — any document file.</p>
+
+        <div id="drop" class="drop">Drop files here or <button id="selectBtn" type="button">Select files</button></div>
+
+        <input id="fileInput" type="file" multiple style="display:none" />
+
+        <div class="files" id="filesList"></div>
+
+        <div style="margin-top:16px; display:flex; gap:12px">
+            <button id="uploadBtn" disabled>Upload & Extract</button>
+            <button id="cancelBtn" type="button">Cancel</button>
+        </div>
+
+        <div class="note" id="note"></div>
+    </div>
+
+<script>
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const selectBtn = document.getElementById('selectBtn');
+const filesList = document.getElementById('filesList');
+const uploadBtn = document.getElementById('uploadBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const note = document.getElementById('note');
+
+let files = [];
+
+selectBtn.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', (e) => handleFiles(Array.from(e.target.files)));
+
+['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); e.stopPropagation(); drop.classList.add('dragover');
+}));
+['dragleave','drop'].forEach(ev => drop.addEventListener(ev, (e) => {
+    e.preventDefault(); e.stopPropagation(); drop.classList.remove('dragover');
+}));
+
+drop.addEventListener('drop', (e) => {
+    const dt = e.dataTransfer;
+    if (dt && dt.files) {
+        handleFiles(Array.from(dt.files));
+    }
+});
+
+function handleFiles(newFiles) {
+    // merge and dedupe by name+size
+    for (const f of newFiles) {
+        const key = f.name+":"+f.size;
+        if (!files.some(x=>x._key===key)) {
+            f._key = key;
+            files.push(f);
+        }
+    }
+    renderFiles();
+}
+
+function renderFiles() {
+    filesList.innerHTML = '';
+    files.forEach((f, i) => {
+        const el = document.createElement('div');
+        el.className = 'file';
+        el.innerHTML = `<div>${escapeHtml(f.name)}</div><div><button data-i="${i}" class="remove">Remove</button></div>`;
+        filesList.appendChild(el);
+    });
+    Array.from(filesList.querySelectorAll('.remove')).forEach(btn=> btn.addEventListener('click', (e)=>{
+        const i = Number(e.target.getAttribute('data-i'));
+        files.splice(i,1);
+        renderFiles();
+    }));
+    uploadBtn.disabled = files.length===0;
+}
+
+function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+uploadBtn.addEventListener('click', async () => {
+    if (files.length===0) return;
+    uploadBtn.disabled = true; note.textContent = 'Uploading and extracting...';
+
+    const form = new FormData();
+    for (const f of files) form.append('files', f, f.name);
+
+    try {
+        const res = await fetch('/api/extract', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Extraction failed');
+
+        // If backend returned a generated string, try to parse it as JSON
+        if (data.generated) {
+            // The model is expected to return a single JSON object; attempt to find the JSON substring
+            let txt = data.generated;
+            // If the model returns an object directly, use it; else try to extract first {...}
+            let jsonString = null;
+            try { jsonString = JSON.parse(txt); }
+            catch (e) {
+                // attempt to extract {...}
+                const match = txt.match(/\{[\s\S]*\}/m);
+                if (match) {
+                    try { jsonString = JSON.parse(match[0]); }
+                    catch (ee) { /* fall through */ }
+                }
+            }
+
+            if (jsonString) {
+                // Store pretty JSON so index.html can pick it up
+                localStorage.setItem('extractedJson', JSON.stringify(jsonString, null, 2));
+                // Optionally store additional metadata
+                localStorage.setItem('extractedFrom', JSON.stringify({ files: files.map(f=>({name:f.name,size:f.size}))}));
+
+                // Redirect to index.html which will read the extractedJson key
+                window.location.href = '/';
+                return;
+            }
+
+            // If generated text isn't valid JSON, store raw text so the user can inspect
+            localStorage.setItem('extractedJson', data.generated);
+            window.location.href = '/';
+            return;
+        }
+
+        // No generated field (likely because no API key) — store promptPreview + file metadata
+        const preview = data.promptPreview ? data.promptPreview : JSON.stringify(data.files || data, null, 2);
+        localStorage.setItem('extractedJson', JSON.stringify({ note: data.note || 'No API key', preview }, null, 2));
+        window.location.href = '/';
+
+    } catch (err) {
+        console.error(err);
+        note.textContent = 'Error: ' + err.message;
+        uploadBtn.disabled = false;
+    }
+});
+
+cancelBtn.addEventListener('click', ()=>{
+    window.location.href = '/';
+});
+</script>
+</body>
+</html>

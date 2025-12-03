@@ -21,6 +21,10 @@ app.use(express.json({ limit: '10mb' })); // Reasonable limit for JSON payloads
 app.use(express.static('public'));
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
+// Mount external routers
+const extractRouter = require('./routes/extract');
+app.use('/api', extractRouter);
+
 // Store the current filled PDF in memory for preview and download
 // NOTE: This is a simple in-memory storage suitable for single-user development/testing.
 // LIMITATION: Multiple concurrent users will overwrite each other's PDFs (race condition).
@@ -289,6 +293,8 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         res.status(500).json({ error: 'Failed to fill PDF: ' + error.message });
     }
 });
+
+// NOTE: The /api/extract route was moved to `routes/extract.js` for cleaner separation of concerns.
 
 // Download the filled PDF
 app.get('/api/download', (req, res) => {

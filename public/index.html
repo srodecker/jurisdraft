@@ -563,6 +563,27 @@
 
     // Load templates on page load
     loadTemplates();
+
+    // If an extractor page placed extracted JSON in localStorage, pick it up and populate the JSON textarea
+    (function populateFromExtractor(){
+        try {
+            const extracted = localStorage.getItem('extractedJson');
+            if (extracted) {
+                // If it's a JSON string (pretty) leave as-is, otherwise set directly
+                try {
+                    const parsed = JSON.parse(extracted);
+                    jsonInput.value = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+                } catch (e) {
+                    jsonInput.value = extracted;
+                }
+                // Remove the key so it won't overwrite future edits
+                localStorage.removeItem('extractedJson');
+                showStatus('Imported extracted data from Extract page', 'info');
+            }
+        } catch (err) {
+            console.warn('Failed to read extractedJson from localStorage', err);
+        }
+    })();
 </script>
 
 </body>
