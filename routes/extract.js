@@ -82,7 +82,7 @@ router.post('/extract', upload.array('files'), async (req, res) => {
 
         // No API key configured — return metadata and prompt preview
         return res.json({
-            success: true,
+            success: false,
             note: 'No GOOGLE_API_KEY configured; returning file metadata and prompt. Set GOOGLE_API_KEY to call Gemini.',
             promptPreview: modelInput.substring(0, 4000),
             files: fileArtifacts
