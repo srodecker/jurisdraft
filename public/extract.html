@@ -103,23 +103,46 @@ uploadBtn.addEventListener('click', async () => {
 
     try {
         const res = await fetch('/api/extract', { method: 'POST', body: form });
-        const data = await res.json();
+
+        // Safely handle non-JSON responses
+        const contentType = res.headers.get('content-type') || '';
+        let data;
+        if (contentType.includes('application/json')) {
+            data = await res.json();
+        } else {
+            const text = await res.text();
+            console.error('Non-JSON response from /api/extract:', text);
+            throw new Error('Server returned non-JSON response. Check console.');
+        }
+
         if (!res.ok) throw new Error(data.error || 'Extraction failed');
 
         // If backend returned a generated string, try to parse it as JSON
         if (data.generated) {
-            // The model is expected to return a single JSON object; attempt to find the JSON substring
             let txt = data.generated;
-            // If the model returns an object directly, use it; else try to extract first {...}
             let jsonString = null;
-            try { jsonString = JSON.parse(txt); }
-            catch (e) {
+            
+            // Try to parse the generated text
+            try { 
+                jsonString = JSON.parse(txt); 
+            } catch (e) {
                 // attempt to extract {...}
                 const match = txt.match(/\{[\s\S]*\}/m);
                 if (match) {
                     try { jsonString = JSON.parse(match[0]); }
                     catch (ee) { /* fall through */ }
                 }
+            }
+
+            // Check if the parsed JSON is actually an error object from Gemini
+            if (jsonString && jsonString.error) {
+                console.error('Gemini API Error:', jsonString.error);
+                note.innerHTML = `<div style="color: #721c24; background-color: #f8d7da; border-color: #f5c6cb; padding: 15px; border-radius: 4px; margin-top: 10px;">
+                    <strong>API Error:</strong> ${escapeHtml(jsonString.error.message || 'Unknown error')}
+                    <div style="font-size: 0.85em; margin-top: 5px;">Code: ${jsonString.error.code} | Status: ${jsonString.error.status}</div>
+                </div>`;
+                uploadBtn.disabled = false;
+                return; // STOP HERE - DO NOT REDIRECT
             }
 
             if (jsonString) {
@@ -133,9 +156,12 @@ uploadBtn.addEventListener('click', async () => {
                 return;
             }
 
-            // If generated text isn't valid JSON, store raw text so the user can inspect
-            localStorage.setItem('extractedJson', data.generated);
-            window.location.href = '/';
+            // If generated text isn't valid JSON, display it here instead of redirecting
+            note.innerHTML = `<div style="color: #856404; background-color: #fff3cd; border-color: #ffeeba; padding: 15px; border-radius: 4px; margin-top: 10px;">
+                <strong>Warning:</strong> The model returned text that is not valid JSON.
+                <pre style="white-space: pre-wrap; margin-top: 10px; font-size: 0.9em; max-height: 300px; overflow: auto;">${escapeHtml(txt)}</pre>
+            </div>`;
+            uploadBtn.disabled = false;
             return;
         }
 
@@ -146,7 +172,7 @@ uploadBtn.addEventListener('click', async () => {
 
     } catch (err) {
         console.error(err);
-        note.textContent = 'Error: ' + err.message;
+        note.innerHTML = `<div style="color: red;">Error: ${escapeHtml(err.message)}</div>`;
         uploadBtn.disabled = false;
     }
 });
