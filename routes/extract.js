@@ -6,6 +6,15 @@ const path = require('path');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
+function getTodayDateLA() {
+    return new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        month: "long",
+        day: "numeric",
+        year: "numeric"
+    }).format(new Date());
+}
+
 // POST /api/extract
 router.post('/extract', upload.array('files'), async (req, res) => {
     try {
@@ -35,8 +44,9 @@ router.post('/extract', upload.array('files'), async (req, res) => {
                 // Use gemini-2.0-flash-exp which is the latest experimental model
                 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`;
 
+                const todayDateLA = getTodayDateLA();
                 const parts = [];
-                parts.push({ text: promptTemplate + "\n\nRespond with a single JSON object." });
+                parts.push({ text: promptTemplate + `\n\nCURRENT_DATE_CONTEXT: ${todayDateLA}\n\nRespond with a single JSON object.` });
 
                 for (const f of files) {
                     parts.push({
@@ -66,6 +76,52 @@ router.post('/extract', upload.array('files'), async (req, res) => {
                 let generated = null;
                 if (json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts) {
                     generated = json.candidates[0].content.parts.map(p => p.text).join('');
+                    
+                    // --- Post-processing Overrides ---
+                    try {
+                        // Attempt to parse the generated JSON to apply strict overrides
+                        let cleanJsonStr = generated;
+                        // Strip markdown code blocks if present
+                        const match = generated.match(/```json\s*([\s\S]*?)\s*```/) || generated.match(/```\s*([\s\S]*?)\s*```/);
+                        if (match) cleanJsonStr = match[1];
+
+                        const parsed = JSON.parse(cleanJsonStr);
+                        
+                        // 1. Force DATE_SIGNED to today's date in LA time
+                        parsed["[DATE_SIGNED]"] = todayDateLA;
+                        // Also handle unbracketed key just in case
+                        if (parsed["DATE_SIGNED"] !== undefined) parsed["DATE_SIGNED"] = todayDateLA;
+                        
+                        // 2. Force ATTY_EMAIL2 to match ATTY_EMAIL
+                        const email = parsed["[ATTY_EMAIL]"] || parsed["ATTY_EMAIL"] || "";
+                        parsed["[ATTY_EMAIL2]"] = email;
+                        if (parsed["ATTY_EMAIL2"] !== undefined) parsed["ATTY_EMAIL2"] = email;
+
+                        // 3. Clean PLAINTIFF_NAME (remove trailing comma)
+                        let pName = parsed["[PLAINTIFF_NAME]"] || parsed["PLAINTIFF_NAME"] || "";
+                        if (pName && typeof pName === 'string') {
+                            pName = pName.trim().replace(/,\s*$/, ''); // Remove trailing comma
+                            if (parsed["[PLAINTIFF_NAME]"] !== undefined) parsed["[PLAINTIFF_NAME]"] = pName;
+                            if (parsed["PLAINTIFF_NAME"] !== undefined) parsed["PLAINTIFF_NAME"] = pName;
+                            
+                            // Also update mirror field if it exists
+                            if (parsed["[PLAINTIFF_NAME_P2]"] !== undefined) parsed["[PLAINTIFF_NAME_P2]"] = pName;
+                            if (parsed["PLAINTIFF_NAME_P2"] !== undefined) parsed["PLAINTIFF_NAME_P2"] = pName;
+                        }
+
+                        // Sanity Check Logging
+                        console.log(`[Sanity Check] DATE_SIGNED: "${parsed["[DATE_SIGNED]"]}" (Expected: "${todayDateLA}")`);
+
+                        // Re-serialize to string so the client receives the modified version
+                        generated = JSON.stringify(parsed, null, 2);
+                    } catch (parseErr) {
+                        console.warn('Failed to parse generated JSON for post-processing overrides:', parseErr.message);
+                        // Fallback: Try regex replacement on the raw string to ensure date is updated
+                        // Handle both bracketed and unbracketed versions
+                        generated = generated.replace(/"\[?DATE_SIGNED\]?"\s*:\s*"[^"]*"/g, `"[DATE_SIGNED]": "${todayDateLA}"`);
+                    }
+                    // ---------------------------------
+
                 } else if (json.error) {
                     // Pass through the API error
                     generated = JSON.stringify(json); 

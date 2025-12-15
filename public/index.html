@@ -569,11 +569,40 @@
         try {
             const extracted = localStorage.getItem('extractedJson');
             if (extracted) {
-                // If it's a JSON string (pretty) leave as-is, otherwise set directly
                 try {
-                    const parsed = JSON.parse(extracted);
-                    jsonInput.value = typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+                    let parsed = JSON.parse(extracted);
+                    
+                    // FORCE DATE_SIGNED TO TODAY (Client-side override)
+                    const today = new Date().toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                    });
+                    
+                    if (parsed["[DATE_SIGNED]"] !== undefined) parsed["[DATE_SIGNED]"] = today;
+                    if (parsed["DATE_SIGNED"] !== undefined) parsed["DATE_SIGNED"] = today;
+                    
+                    // Also ensure ATTY_EMAIL2 matches ATTY_EMAIL if missing
+                    const email = parsed["[ATTY_EMAIL]"] || parsed["ATTY_EMAIL"];
+                    if (email) {
+                        if (parsed["[ATTY_EMAIL2]"] !== undefined) parsed["[ATTY_EMAIL2]"] = email;
+                        if (parsed["ATTY_EMAIL2]"] !== undefined) parsed["ATTY_EMAIL2"] = email;
+                    }
+
+                    // Clean PLAINTIFF_NAME (remove trailing comma)
+                    let pName = parsed["[PLAINTIFF_NAME]"] || parsed["PLAINTIFF_NAME"];
+                    if (pName && typeof pName === 'string') {
+                        pName = pName.trim().replace(/,\s*$/, '');
+                        if (parsed["[PLAINTIFF_NAME]"] !== undefined) parsed["[PLAINTIFF_NAME]"] = pName;
+                        if (parsed["PLAINTIFF_NAME"] !== undefined) parsed["PLAINTIFF_NAME"] = pName;
+                        // Mirror
+                        if (parsed["[PLAINTIFF_NAME_P2]"] !== undefined) parsed["[PLAINTIFF_NAME_P2]"] = pName;
+                        if (parsed["PLAINTIFF_NAME_P2"] !== undefined) parsed["PLAINTIFF_NAME_P2"] = pName;
+                    }
+
+                    jsonInput.value = JSON.stringify(parsed, null, 2);
                 } catch (e) {
+                    console.error('Error parsing extracted JSON:', e);
                     jsonInput.value = extracted;
                 }
                 // Remove the key so it won't overwrite future edits
