@@ -71,8 +71,6 @@ Do NOT mix details (e.g., do not take the Partner's SBN and the Associate's emai
 
 SBN extraction:
 
-SBN extraction:
-
 Extract that chosen attorney’s SBN from the same header block.
 
 SBN is a 5–6 digit number near “SBN”.
