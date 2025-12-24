@@ -35,16 +35,34 @@ let currentFilledPDF = null;
 let currentPDFName = null;
 
 /**
- * Sanitize string values by replacing curly/smart quotes with standard quotes
+ * Sanitize string values by replacing problematic characters that WinAnsi can't encode
  * @param {string} value - The string to sanitize
- * @returns {string} - Sanitized string with standard quotes
+ * @returns {string} - Sanitized string compatible with WinAnsi encoding
  */
 function sanitizeQuotes(value) {
     if (typeof value !== 'string') return value;
-    // Replace curly/smart quotes with standard straight quotes
+    
     return value
+        // Replace curly/smart quotes with standard straight quotes
         .replace(/[\u201C\u201D]/g, '"')  // " and "
-        .replace(/[\u2018\u2019]/g, "'"); // ' and '
+        .replace(/[\u2018\u2019]/g, "'") // ' and '
+        // Replace Cyrillic and look-alike characters with Latin equivalents
+        .replace(/[\u0410\u0430]/g, 'A') // Cyrillic A
+        .replace(/[\u0412\u0432]/g, 'B') // Cyrillic B
+        .replace(/[\u0415\u0435]/g, 'E') // Cyrillic E
+        .replace(/[\u041A\u043A]/g, 'K') // Cyrillic K
+        .replace(/[\u041C\u043C]/g, 'M') // Cyrillic M
+        .replace(/[\u041D\u043D]/g, 'H') // Cyrillic H
+        .replace(/[\u041E\u043E]/g, 'O') // Cyrillic O
+        .replace(/[\u0420\u0440]/g, 'P') // Cyrillic P
+        .replace(/[\u0421\u0441]/g, 'C') // Cyrillic C
+        .replace(/[\u0422\u0442]/g, 'T') // Cyrillic T
+        .replace(/[\u0425\u0445]/g, 'X') // Cyrillic X
+        .replace(/[\u0423\u0443]/g, 'Y') // Cyrillic Y
+        // Replace em/en dashes with hyphens
+        .replace(/[\u2013\u2014]/g, '-')
+        // Remove any remaining characters outside WinAnsi range (keep basic Latin + common symbols)
+        .replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
 }
 
 /**
@@ -62,16 +80,20 @@ function sanitizeAllValues(data) {
 
 /**
  * Process dynamic variables in the data object.
- * Currently handles [VAR_ATTY_NAME_WITH_ADDRESS] which combines attorney name, firm name, and firm city.
+ * Currently handles:
+ * - [VAR_ATTY_NAME_WITH_ADDRESS]: attorney name (without SBN), firm name, and firm city
+ * - [VAR_ATTY_WITH_SBN]: attorney name(s) with SBN, semicolon-separated if multiple
+ * - [VAR_FIRM_FULL_ADDR]: firm name, address, and city
  * @param {Object} data - The JSON data object containing field values
  * @returns {Object} - Modified data object with computed dynamic variables
  */
 function processDynamicVariables(data) {
-    // Handle VAR_ATTY_NAME_WITH_ADDRESS
     const attyName = data['[ATTY_NAME]'] || '';
     const firmName = data['[FIRM_NAME]'] || '';
+    const firmAddress = data['[FIRM_ADDRESS]'] || '';
     const firmCity = data['[FIRM_CITY]'] || '';
     
+    // Handle VAR_ATTY_NAME_WITH_ADDRESS
     if (attyName && (firmName || firmCity)) {
         // Remove "SBN" and everything after it from attorney name
         let cleanName = attyName;
@@ -88,6 +110,43 @@ function processDynamicVariables(data) {
         if (firmCity) lines.push(firmCity);
         
         data['[VAR_ATTY_NAME_WITH_ADDRESS]'] = lines.join('\n');
+    }
+    
+    // Handle VAR_ATTY_WITH_SBN
+    // Collect all attorney names with their SBN numbers
+    const attorneys = [];
+    const attySbn = data['[ATTY_SBN]'] || '';
+    
+    if (attyName) {
+        const attyWithSbn = attySbn ? `${attyName}, SBN: ${attySbn}` : attyName;
+        attorneys.push(attyWithSbn);
+    }
+    
+    // Check for additional attorney fields (ATTY_NAME2 + ATTY_SBN2, etc.)
+    for (let i = 2; i <= 10; i++) {
+        const additionalAttyName = data[`[ATTY_NAME${i}]`] || '';
+        const additionalAttySbn = data[`[ATTY_SBN${i}]`] || '';
+        
+        if (additionalAttyName) {
+            const attyWithSbn = additionalAttySbn 
+                ? `${additionalAttyName}, SBN: ${additionalAttySbn}` 
+                : additionalAttyName;
+            attorneys.push(attyWithSbn);
+        }
+    }
+    
+    if (attorneys.length > 0) {
+        data['[VAR_ATTY_WITH_SBN]'] = attorneys.join('; ');
+    }
+    
+    // Handle VAR_FIRM_FULL_ADDR
+    if (firmName || firmAddress || firmCity) {
+        const firmLines = [];
+        if (firmName) firmLines.push(firmName);
+        if (firmAddress) firmLines.push(firmAddress);
+        if (firmCity) firmLines.push(firmCity);
+        
+        data['[VAR_FIRM_FULL_ADDR]'] = firmLines.join('\n');
     }
     
     return data;
