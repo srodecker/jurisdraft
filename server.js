@@ -34,6 +34,65 @@ app.use('/api', extractRouter);
 let currentFilledPDF = null;
 let currentPDFName = null;
 
+/**
+ * Sanitize string values by replacing curly/smart quotes with standard quotes
+ * @param {string} value - The string to sanitize
+ * @returns {string} - Sanitized string with standard quotes
+ */
+function sanitizeQuotes(value) {
+    if (typeof value !== 'string') return value;
+    // Replace curly/smart quotes with standard straight quotes
+    return value
+        .replace(/[\u201C\u201D]/g, '"')  // " and "
+        .replace(/[\u2018\u2019]/g, "'"); // ' and '
+}
+
+/**
+ * Sanitize all string values in the data object
+ * @param {Object} data - The JSON data object
+ * @returns {Object} - Data object with sanitized string values
+ */
+function sanitizeAllValues(data) {
+    const sanitized = {};
+    for (const [key, value] of Object.entries(data)) {
+        sanitized[key] = sanitizeQuotes(value);
+    }
+    return sanitized;
+}
+
+/**
+ * Process dynamic variables in the data object.
+ * Currently handles [VAR_ATTY_NAME_WITH_ADDRESS] which combines attorney name, firm name, and firm city.
+ * @param {Object} data - The JSON data object containing field values
+ * @returns {Object} - Modified data object with computed dynamic variables
+ */
+function processDynamicVariables(data) {
+    // Handle VAR_ATTY_NAME_WITH_ADDRESS
+    const attyName = data['[ATTY_NAME]'] || '';
+    const firmName = data['[FIRM_NAME]'] || '';
+    const firmCity = data['[FIRM_CITY]'] || '';
+    
+    if (attyName && (firmName || firmCity)) {
+        // Remove "SBN" and everything after it from attorney name
+        let cleanName = attyName;
+        const sbnIndex = attyName.indexOf('SBN');
+        if (sbnIndex !== -1) {
+            cleanName = attyName.substring(0, sbnIndex).trim();
+            // Remove trailing comma if present
+            cleanName = cleanName.replace(/,\s*$/, '');
+        }
+        
+        // Build multi-line address block
+        const lines = [cleanName];
+        if (firmName) lines.push(firmName);
+        if (firmCity) lines.push(firmCity);
+        
+        data['[VAR_ATTY_NAME_WITH_ADDRESS]'] = lines.join('\n');
+    }
+    
+    return data;
+}
+
 // Get list of available PDF templates
 app.get('/api/templates', async (req, res) => {
     try {
@@ -62,6 +121,12 @@ app.post('/api/fill-pdf', async (req, res) => {
         } catch (e) {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
+
+        // Sanitize all values (replace curly quotes with standard quotes)
+        data = sanitizeAllValues(data);
+
+        // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
+        data = processDynamicVariables(data);
 
         const templatePath = path.join(__dirname, 'templates', templateName);
         
@@ -192,7 +257,12 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         "[EMAIL]": "auto@test.com"
     };
 
-    const jsonData = JSON.stringify(dummyData);
+    // Sanitize all values (replace curly quotes with standard quotes)
+    const sanitizedData = sanitizeAllValues(dummyData);
+
+    // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
+    const processedData = processDynamicVariables(sanitizedData);
+    const jsonData = JSON.stringify(processedData);
 
     try {
         const templatePath = path.join(__dirname, 'templates', templateName);

@@ -63,7 +63,7 @@ Selection Logic:
 2. If only one attorney is listed, select that one.
 
 Once the attorney is selected, extract THEIR specific details:
-- [ATTY_NAME]: Their full name and SBN.
+- [ATTY_NAME]: Their full name and title, remove any SBN.
 - [ATTY_EMAIL]: Their specific email address.
 - [ABSTRACT_SIGNATORY_NAME]: Their name + ", Esq."
 
@@ -76,16 +76,6 @@ Extract that chosen attorney’s SBN from the same header block.
 SBN is a 5–6 digit number near “SBN”.
 
 Formatting requirements:
-
-[ATTY_NAME] must be exactly: "Full Name, SBN: #####"
-
-[ATTY_EMAIL] must be the chosen attorney’s email.
-
-[ATTY_EMAIL2] rule:
-
-If a second distinct attorney email exists, put it there.
-
-Otherwise FORCE: [ATTY_EMAIL2] = [ATTY_EMAIL].
 
 Firm block extraction:
 
@@ -228,6 +218,7 @@ Return exactly this JSON structure with no additional fields:
 
 {
 "[ATTY_NAME]": "",
+"[ATTY_SBN]": "",
 "[FIRM_NAME]": "",
 "[FIRM_ADDRESS]": "",
 "[FIRM_CITY]": "",
