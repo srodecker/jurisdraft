@@ -79,6 +79,42 @@ function sanitizeAllValues(data) {
 }
 
 /**
+ * Standardize address formatting with common abbreviations and proper capitalization
+ * @param {string} address - The address string to standardize
+ * @returns {string} - Standardized address
+ */
+function standardizeAddress(address) {
+    if (!address || typeof address !== 'string') return address;
+    
+    let formatted = address;
+    
+    // Abbreviate common address suffixes (case-insensitive)
+    const abbreviations = {
+        '\\bCourt\\b': 'Ct.',
+        '\\bSuite\\b': 'Ste.',
+        '\\bStreet\\b': 'St.',
+        '\\bAvenue\\b': 'Ave.',
+        '\\bBoulevard\\b': 'Blvd.',
+        '\\bFloor\\b': 'Fl.',
+        '\\bDrive\\b': 'Dr.',
+        '\\bRoad\\b': 'Rd.',
+        '\\bLane\\b': 'Ln.',
+        '\\bCircle\\b': 'Cir.',
+        '\\bParkway\\b': 'Pkwy.'
+    };
+    
+    for (const [pattern, abbrev] of Object.entries(abbreviations)) {
+        formatted = formatted.replace(new RegExp(pattern, 'gi'), abbrev);
+    }
+    
+    // Fix Mc/Mac capitalization (McDonald, MacArthur, etc.)
+    formatted = formatted.replace(/\bMac([a-z])/gi, (match, letter) => 'Mac' + letter.toUpperCase());
+    formatted = formatted.replace(/\bMc([a-z])/gi, (match, letter) => 'Mc' + letter.toUpperCase());
+    
+    return formatted;
+}
+
+/**
  * Process dynamic variables in the data object.
  * Currently handles:
  * - [VAR_ATTY_NAME_WITH_ADDRESS]: attorney name (without SBN), firm name, and firm city
@@ -92,24 +128,66 @@ function processDynamicVariables(data) {
     const firmName = data['[FIRM_NAME]'] || '';
     const firmAddress = data['[FIRM_ADDRESS]'] || '';
     const firmCity = data['[FIRM_CITY]'] || '';
+    const firmState = data['[FIRM_STATE]'] || '';
+    const firmZip = data['[FIRM_ZIP]'] || '';
+    const firmPhone = data['[FIRM_PHONE]'] || '';
     
     // Handle VAR_ATTY_NAME_WITH_ADDRESS
-    if (attyName && (firmName || firmCity)) {
-        // Remove "SBN" and everything after it from attorney name
+    if (attyName || firmName || firmAddress || firmCity) {
+        // Clean attorney name: Remove "SBN" and numbers
         let cleanName = attyName;
-        const sbnIndex = attyName.indexOf('SBN');
-        if (sbnIndex !== -1) {
-            cleanName = attyName.substring(0, sbnIndex).trim();
-            // Remove trailing comma if present
-            cleanName = cleanName.replace(/,\s*$/, '');
+        if (attyName) {
+            // Remove SBN and everything after it
+            const sbnIndex = attyName.indexOf('SBN');
+            if (sbnIndex !== -1) {
+                cleanName = attyName.substring(0, sbnIndex).trim();
+            }
+            // Remove any remaining numbers and trailing commas
+            cleanName = cleanName.replace(/\d+/g, '').replace(/,\s*$/, '').trim();
         }
         
-        // Build multi-line address block
-        const lines = [cleanName];
-        if (firmName) lines.push(firmName);
-        if (firmCity) lines.push(firmCity);
+        // Format the address with standardization
+        const formattedAddress = standardizeAddress(firmAddress);
         
-        data['[VAR_ATTY_NAME_WITH_ADDRESS]'] = lines.join('\n');
+        // Build the parts array (excluding address and city for now)
+        const parts = [];
+        
+        if (cleanName) parts.push(cleanName);
+        if (firmName) parts.push(firmName);
+        
+        // Add formatted address + comma + city/state/zip as one segment
+        if (formattedAddress || firmCity) {
+            const addressSegment = [];
+            if (formattedAddress) addressSegment.push(formattedAddress);
+            
+            // Build city, state, zip
+            const cityStateZip = [firmCity, firmState, firmZip]
+                .filter(Boolean)
+                .join(' ');
+            
+            if (cityStateZip) {
+                // Add comma between address and city
+                if (formattedAddress && cityStateZip) {
+                    addressSegment.push(', ' + cityStateZip);
+                } else if (cityStateZip) {
+                    addressSegment.push(cityStateZip);
+                }
+            }
+            
+            if (addressSegment.length > 0) {
+                parts.push(addressSegment.join(''));
+            }
+        }
+        
+        // Add phone at the end
+        if (firmPhone) parts.push(firmPhone);
+        
+        // Combine all parts with single space separator
+        const finalString = parts.join(' ');
+        
+        if (finalString) {
+            data['[VAR_ATTY_NAME_WITH_ADDRESS]'] = finalString;
+        }
     }
     
     // Handle VAR_ATTY_WITH_SBN
@@ -147,6 +225,17 @@ function processDynamicVariables(data) {
         if (firmCity) firmLines.push(firmCity);
         
         data['[VAR_FIRM_FULL_ADDR]'] = firmLines.join('\n');
+    }
+    
+    // Handle VAR_DEFENDANT_WITH_DOES for SUM-100
+    const defendantName = data['[DEFENDANT_NAME]'] || '';
+    if (defendantName) {
+        // Strip out any existing legal suffixes to get clean name
+        let cleanName = defendantName
+            .replace(/,\s*(an individual|a corporation|a limited liability company|an LLC|a partnership|a sole proprietorship|etc\.?)$/i, '')
+            .trim();
+        
+        data['[VAR_DEFENDANT_WITH_DOES]'] = `${cleanName}, an individual; and DOES 1 through 10, inclusive`;
     }
     
     return data;

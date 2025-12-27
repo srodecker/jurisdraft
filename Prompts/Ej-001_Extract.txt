@@ -64,6 +64,7 @@ Selection Logic:
 
 Once the attorney is selected, extract THEIR specific details:
 - [ATTY_NAME]: Their full name and title, remove any SBN.
+- [ATTY_SBN]: Extract that chosen attorney's SBN (5-6 digit number near "SBN").
 - [ATTY_EMAIL]: Their specific email address.
 - [ABSTRACT_SIGNATORY_NAME]: Their name + ", Esq."
 
@@ -99,14 +100,6 @@ Force:
 [IS_JUDGMENT_CREDITOR] = true
 [IS_JUDGMENT_CREDITOR2] = true
 
-Force [CREDITOR1_NAME] to be a 3-line block EXACTLY:
-"Kinecta Federal Credit Union
-1440 ROSECRANS AVENUE
-MANHATTAN BEACH CA 90266"
-
-DEBTOR 1 (STRICT FORMATTING, NOT CASE-SPECIFIC)
-Debtor 1 = first individual defendant listed in the caption.
-
 You must extract BOTH name and last known address if the address appears anywhere in the judgment.
 
 How to find the address (highest to lowest confidence):
@@ -118,16 +111,6 @@ Defendant address in the caption/party section.
 Address stated near the debtor name in the judgment body.
 
 If no address exists anywhere, leave address blank.
-
-[DEBTOR1_NAME] formatting:
-
-If address exists, MUST be multi-line:
-Line 1: "FULL NAME, an individual"
-Line 2: street address
-Line 3: "City, State ZIP"
-
-If address does not exist, output only line 1:
-"FULL NAME, an individual"
 
 DL rules (WFZ):
 
@@ -153,33 +136,15 @@ If NO SSN is found in any document:
    - [DEBTOR1_SS_LAST4] = ""
    - [IS_DEBTOR1_SS_UNKNOWN] = true.
 
-[DEBTOR1_SERVICE_ADDRESS] rules:
-
-If the judgment explicitly provides a service/mailing address for notice/summons/service, use that.
-
-If NOT explicitly provided, DEFAULT to the same debtor address used in [DEBTOR1_NAME].
-
-Format as a SINGLE LINE:
-"FULL NAME, street address, City, State ZIP"
-
-If you have no address at all, leave "".
-
 DEBTOR 2 (ONLY IF CLEARLY PRESENT)
 Only fill Debtor 2 fields if the judgment clearly lists a second debtor AND provides separate identifying info tied to that debtor.
 Otherwise force:
-
-[DEBTOR2_ADDRESS] = ""
-
-[DEBTOR2_DL_LAST4] = ""
-
-[DEBTOR2_SS_LAST4] = ""
 
 CAPTION + PAGE 2 MIRRORING
 
 [PLAINTIFF_NAME] = plaintiff in judgment
 
-[DEFENDANT_NAME] = defendant; if multiple debtors or “et al” appears:
-"[Primary Defendant], et al"
+[DEFENDANT_NAME] = Extract the Defendant's name exactly as it appears in the header (e.g., JOHN DOE) into [DEFENDANT_NAME]. Do not add legal phrasing, suffixes, or 'DOES' clauses. Just extract the raw name entity.
 
 Mirror:
 [PLAINTIFF_NAME_P2] = [PLAINTIFF_NAME]
@@ -222,6 +187,8 @@ Return exactly this JSON structure with no additional fields:
 "[FIRM_NAME]": "",
 "[FIRM_ADDRESS]": "",
 "[FIRM_CITY]": "",
+"[FIRM_STATE]": "",
+"[FIRM_ZIP]": "",
 "[ATTY_EMAIL]": "",
 "[FIRM_PHONE]": "",
 "[FIRM_FAX]": "",
@@ -237,12 +204,6 @@ Return exactly this JSON structure with no additional fields:
 "[DEFENDANT_NAME]": "",
 "[CASE_NUMBER]": "",
 "[IS_JUDGMENT_CREDITOR2]": false,
-"[DEBTOR1_NAME]": "",
-"[DEBTOR1_DL_LAST4]": "",
-"[IS_DEBTOR1_DL_UNKNOWN]": false,
-"[DEBTOR1_SS_LAST4]": "",
-"[IS_DEBTOR1_SS_UNKNOWN]": false,
-"[DEBTOR1_SERVICE_ADDRESS]": "",
 "[CREDITOR1_NAME]": "",
 "[ABSTRACT_COUNTY]": "",
 "[DATE_SIGNED]": "",
@@ -260,3 +221,4 @@ Return exactly this JSON structure with no additional fields:
 }
 
 Return ONLY the JSON object.
+
