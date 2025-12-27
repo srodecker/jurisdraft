@@ -80,11 +80,6 @@ Formatting requirements:
 
 Firm block extraction:
 
-Extract firm name, address, city/state/zip, phone, fax from the firm header block.
-
-[FIRM_CITY] must include City, State Abbreviation, and Zip Code.
-Example: "Irvine, CA 92618"
-
 Output firm name in normal casing (Title Case) even if the source shows ALL CAPS.
 
 Also force:
@@ -204,6 +199,15 @@ Return exactly this JSON structure with no additional fields:
 "[DEFENDANT_NAME]": "",
 "[CASE_NUMBER]": "",
 "[IS_JUDGMENT_CREDITOR2]": false,
+"[DEBTOR1_NAME]": "",
+"[DEBTOR1_DL_LAST4]": "",
+"[IS_DEBTOR1_DL_UNKNOWN]": false,
+"[DEBTOR1_SS_LAST4]": "",
+"[IS_DEBTOR1_SS_UNKNOWN]": false,
+"[DEBTOR1_ADDRESS]": "",
+"[DEBTOR1_CITY]": "",
+"[DEBTOR1_STATE]": "",
+"[DEBTOR1_ZIP]": "",
 "[CREDITOR1_NAME]": "",
 "[ABSTRACT_COUNTY]": "",
 "[DATE_SIGNED]": "",

@@ -10,6 +10,85 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
+// Cache for CSV data to avoid reading files on every request
+let limitedCourtsCache = null;
+let courtInfoCache = null;
+
+/**
+ * Parse CSV content into an array of objects, handling quoted fields
+ * @param {string} csvContent - The CSV file content
+ * @returns {Array<Object>} - Array of objects with column headers as keys
+ */
+function parseCSV(csvContent) {
+    const lines = csvContent.trim().split('\n');
+    if (lines.length < 2) return [];
+    
+    // Helper function to parse a CSV line with quoted field support
+    function parseLine(line) {
+        const values = [];
+        let current = '';
+        let inQuotes = false;
+        
+        for (let i = 0; i < line.length; i++) {
+            const char = line[i];
+            
+            if (char === '"') {
+                // Toggle quote state
+                inQuotes = !inQuotes;
+            } else if (char === ',' && !inQuotes) {
+                // End of field
+                values.push(current.trim());
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+        
+        // Add the last field
+        values.push(current.trim());
+        
+        return values;
+    }
+    
+    const headers = parseLine(lines[0]);
+    const rows = [];
+    
+    for (let i = 1; i < lines.length; i++) {
+        const values = parseLine(lines[i]);
+        const row = {};
+        headers.forEach((header, index) => {
+            row[header] = values[index] || '';
+        });
+        rows.push(row);
+    }
+    
+    return rows;
+}
+
+/**
+ * Load and cache CSV data
+ * @returns {Promise<{limitedCourts: Array, courtInfo: Array}>}
+ */
+async function loadCourtData() {
+    if (!limitedCourtsCache || !courtInfoCache) {
+        const limitedCourtsPath = path.join(__dirname, 'data', 'Limited_Courts.csv');
+        const courtInfoPath = path.join(__dirname, 'data', 'Court_Info.csv');
+        
+        const [limitedCourtsContent, courtInfoContent] = await Promise.all([
+            fs.readFile(limitedCourtsPath, 'utf-8'),
+            fs.readFile(courtInfoPath, 'utf-8')
+        ]);
+        
+        limitedCourtsCache = parseCSV(limitedCourtsContent);
+        courtInfoCache = parseCSV(courtInfoContent);
+    }
+    
+    return {
+        limitedCourts: limitedCourtsCache,
+        courtInfo: courtInfoCache
+    };
+}
+
 // Rate limiting to prevent abuse
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -46,19 +125,31 @@ function sanitizeQuotes(value) {
         // Replace curly/smart quotes with standard straight quotes
         .replace(/[\u201C\u201D]/g, '"')  // " and "
         .replace(/[\u2018\u2019]/g, "'") // ' and '
-        // Replace Cyrillic and look-alike characters with Latin equivalents
-        .replace(/[\u0410\u0430]/g, 'A') // Cyrillic A
-        .replace(/[\u0412\u0432]/g, 'B') // Cyrillic B
-        .replace(/[\u0415\u0435]/g, 'E') // Cyrillic E
-        .replace(/[\u041A\u043A]/g, 'K') // Cyrillic K
-        .replace(/[\u041C\u043C]/g, 'M') // Cyrillic M
-        .replace(/[\u041D\u043D]/g, 'H') // Cyrillic H
-        .replace(/[\u041E\u043E]/g, 'O') // Cyrillic O
-        .replace(/[\u0420\u0440]/g, 'P') // Cyrillic P
-        .replace(/[\u0421\u0441]/g, 'C') // Cyrillic C
-        .replace(/[\u0422\u0442]/g, 'T') // Cyrillic T
-        .replace(/[\u0425\u0445]/g, 'X') // Cyrillic X
-        .replace(/[\u0423\u0443]/g, 'Y') // Cyrillic Y
+        // Replace Cyrillic and look-alike characters with Latin equivalents (preserving case)
+        .replace(/\u0410/g, 'A') // Cyrillic A (uppercase)
+        .replace(/\u0430/g, 'a') // Cyrillic a (lowercase)
+        .replace(/\u0412/g, 'B') // Cyrillic B (uppercase)
+        .replace(/\u0432/g, 'b') // Cyrillic b (lowercase)
+        .replace(/\u0415/g, 'E') // Cyrillic E (uppercase)
+        .replace(/\u0435/g, 'e') // Cyrillic e (lowercase)
+        .replace(/\u041A/g, 'K') // Cyrillic K (uppercase)
+        .replace(/\u043A/g, 'k') // Cyrillic k (lowercase)
+        .replace(/\u041C/g, 'M') // Cyrillic M (uppercase)
+        .replace(/\u043C/g, 'm') // Cyrillic m (lowercase)
+        .replace(/\u041D/g, 'H') // Cyrillic H (uppercase)
+        .replace(/\u043D/g, 'h') // Cyrillic h (lowercase)
+        .replace(/\u041E/g, 'O') // Cyrillic O (uppercase)
+        .replace(/\u043E/g, 'o') // Cyrillic o (lowercase)
+        .replace(/\u0420/g, 'P') // Cyrillic P (uppercase)
+        .replace(/\u0440/g, 'p') // Cyrillic p (lowercase)
+        .replace(/\u0421/g, 'C') // Cyrillic C (uppercase)
+        .replace(/\u0441/g, 'c') // Cyrillic c (lowercase)
+        .replace(/\u0422/g, 'T') // Cyrillic T (uppercase)
+        .replace(/\u0442/g, 't') // Cyrillic t (lowercase)
+        .replace(/\u0425/g, 'X') // Cyrillic X (uppercase)
+        .replace(/\u0445/g, 'x') // Cyrillic x (lowercase)
+        .replace(/\u0423/g, 'Y') // Cyrillic Y (uppercase)
+        .replace(/\u0443/g, 'y') // Cyrillic y (lowercase)
         // Replace em/en dashes with hyphens
         .replace(/[\u2013\u2014]/g, '-')
         // Remove any remaining characters outside WinAnsi range (keep basic Latin + common symbols)
@@ -106,11 +197,7 @@ function standardizeAddress(address) {
     for (const [pattern, abbrev] of Object.entries(abbreviations)) {
         formatted = formatted.replace(new RegExp(pattern, 'gi'), abbrev);
     }
-    
-    // Fix Mc/Mac capitalization (McDonald, MacArthur, etc.)
-    formatted = formatted.replace(/\bMac([a-z])/gi, (match, letter) => 'Mac' + letter.toUpperCase());
-    formatted = formatted.replace(/\bMc([a-z])/gi, (match, letter) => 'Mc' + letter.toUpperCase());
-    
+       
     return formatted;
 }
 
@@ -120,10 +207,12 @@ function standardizeAddress(address) {
  * - [VAR_ATTY_NAME_WITH_ADDRESS]: attorney name (without SBN), firm name, and firm city
  * - [VAR_ATTY_WITH_SBN]: attorney name(s) with SBN, semicolon-separated if multiple
  * - [VAR_FIRM_FULL_ADDR]: firm name, address, and city
+ * - [VAR_COURTHOUSE]: courthouse name based on debtor ZIP code
+ * - [VAR_COURT_INFO]: courthouse address based on debtor ZIP code
  * @param {Object} data - The JSON data object containing field values
- * @returns {Object} - Modified data object with computed dynamic variables
+ * @returns {Promise<Object>} - Modified data object with computed dynamic variables
  */
-function processDynamicVariables(data) {
+async function processDynamicVariables(data) {
     const attyName = data['[ATTY_NAME]'] || '';
     const firmName = data['[FIRM_NAME]'] || '';
     const firmAddress = data['[FIRM_ADDRESS]'] || '';
@@ -131,6 +220,7 @@ function processDynamicVariables(data) {
     const firmState = data['[FIRM_STATE]'] || '';
     const firmZip = data['[FIRM_ZIP]'] || '';
     const firmPhone = data['[FIRM_PHONE]'] || '';
+    const debtorZip = data['[DEBTOR1_ZIP]'] || '';
     
     // Handle VAR_ATTY_NAME_WITH_ADDRESS
     if (attyName || firmName || firmAddress || firmCity) {
@@ -157,25 +247,12 @@ function processDynamicVariables(data) {
         
         // Add formatted address + comma + city/state/zip as one segment
         if (formattedAddress || firmCity) {
-            const addressSegment = [];
-            if (formattedAddress) addressSegment.push(formattedAddress);
-            
-            // Build city, state, zip
-            const cityStateZip = [firmCity, firmState, firmZip]
-                .filter(Boolean)
-                .join(' ');
-            
-            if (cityStateZip) {
-                // Add comma between address and city
-                if (formattedAddress && cityStateZip) {
-                    addressSegment.push(', ' + cityStateZip);
-                } else if (cityStateZip) {
-                    addressSegment.push(cityStateZip);
-                }
-            }
-            
-            if (addressSegment.length > 0) {
-                parts.push(addressSegment.join(''));
+          
+            // Build city, state, zip as "City, State Zip"
+            const firmCityStateZip = formattedAddress + ', ' + firmCity + ', ' + firmState + ' ' + firmZip;
+                        
+            if (firmCityStateZip.length > 0) {
+                parts.push(firmCityStateZip);
             }
         }
         
@@ -238,6 +315,30 @@ function processDynamicVariables(data) {
         data['[VAR_DEFENDANT_WITH_DOES]'] = `${cleanName}, an individual; and DOES 1 through 10, inclusive`;
     }
     
+    // Handle VAR_COURTHOUSE and VAR_COURT_INFO based on debtor ZIP code
+    if (debtorZip) {
+        try {
+            const { limitedCourts, courtInfo } = await loadCourtData();
+          console.log('Loading Zip code:', debtorZip);
+            // Find the courthouse for this ZIP code
+            const zipEntry = limitedCourts.find(row => row['Zip Code'] === debtorZip);
+            
+            if (zipEntry && zipEntry['Courthouse']) {
+                const courthouseName = zipEntry['Courthouse'];
+                data['[VAR_COURTHOUSE]'] = courthouseName;
+                
+                // Find the address for this courthouse
+                const courtEntry = courtInfo.find(row => row['Courthouse'] === courthouseName);
+                
+                if (courtEntry && courtEntry['Address']) {
+                    data['[VAR_COURT_INFO]'] = courtEntry['Address'];
+                }
+            }
+        } catch (error) {
+            console.error('Error loading court data:', error);
+        }
+    }
+    
     return data;
 }
 
@@ -274,7 +375,7 @@ app.post('/api/fill-pdf', async (req, res) => {
         data = sanitizeAllValues(data);
 
         // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
-        data = processDynamicVariables(data);
+        data = await processDynamicVariables(data);
 
         const templatePath = path.join(__dirname, 'templates', templateName);
         
@@ -409,7 +510,7 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
     const sanitizedData = sanitizeAllValues(dummyData);
 
     // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
-    const processedData = processDynamicVariables(sanitizedData);
+    const processedData = await processDynamicVariables(sanitizedData);
     const jsonData = JSON.stringify(processedData);
 
     try {
