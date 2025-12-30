@@ -202,17 +202,66 @@ function standardizeAddress(address) {
 }
 
 /**
+ * Convert a string to title case (capitalize first letter of each word)
+ * @param {string} str - The string to convert
+ * @returns {string} - Title cased string
+ */
+function toTitleCase(str) {
+    if (!str || typeof str !== 'string') return str;
+    
+    // Convert to lowercase first
+    const lower = str.toLowerCase();
+    
+    // Small words to keep lowercase (unless first word)
+    const smallWords = ['of', 'the', 'and', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with'];
+    
+    // Split into words and capitalize appropriately
+    const words = lower.split(/\s+/);
+    
+    return words.map((word, index) => {
+        // Always capitalize first word
+        if (index === 0) {
+            return word.charAt(0).toUpperCase() + word.slice(1);
+        }
+        
+        // Keep small words lowercase unless first word
+        if (smallWords.includes(word)) {
+            return word;
+        }
+        
+        // Capitalize first letter of other words
+        return word.charAt(0).toUpperCase() + word.slice(1);
+    }).join(' ');
+}
+
+/**
  * Process dynamic variables in the data object.
  * Currently handles:
  * - [VAR_ATTY_NAME_WITH_ADDRESS]: attorney name (without SBN), firm name, and firm city
  * - [VAR_ATTY_WITH_SBN]: attorney name(s) with SBN, semicolon-separated if multiple
- * - [VAR_FIRM_FULL_ADDR]: firm name, address, and city
+ * - [VAR_FIRM_FULL_ADDR]: firm name, address, city, state, and zip as a single-line formatted string
+ * - [VAR_CREDITOR1_NAME]: creditor name in title case with "Plaintiff, " prefix
+ * - [VAR_COURT_COUNTY]: county name converted to uppercase
+ * - [VAR_CASE_NAME]: formatted case name "Plaintiff v. Defendant, et al"
+ * - [IS_LIMITED]: true if amount <= $35,000
+ * - [IS_UNLIMITED]: true if amount > $35,000
+ * - [IS_BREACH_OF_CONTRACT_06]: true if RAW_IS_BREACH_OF_CONTRACT is true
+ * - CM-010 auto-fill: Sets IS_NOT_COMPLEX, IS_MONETARY, IS_NOT_CLASS_ACTION when breach of contract
  * - [VAR_COURTHOUSE]: courthouse name based on debtor ZIP code
  * - [VAR_COURT_INFO]: courthouse address based on debtor ZIP code
+ * - [COURT_BRANCH_NAME]: courthouse branch name
+ * - [COURT_STREET_ADDRESS]: parsed street address from courthouse address
+ * - [COURT_MAILING_ADDRESS]: same as street address
+ * - [COURT_CITY_ZIP]: parsed city, state, and zip from courthouse address
  * @param {Object} data - The JSON data object containing field values
  * @returns {Promise<Object>} - Modified data object with computed dynamic variables
  */
 async function processDynamicVariables(data) {
+    // Clean up DEBTOR1_ADDRESS - strip trailing commas
+    if (data['[DEBTOR1_ADDRESS]']) {
+        data['[DEBTOR1_ADDRESS]'] = data['[DEBTOR1_ADDRESS]'].replace(/,\s*$/, '').trim();
+    }
+    
     const attyName = data['[ATTY_NAME]'] || '';
     const firmName = data['[FIRM_NAME]'] || '';
     const firmAddress = data['[FIRM_ADDRESS]'] || '';
@@ -296,12 +345,37 @@ async function processDynamicVariables(data) {
     
     // Handle VAR_FIRM_FULL_ADDR
     if (firmName || firmAddress || firmCity) {
-        const firmLines = [];
-        if (firmName) firmLines.push(firmName);
-        if (firmAddress) firmLines.push(firmAddress);
-        if (firmCity) firmLines.push(firmCity);
+        // Use standardizeAddress helper on firm address
+        const formattedAddress = standardizeAddress(firmAddress);
         
-        data['[VAR_FIRM_FULL_ADDR]'] = firmLines.join('\n');
+        // Build composite string: Firm Name Address, City, State Zip (single line)
+        const parts = [];
+        
+        // Firm name gets no comma after it
+        if (firmName) parts.push(firmName);
+        
+        // Address parts get joined with comma and space
+        const addressParts = [];
+        if (formattedAddress) addressParts.push(formattedAddress);
+        if (firmCity) addressParts.push(firmCity);
+        if (firmState && firmZip) {
+            addressParts.push(firmState + ' ' + firmZip);
+        } else if (firmState) {
+            addressParts.push(firmState);
+        } else if (firmZip) {
+            addressParts.push(firmZip);
+        }
+        
+        // Join address parts with comma and space
+        const addressString = addressParts.join(', ');
+        if (addressString) parts.push(addressString);
+        
+        // Join firm name and address with just a space
+        const firmFullAddr = parts.join(' ');
+        
+        if (firmFullAddr) {
+            data['[VAR_FIRM_FULL_ADDR]'] = firmFullAddr;
+        }
     }
     
     // Handle VAR_DEFENDANT_WITH_DOES for SUM-100
@@ -327,16 +401,147 @@ async function processDynamicVariables(data) {
                 const courthouseName = zipEntry['Courthouse'];
                 data['[VAR_COURTHOUSE]'] = courthouseName;
                 
+                // Set COURT_BRANCH_NAME from the courthouse name
+                data['[COURT_BRANCH_NAME]'] = courthouseName;
+                
                 // Find the address for this courthouse
                 const courtEntry = courtInfo.find(row => row['Courthouse'] === courthouseName);
                 
                 if (courtEntry && courtEntry['Address']) {
-                    data['[VAR_COURT_INFO]'] = courtEntry['Address'];
+                    const fullAddress = courtEntry['Address'];
+                    data['[VAR_COURT_INFO]'] = fullAddress;
+                    
+                    // Extract district from Court_Info.csv
+                    const district = courtEntry['District'] || '';
+                    data['[COURT_DISTRICT]'] = district;
+                    
+                    // Parse the address into street and city/state/zip
+                    // Expected format: "123 Main St, Los Angeles, CA 90012"
+                    // Find the last comma that separates state from city
+                    const parts = fullAddress.split(',').map(p => p.trim());
+                    
+                    if (parts.length >= 3) {
+                        // Street is everything before the last two parts (city, state zip)
+                        const streetParts = parts.slice(0, -2);
+                        const streetAddress = streetParts.join(', ');
+                        
+                        // City and State Zip are the last two parts
+                        const city = parts[parts.length - 2];
+                        const stateZip = parts[parts.length - 1];
+                        const cityStateZip = city + ', ' + stateZip;
+                        
+                        data['[COURT_STREET_ADDRESS]'] = streetAddress;
+                        data['[COURT_MAILING_ADDRESS]'] = streetAddress;
+                        data['[COURT_CITY_ZIP]'] = cityStateZip;
+                    } else if (parts.length === 2) {
+                        // Simple case: "Street, City State Zip"
+                        data['[COURT_STREET_ADDRESS]'] = parts[0];
+                        data['[COURT_MAILING_ADDRESS]'] = parts[0];
+                        data['[COURT_CITY_ZIP]'] = parts[1];
+                    } else {
+                        // Fallback: treat entire address as street
+                        data['[COURT_STREET_ADDRESS]'] = fullAddress;
+                        data['[COURT_MAILING_ADDRESS]'] = fullAddress;
+                        data['[COURT_CITY_ZIP]'] = '';
+                    }
                 }
             }
         } catch (error) {
             console.error('Error loading court data:', error);
         }
+    }
+    
+    // Handle VAR_CREDITOR1_NAME
+    const creditor1Name = data['[CREDITOR1_NAME]'] || '';
+    if (creditor1Name) {
+        const titleCasedName = toTitleCase(creditor1Name);
+        data['[VAR_CREDITOR1_NAME]'] = 'Plaintiff, ' + titleCasedName;
+    }
+    
+    // Handle VAR_COURT_COUNTY
+    const courtCounty = data['[COURT_COUNTY]'] || '';
+    if (courtCounty) {
+        data['[VAR_COURT_COUNTY]'] = courtCounty.toUpperCase();
+    }
+    
+    // Handle VAR_CASE_NAME
+    const plaintiffName = data['[PLAINTIFF_NAME]'] || '';
+    const defendantNameForCase = data['[DEFENDANT_NAME]'] || '';
+    if (plaintiffName && defendantNameForCase) {
+        // Apply title case to plaintiff
+        const formattedPlaintiff = toTitleCase(plaintiffName);
+        
+        // Strip legal descriptions from defendant and apply title case
+        const cleanDefendant = defendantNameForCase
+            .replace(/,\s*(an individual|a corporation|a limited liability company|an LLC|a partnership|a sole proprietorship|etc\.?)$/i, '')
+            .trim();
+        const formattedDefendant = toTitleCase(cleanDefendant);
+        
+        // Construct case name
+        const caseName = `${formattedPlaintiff} v. ${formattedDefendant}, et al.`;
+        data['[VAR_CASE_NAME]'] = caseName;
+        
+        // Sync to all case name fields
+        data['[CASE_NAME2]'] = caseName;
+        data['[CASE_NAME3]'] = caseName;
+        data['[CASE_NAME4]'] = caseName;
+        data['[CASE_NAME5]'] = caseName;
+    }
+    
+    // Handle IS_LIMITED and IS_UNLIMITED based on amount
+    const demandAmount = data['[DEMAND_AMOUNT]'] || data['[JUDGMENT_TOTAL_AMOUNT]'] || '';
+    if (demandAmount) {
+        // Remove non-numeric characters and parse
+        const cleanAmount = demandAmount.replace(/[^0-9.]/g, '');
+        const amount = parseFloat(cleanAmount);
+        
+        if (!isNaN(amount)) {
+            if (amount <= 35000) {
+                data['[IS_LIMITED]'] = true;
+                data['[IS_UNLIMITED]'] = false;
+            } else {
+                data['[IS_UNLIMITED]'] = true;
+                data['[IS_LIMITED]'] = false;
+            }
+        } else {
+            // Cannot parse amount, default both to false
+            data['[IS_LIMITED]'] = false;
+            data['[IS_UNLIMITED]'] = false;
+        }
+    } else {
+        // No amount found, default both to false
+        data['[IS_LIMITED]'] = false;
+        data['[IS_UNLIMITED]'] = false;
+    }
+    
+    // Handle IS_BREACH_OF_CONTRACT_06 based on RAW_IS_BREACH_OF_CONTRACT
+    const rawBreachOfContract = data['[RAW_IS_BREACH_OF_CONTRACT]'];
+    if (rawBreachOfContract === true || String(rawBreachOfContract).toLowerCase() === 'true') {
+        data['[IS_BREACH_OF_CONTRACT_06]'] = true;
+        
+        // Auto-fill CM-010 fields for breach of contract cases
+        data['[IS_NOT_COMPLEX]'] = true;
+        data['[IS_COMPLEX]'] = false;
+        data['[IS_MONETARY]'] = true;
+        data['[IS_NON_MONETARY]'] = false;
+        data['[IS_NOT_CLASS_ACTION]'] = true;
+        data['[IS_CLASS_ACTION]'] = false;
+        data['[IS_REASON5]'] = true;
+    }
+    
+    // Handle NUMBER_OF_CAUSES formatting
+    const numWords = {
+        1: 'ONE', 2: 'TWO', 3: 'THREE', 4: 'FOUR', 5: 'FIVE',
+        6: 'SIX', 7: 'SEVEN', 8: 'EIGHT', 9: 'NINE', 10: 'TEN'
+    };
+    
+    let rawCount = data['[NUMBER_OF_CAUSES]'];
+    if (rawCount) {
+        const countInt = parseInt(rawCount, 10);
+        if (!isNaN(countInt) && numWords[countInt]) {
+            data['[NUMBER_OF_CAUSES]'] = `${countInt} (${numWords[countInt]})`;
+        }
+        // If invalid, leave as raw value for safety
     }
     
     return data;
@@ -411,6 +616,10 @@ app.post('/api/fill-pdf', async (req, res) => {
             fieldMap[name.toLowerCase()] = f;
         });
 
+        // Embed fonts before filling loop
+        const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
         // Fill the form fields with data from JSON (try flexible matching)
         let filledCount = 0;
         for (const [key, value] of Object.entries(data)) {
@@ -431,6 +640,14 @@ app.post('/api/fill-pdf', async (req, res) => {
                 // Prefer calling available methods rather than relying on constructor name
                 if (typeof field.setText === 'function') {
                     field.setText(String(value));
+                    
+                    // Apply font based on field type
+                    if (key === '[VAR_COURT_COUNTY]') {
+                        field.updateAppearances(helveticaBold);
+                    } else {
+                        field.updateAppearances(helvetica);
+                    }
+                    
                     filledCount++;
                 } else if (typeof field.check === 'function' || typeof field.uncheck === 'function') {
                     // Treat truthy values as checked
@@ -450,15 +667,6 @@ app.post('/api/fill-pdf', async (req, res) => {
             } catch (err) {
                 console.log(`Error filling field '${field.getName()}' (json key '${key}'): ${err.message}`);
             }
-        }
-
-        // Ensure appearances are updated so the filled text is visible.
-        // Embed a standard font and update appearances before saving.
-        try {
-            const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
-            form.updateFieldAppearances(helvetica);
-        } catch (err) {
-            console.log('Warning: failed to update field appearances:', err.message);
         }
         
         // Save the filled PDF (keep form fields editable - don't flatten)
@@ -543,6 +751,10 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
             fieldMap[name.toLowerCase()] = f;
         });
 
+        // Embed fonts before filling loop
+        const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+        const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
         // Fill the form fields with data from JSON (try flexible matching)
         let filledCount = 0;
         for (const [key, value] of Object.entries(JSON.parse(jsonData))) {
@@ -563,6 +775,14 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
                 // Prefer calling available methods rather than relying on constructor name
                 if (typeof field.setText === 'function') {
                     field.setText(String(value));
+                    
+                    // Apply font based on field type
+                    if (key === '[VAR_COURT_COUNTY]') {
+                        field.updateAppearances(helveticaBold);
+                    } else {
+                        field.updateAppearances(helvetica);
+                    }
+                    
                     filledCount++;
                 } else if (typeof field.check === 'function' || typeof field.uncheck === 'function') {
                     const shouldCheck = value === true || value === 'true' || value === '1' || value === 1;
@@ -581,14 +801,6 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
             } catch (err) {
                 console.log(`Error filling field '${field.getName()}' (json key '${key}'): ${err.message}`);
             }
-        }
-
-        // Ensure appearances are updated so the filled text is visible.
-        try {
-            const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
-            form.updateFieldAppearances(helvetica);
-        } catch (err) {
-            console.log('Warning: failed to update field appearances:', err.message);
         }
         
         // Save the filled PDF (keep form fields editable - don't flatten)

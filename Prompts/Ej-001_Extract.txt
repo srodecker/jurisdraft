@@ -152,6 +152,12 @@ JUDGMENT VALUES
 
 [JUDGMENT_ENTRY_DATE] = date judgment entered, formatted as "Month D, YYYY".
 
+[DEMAND_AMOUNT] = Scan the end of the complaint for "For the total sum of $..." and extract that amount. 
+
+[RAW_IS_BREACH_OF_CONTRACT] = Scan first page caption/causes of action for "Breach of Contract" (or "Breach of Written Contract", "Breach of Agreement"). Extract true if found, false otherwise.
+
+[NUMBER_OF_CAUSES] = Count distinct causes of action listed on first page. Extract the integer count.
+
 [DATE_SIGNED] = CURRENT_DATE_CONTEXT exactly. Never use a document date.
 
 [ABSTRACT_SIGNATORY_NAME] = the chosen associate attorney’s full name, and ALWAYS append ", Esq." exactly:
@@ -214,6 +220,9 @@ Return exactly this JSON structure with no additional fields:
 "[ABSTRACT_SIGNATORY_NAME]": "",
 "[JUDGMENT_TOTAL_AMOUNT]": "",
 "[JUDGMENT_ENTRY_DATE]": "",
+"[DEMAND_AMOUNT]": "",
+"[RAW_IS_BREACH_OF_CONTRACT]": false,
+"[NUMBER_OF_CAUSES]": "",
 "[IS_STAY_ORDERED]": false,
 "[IS_CERTIFIED_ABSTRACT]": false,
 "[PLAINTIFF_NAME_P2]": "",
