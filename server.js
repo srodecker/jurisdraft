@@ -111,6 +111,7 @@ app.use('/api', extractRouter);
 // For production with multiple users, implement session-based storage (e.g., express-session),
 // use Redis, or store files temporarily with unique user/session identifiers.
 let currentFilledPDF = null;
+let currentCourtReadyPDF = null;
 let currentPDFName = null;
 
 /**
@@ -209,61 +210,51 @@ function standardizeAddress(address) {
 function toTitleCase(str) {
     if (!str || typeof str !== 'string') return str;
     
-    // Convert to lowercase first
+    // 1. Convert to Title Case
     const lower = str.toLowerCase();
-    
-    // Small words to keep lowercase (unless first word)
     const smallWords = ['of', 'the', 'and', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'with'];
-    
-    // Split into words and capitalize appropriately
-    const words = lower.split(/\s+/);
-    
-    return words.map((word, index) => {
-        // Always capitalize first word
-        if (index === 0) {
-            return word.charAt(0).toUpperCase() + word.slice(1);
-        }
-        
-        // Keep small words lowercase unless first word
-        if (smallWords.includes(word)) {
-            return word;
-        }
-        
-        // Capitalize first letter of other words
+    let words = lower.split(/\s+/).map((word, index) => {
+        if (index > 0 && smallWords.includes(word)) return word;
         return word.charAt(0).toUpperCase() + word.slice(1);
-    }).join(' ');
+    });
+    
+    // 2. Force Acronyms to Uppercase
+    // Add any other acronyms you want to preserve here
+    const acronyms = ['LLP', 'LLC', 'PC', 'USA', 'INC', 'LTD', 'CORP'];
+    words = words.map(word => {
+        // Remove punctuation for comparison (e.g., "L.L.P.")
+        const cleanWord = word.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+        if (acronyms.includes(cleanWord)) {
+            return cleanWord;
+        }
+        return word;
+    });
+    
+    return words.join(' ');
 }
 
 /**
  * Process dynamic variables in the data object.
- * Currently handles:
- * - [VAR_ATTY_NAME_WITH_ADDRESS]: attorney name (without SBN), firm name, and firm city
- * - [VAR_ATTY_WITH_SBN]: attorney name(s) with SBN, semicolon-separated if multiple
- * - [VAR_FIRM_FULL_ADDR]: firm name, address, city, state, and zip as a single-line formatted string
- * - [VAR_CREDITOR1_NAME]: creditor name in title case with "Plaintiff, " prefix
- * - [VAR_COURT_COUNTY]: county name converted to uppercase
- * - [VAR_CASE_NAME]: formatted case name "Plaintiff v. Defendant, et al"
- * - [IS_LIMITED]: true if amount <= $35,000
- * - [IS_UNLIMITED]: true if amount > $35,000
- * - [IS_BREACH_OF_CONTRACT_06]: true if RAW_IS_BREACH_OF_CONTRACT is true
- * - CM-010 auto-fill: Sets IS_NOT_COMPLEX, IS_MONETARY, IS_NOT_CLASS_ACTION when breach of contract
- * - [VAR_COURTHOUSE]: courthouse name based on debtor ZIP code
- * - [VAR_COURT_INFO]: courthouse address based on debtor ZIP code
- * - [COURT_BRANCH_NAME]: courthouse branch name
- * - [COURT_STREET_ADDRESS]: parsed street address from courthouse address
- * - [COURT_MAILING_ADDRESS]: same as street address
- * - [COURT_CITY_ZIP]: parsed city, state, and zip from courthouse address
- * @param {Object} data - The JSON data object containing field values
- * @returns {Promise<Object>} - Modified data object with computed dynamic variables
+ * Refactored to globally sanitize FIRM_NAME.
  */
 async function processDynamicVariables(data) {
-    // Clean up DEBTOR1_ADDRESS - strip trailing commas
+    // Clean up and Title Case Debtor Address/City
     if (data['[DEBTOR1_ADDRESS]']) {
-        data['[DEBTOR1_ADDRESS]'] = data['[DEBTOR1_ADDRESS]'].replace(/,\s*$/, '').trim();
+        // Strip trailing commas first, then Title Case
+        let rawAddr = data['[DEBTOR1_ADDRESS]'].replace(/,\s*$/, '').trim();
+        data['[DEBTOR1_ADDRESS]'] = toTitleCase(rawAddr);
+    }
+    
+    if (data['[DEBTOR1_CITY]']) {
+        data['[DEBTOR1_CITY]'] = toTitleCase(data['[DEBTOR1_CITY]']);
     }
     
     const attyName = data['[ATTY_NAME]'] || '';
     const firmName = data['[FIRM_NAME]'] || '';
+    
+    // --- FIX: Create a single, clean version of the firm name to use everywhere ---
+    const formattedFirmName = toTitleCase(firmName);
+    
     const firmAddress = data['[FIRM_ADDRESS]'] || '';
     const firmCity = data['[FIRM_CITY]'] || '';
     const firmState = data['[FIRM_STATE]'] || '';
@@ -271,32 +262,63 @@ async function processDynamicVariables(data) {
     const firmPhone = data['[FIRM_PHONE]'] || '';
     const debtorZip = data['[DEBTOR1_ZIP]'] || '';
     
+    // 1. FIX FIRM NAME GLOBALLY
+    // Overwrite the raw ALL CAPS name with the Title Cased version
+    if (formattedFirmName) {
+        data['[FIRM_NAME]'] = formattedFirmName;
+    }
+    
+    // 2. CREATE SPECIFIC ATTORNEY VARIABLES
+    // VAR_ATTY1_NAME: "Name, SBN"
+    if (attyName) {
+        const sbn = data['[ATTY_SBN]'] || '';
+        data['[VAR_ATTY1_NAME]'] = sbn ? `${attyName}, SBN: ${sbn}` : attyName;
+    }
+    
+    // VAR_ATTY2_NAME: "Name, SBN" (Associate)
+    const attyName2 = data['[ATTY_NAME2]'] || '';
+    if (attyName2) {
+        const sbn2 = data['[ATTY_SBN2]'] || '';
+        data['[VAR_ATTY2_NAME]'] = sbn2 ? `${attyName2}, SBN: ${sbn2}` : attyName2;
+    }
+    
+    // 3. CREATE VAR_CITY_STATE_ZIP
+    // Format: "City, State Zip"
+    if (firmCity && firmState && firmZip) {
+        data['[VAR_CITY_STATE_ZIP]'] = `${firmCity}, ${firmState} ${firmZip}`;
+    }
+    
+    console.log('=== DEBTOR ZIP DEBUG ===');
+    console.log('debtorZip value:', debtorZip);
+    
     // Handle VAR_ATTY_NAME_WITH_ADDRESS
-    if (attyName || firmName || firmAddress || firmCity) {
+    if (attyName2 || formattedFirmName || firmAddress || firmCity) {
         // Clean attorney name: Remove "SBN" and numbers
-        let cleanName = attyName;
-        if (attyName) {
+        let cleanName = attyName2;
+        if (attyName2) {
             // Remove SBN and everything after it
-            const sbnIndex = attyName.indexOf('SBN');
+            const sbnIndex = attyName2.indexOf('SBN');
             if (sbnIndex !== -1) {
-                cleanName = attyName.substring(0, sbnIndex).trim();
+                cleanName = attyName2.substring(0, sbnIndex).trim();
             }
             // Remove any remaining numbers and trailing commas
             cleanName = cleanName.replace(/\d+/g, '').replace(/,\s*$/, '').trim();
+            // Append ", Esq." to the cleaned name
+            cleanName = cleanName + ', Esq.';
         }
         
         // Format the address with standardization
         const formattedAddress = standardizeAddress(firmAddress);
         
-        // Build the parts array (excluding address and city for now)
+        // Build the parts array
         const parts = [];
         
         if (cleanName) parts.push(cleanName);
-        if (firmName) parts.push(firmName);
+        // USE THE FORMATTED NAME HERE
+        if (formattedFirmName) parts.push(formattedFirmName);
         
         // Add formatted address + comma + city/state/zip as one segment
         if (formattedAddress || firmCity) {
-          
             // Build city, state, zip as "City, State Zip"
             const firmCityStateZip = formattedAddress + ', ' + firmCity + ', ' + firmState + ' ' + firmZip;
                         
@@ -317,23 +339,34 @@ async function processDynamicVariables(data) {
     }
     
     // Handle VAR_ATTY_WITH_SBN
-    // Collect all attorney names with their SBN numbers
     const attorneys = [];
     const attySbn = data['[ATTY_SBN]'] || '';
     
+    // 1. First Attorney
     if (attyName) {
-        const attyWithSbn = attySbn ? `${attyName}, SBN: ${attySbn}` : attyName;
+        const attyWithSbn = attySbn ? `${attyName}, Esq., SBN ${attySbn}` : attyName;
         attorneys.push(attyWithSbn);
     }
+
+    // 2. Second Attorney (Associate)
+    const attySbn2 = data['[ATTY_SBN2]'] || '';
     
-    // Check for additional attorney fields (ATTY_NAME2 + ATTY_SBN2, etc.)
-    for (let i = 2; i <= 10; i++) {
+    if (attyName2) {
+        const attyWithSbn2 = attySbn2 ? `${attyName2}, Esq., SBN ${attySbn2}` : attyName2;
+        attorneys.push(attyWithSbn2);
+        
+        // Also set VAR_ATTY_NAME2 while we are here
+        data['[VAR_ATTY_NAME2]'] = `${attyName2}, Esq.`;
+    }
+    
+    // Check for additional attorney fields (3-10) just in case
+    for (let i = 3; i <= 10; i++) {
         const additionalAttyName = data[`[ATTY_NAME${i}]`] || '';
         const additionalAttySbn = data[`[ATTY_SBN${i}]`] || '';
         
         if (additionalAttyName) {
             const attyWithSbn = additionalAttySbn 
-                ? `${additionalAttyName}, SBN: ${additionalAttySbn}` 
+                ? `${additionalAttyName}, Esq., SBN ${additionalAttySbn}` 
                 : additionalAttyName;
             attorneys.push(attyWithSbn);
         }
@@ -343,18 +376,24 @@ async function processDynamicVariables(data) {
         data['[VAR_ATTY_WITH_SBN]'] = attorneys.join('; ');
     }
     
+    // Handle VAR_ATTY_EMAIL
+    const attyEmail = data['[ATTY_EMAIL]'] || '';
+    const attyEmail2 = data['[ATTY_EMAIL2]'] || '';
+    const emails = [];
+    if (attyEmail) emails.push(attyEmail);
+    if (attyEmail2) emails.push(attyEmail2);
+    if (emails.length > 0) {
+        data['[VAR_ATTY_EMAIL]'] = emails.join(', ');
+    }
+    
     // Handle VAR_FIRM_FULL_ADDR
-    if (firmName || firmAddress || firmCity) {
-        // Use standardizeAddress helper on firm address
+    if (formattedFirmName || firmAddress || firmCity) {
         const formattedAddress = standardizeAddress(firmAddress);
-        
-        // Build composite string: Firm Name Address, City, State Zip (single line)
         const parts = [];
         
-        // Firm name gets no comma after it
-        if (firmName) parts.push(firmName);
+        // USE THE FORMATTED NAME HERE
+        if (formattedFirmName) parts.push(formattedFirmName);
         
-        // Address parts get joined with comma and space
         const addressParts = [];
         if (formattedAddress) addressParts.push(formattedAddress);
         if (firmCity) addressParts.push(firmCity);
@@ -366,11 +405,9 @@ async function processDynamicVariables(data) {
             addressParts.push(firmZip);
         }
         
-        // Join address parts with comma and space
         const addressString = addressParts.join(', ');
         if (addressString) parts.push(addressString);
         
-        // Join firm name and address with just a space
         const firmFullAddr = parts.join(' ');
         
         if (firmFullAddr) {
@@ -381,7 +418,6 @@ async function processDynamicVariables(data) {
     // Handle VAR_DEFENDANT_WITH_DOES for SUM-100
     const defendantName = data['[DEFENDANT_NAME]'] || '';
     if (defendantName) {
-        // Strip out any existing legal suffixes to get clean name
         let cleanName = defendantName
             .replace(/,\s*(an individual|a corporation|a limited liability company|an LLC|a partnership|a sole proprietorship|etc\.?)$/i, '')
             .trim();
@@ -389,62 +425,51 @@ async function processDynamicVariables(data) {
         data['[VAR_DEFENDANT_WITH_DOES]'] = `${cleanName}, an individual; and DOES 1 through 10, inclusive`;
     }
     
+    // Handle VAR_DEFENDANT_NAME
+    if (defendantName) {
+        data['[VAR_DEFENDANT_NAME]'] = `${defendantName}, et al.`;
+    }
+    
     // Handle VAR_COURTHOUSE and VAR_COURT_INFO based on debtor ZIP code
     if (debtorZip) {
+        console.log('=== ENTERING ZIP LOOKUP ===');
         try {
             const { limitedCourts, courtInfo } = await loadCourtData();
-          console.log('Loading Zip code:', debtorZip);
             // Find the courthouse for this ZIP code
             const zipEntry = limitedCourts.find(row => row['Zip Code'] === debtorZip);
             
             if (zipEntry && zipEntry['Courthouse']) {
                 const courthouseName = zipEntry['Courthouse'];
                 data['[VAR_COURTHOUSE]'] = courthouseName;
-                
-                // Set COURT_BRANCH_NAME from the courthouse name
                 data['[COURT_BRANCH_NAME]'] = courthouseName;
                 
-                // Find the address for this courthouse
                 const courtEntry = courtInfo.find(row => row['Courthouse'] === courthouseName);
                 
                 if (courtEntry && courtEntry['Address']) {
                     const fullAddress = courtEntry['Address'];
                     data['[VAR_COURT_INFO]'] = fullAddress;
+                    data['[COURT_DISTRICT]'] = courtEntry['District'] || '';
                     
-                    // Extract district from Court_Info.csv
-                    const district = courtEntry['District'] || '';
-                    data['[COURT_DISTRICT]'] = district;
-                    
-                    // Parse the address into street and city/state/zip
-                    // Expected format: "123 Main St, Los Angeles, CA 90012"
-                    // Find the last comma that separates state from city
                     const parts = fullAddress.split(',').map(p => p.trim());
                     
                     if (parts.length >= 3) {
-                        // Street is everything before the last two parts (city, state zip)
                         const streetParts = parts.slice(0, -2);
-                        const streetAddress = streetParts.join(', ');
-                        
-                        // City and State Zip are the last two parts
-                        const city = parts[parts.length - 2];
-                        const stateZip = parts[parts.length - 1];
-                        const cityStateZip = city + ', ' + stateZip;
-                        
-                        data['[COURT_STREET_ADDRESS]'] = streetAddress;
-                        data['[COURT_MAILING_ADDRESS]'] = streetAddress;
-                        data['[COURT_CITY_ZIP]'] = cityStateZip;
+                        data['[COURT_STREET_ADDRESS]'] = streetParts.join(', ');
+                        data['[COURT_MAILING_ADDRESS]'] = streetParts.join(', ');
+                        data['[COURT_CITY_ZIP]'] = parts[parts.length - 2] + ', ' + parts[parts.length - 1];
                     } else if (parts.length === 2) {
-                        // Simple case: "Street, City State Zip"
                         data['[COURT_STREET_ADDRESS]'] = parts[0];
                         data['[COURT_MAILING_ADDRESS]'] = parts[0];
                         data['[COURT_CITY_ZIP]'] = parts[1];
                     } else {
-                        // Fallback: treat entire address as street
                         data['[COURT_STREET_ADDRESS]'] = fullAddress;
                         data['[COURT_MAILING_ADDRESS]'] = fullAddress;
                         data['[COURT_CITY_ZIP]'] = '';
                     }
                 }
+            } else {
+                 console.log(`ZIP code ${debtorZip} not found in court database`);
+                 data['[ZIP_NOT_FOUND]'] = true;
             }
         } catch (error) {
             console.error('Error loading court data:', error);
@@ -468,20 +493,14 @@ async function processDynamicVariables(data) {
     const plaintiffName = data['[PLAINTIFF_NAME]'] || '';
     const defendantNameForCase = data['[DEFENDANT_NAME]'] || '';
     if (plaintiffName && defendantNameForCase) {
-        // Apply title case to plaintiff
         const formattedPlaintiff = toTitleCase(plaintiffName);
-        
-        // Strip legal descriptions from defendant and apply title case
         const cleanDefendant = defendantNameForCase
             .replace(/,\s*(an individual|a corporation|a limited liability company|an LLC|a partnership|a sole proprietorship|etc\.?)$/i, '')
             .trim();
         const formattedDefendant = toTitleCase(cleanDefendant);
         
-        // Construct case name
         const caseName = `${formattedPlaintiff} v. ${formattedDefendant}, et al.`;
         data['[VAR_CASE_NAME]'] = caseName;
-        
-        // Sync to all case name fields
         data['[CASE_NAME2]'] = caseName;
         data['[CASE_NAME3]'] = caseName;
         data['[CASE_NAME4]'] = caseName;
@@ -490,36 +509,29 @@ async function processDynamicVariables(data) {
     
     // Handle IS_LIMITED and IS_UNLIMITED based on amount
     const demandAmount = data['[DEMAND_AMOUNT]'] || data['[JUDGMENT_TOTAL_AMOUNT]'] || '';
+    let amount = 0;
     if (demandAmount) {
-        // Remove non-numeric characters and parse
         const cleanAmount = demandAmount.replace(/[^0-9.]/g, '');
-        const amount = parseFloat(cleanAmount);
-        
-        if (!isNaN(amount)) {
-            if (amount <= 35000) {
-                data['[IS_LIMITED]'] = true;
-                data['[IS_UNLIMITED]'] = false;
-            } else {
-                data['[IS_UNLIMITED]'] = true;
-                data['[IS_LIMITED]'] = false;
-            }
-        } else {
-            // Cannot parse amount, default both to false
-            data['[IS_LIMITED]'] = false;
+        amount = parseFloat(cleanAmount);
+    }
+    
+    if (demandAmount && !isNaN(amount)) {
+        if (amount <= 35000) {
+            data['[IS_LIMITED]'] = true;
             data['[IS_UNLIMITED]'] = false;
+        } else {
+            data['[IS_UNLIMITED]'] = true;
+            data['[IS_LIMITED]'] = false;
         }
     } else {
-        // No amount found, default both to false
         data['[IS_LIMITED]'] = false;
         data['[IS_UNLIMITED]'] = false;
     }
     
-    // Handle IS_BREACH_OF_CONTRACT_06 based on RAW_IS_BREACH_OF_CONTRACT
+    // Handle IS_BREACH_OF_CONTRACT_06
     const rawBreachOfContract = data['[RAW_IS_BREACH_OF_CONTRACT]'];
     if (rawBreachOfContract === true || String(rawBreachOfContract).toLowerCase() === 'true') {
         data['[IS_BREACH_OF_CONTRACT_06]'] = true;
-        
-        // Auto-fill CM-010 fields for breach of contract cases
         data['[IS_NOT_COMPLEX]'] = true;
         data['[IS_COMPLEX]'] = false;
         data['[IS_MONETARY]'] = true;
@@ -530,18 +542,13 @@ async function processDynamicVariables(data) {
     }
     
     // Handle NUMBER_OF_CAUSES formatting
-    const numWords = {
-        1: 'ONE', 2: 'TWO', 3: 'THREE', 4: 'FOUR', 5: 'FIVE',
-        6: 'SIX', 7: 'SEVEN', 8: 'EIGHT', 9: 'NINE', 10: 'TEN'
-    };
-    
+    const numWords = { 1: 'ONE', 2: 'TWO', 3: 'THREE', 4: 'FOUR', 5: 'FIVE', 6: 'SIX', 7: 'SEVEN', 8: 'EIGHT', 9: 'NINE', 10: 'TEN' };
     let rawCount = data['[NUMBER_OF_CAUSES]'];
     if (rawCount) {
         const countInt = parseInt(rawCount, 10);
         if (!isNaN(countInt) && numWords[countInt]) {
             data['[NUMBER_OF_CAUSES]'] = `${countInt} (${numWords[countInt]})`;
         }
-        // If invalid, leave as raw value for safety
     }
     
     return data;
@@ -672,9 +679,14 @@ app.post('/api/fill-pdf', async (req, res) => {
         // Save the filled PDF (keep form fields editable - don't flatten)
         const pdfBytes = await pdfDoc.save();
         
-        // Store in memory for preview and download
+        // Store editable version in memory
         currentFilledPDF = Buffer.from(pdfBytes);
         currentPDFName = templateName.replace('.pdf', '_filled.pdf');
+        
+        // Create flattened court-ready version
+        form.flatten();
+        const flattenedPdfBytes = await pdfDoc.save();
+        currentCourtReadyPDF = Buffer.from(flattenedPdfBytes);
 
         // Send back as base64 for preview
         const base64PDF = currentFilledPDF.toString('base64');
@@ -684,7 +696,8 @@ app.post('/api/fill-pdf', async (req, res) => {
             pdfData: base64PDF,
             filledFields: filledCount,
             totalFields: fields.length,
-            availableFields: fieldInfo
+            availableFields: fieldInfo,
+            processedData: data
         });
     } catch (error) {
         console.error('Error filling PDF:', error);
@@ -806,9 +819,14 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         // Save the filled PDF (keep form fields editable - don't flatten)
         const pdfBytes = await pdfDoc.save();
         
-        // Store in memory for preview and download
+        // Store editable version in memory
         currentFilledPDF = Buffer.from(pdfBytes);
         currentPDFName = templateName.replace('.pdf', '_filled.pdf');
+        
+        // Create flattened court-ready version
+        form.flatten();
+        const flattenedPdfBytes = await pdfDoc.save();
+        currentCourtReadyPDF = Buffer.from(flattenedPdfBytes);
 
         // Send back as base64 for preview
         const base64PDF = currentFilledPDF.toString('base64');
@@ -830,13 +848,28 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
 
 // Download the filled PDF
 app.get('/api/download', (req, res) => {
-    if (!currentFilledPDF) {
-        return res.status(404).json({ error: 'No PDF available for download' });
+    const mode = req.query.mode; // 'court' for flattened version, undefined for editable
+    
+    let pdfToSend;
+    let filename;
+    
+    if (mode === 'court') {
+        if (!currentCourtReadyPDF) {
+            return res.status(404).json({ error: 'No court-ready PDF available for download' });
+        }
+        pdfToSend = currentCourtReadyPDF;
+        filename = currentPDFName.replace('_filled.pdf', '_court_ready.pdf');
+    } else {
+        if (!currentFilledPDF) {
+            return res.status(404).json({ error: 'No PDF available for download' });
+        }
+        pdfToSend = currentFilledPDF;
+        filename = currentPDFName;
     }
     
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${currentPDFName}"`);
-    res.send(currentFilledPDF);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdfToSend);
 });
 
 // Health check endpoint

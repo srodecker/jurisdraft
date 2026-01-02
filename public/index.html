@@ -299,6 +299,9 @@
                     <button id="downloadBtn" class="btn-download" disabled>
                         Download PDF
                     </button>
+                    <button id="downloadCourtBtn" class="btn-download" disabled style="background: #28a745; margin-top: 10px;">
+                        Download Court Ready
+                    </button>
                 </div>
 
                 <div id="statusMessage"></div>
@@ -323,6 +326,7 @@
     const fillBtnText = document.getElementById('fillBtnText');
     const submitBtn = document.getElementById('submitBtn');
     const downloadBtn = document.getElementById('downloadBtn');
+    const downloadCourtBtn = document.getElementById('downloadCourtBtn');
     const pdfViewer = document.getElementById('pdfViewer');
     const statusMessage = document.getElementById('statusMessage');
     const fieldStats = document.getElementById('fieldStats');
@@ -422,17 +426,34 @@
             currentPDFUrl = URL.createObjectURL(blob);
             pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}"></iframe>`;
 
-            // Show status
+            // Show success status
             showStatus(
                 `PDF filled successfully! ${result.filledFields} of ${result.totalFields} fields filled.`,
                 'success'
             );
 
-            // Show field stats
-            fieldStats.innerHTML = `<span class="status info">${result.filledFields}/${result.totalFields} fields filled</span>`;
+            // Show field stats with debugging
+            console.log('=== FULL RESULT OBJECT ===', result);
+            console.log('processedData exists?', !!result.processedData);
+            console.log('ZIP_NOT_FOUND value:', result.processedData ? result.processedData['[ZIP_NOT_FOUND]'] : 'no processedData');
+            console.log('DEBTOR1_ZIP value:', result.processedData ? result.processedData['[DEBTOR1_ZIP]'] : 'no processedData');
+            
+            let fieldStatsHTML = `<span class="status info">${result.filledFields}/${result.totalFields} fields filled</span>`;
+            
+            // ALWAYS show a test message to verify the code is running
+            fieldStatsHTML += `<br><span class="status info" style="margin-top: 8px; display: inline-block;">🔍 Debug: processedData = ${!!result.processedData}</span>`;
+            
+            // Check for ZIP code warning
+            if (result.processedData && result.processedData['[ZIP_NOT_FOUND]'] === true) {
+                const debtorZip = result.processedData['[DEBTOR1_ZIP]'] || 'unknown';
+                fieldStatsHTML += `<br><span class="status error" style="margin-top: 8px; display: inline-block;">⚠️ Warning: Zip code ${debtorZip} not found in court database. Court fields will be blank.</span>`;
+            }
+            
+            fieldStats.innerHTML = fieldStatsHTML;
 
             // Enable download and submit buttons
             downloadBtn.disabled = false;
+            downloadCourtBtn.disabled = false;
             submitBtn.disabled = false;
 
             // Log available fields for user reference
@@ -498,6 +519,7 @@
                 `<span class="status info">${result.filledFields}/${result.totalFields} fields filled (auto)</span>`;
 
             downloadBtn.disabled = false;
+            downloadCourtBtn.disabled = false;
             submitBtn.disabled = false;
         } catch (error) {
             console.error('Error in auto-fill:', error);
@@ -521,6 +543,16 @@
 
         window.location.href = '/api/download';
         showStatus('Download started!', 'success');
+    }
+
+    function downloadCourtReadyPDF() {
+        if (!currentPDFData) {
+            showStatus('No court-ready PDF available for download', 'error');
+            return;
+        }
+
+        window.location.href = '/api/download?mode=court';
+        showStatus('Court-ready PDF download started!', 'success');
     }
 
     // Utility function to convert base64 to blob
@@ -559,6 +591,7 @@
     fillBtn.addEventListener('click', fillPDF);
     submitBtn.addEventListener('click', submitAdditionalJSON);
     downloadBtn.addEventListener('click', downloadPDF);
+    downloadCourtBtn.addEventListener('click', downloadCourtReadyPDF);
     autoFillBtn.addEventListener('click', autoFillPDF);
 
     // Load templates on page load
@@ -582,13 +615,6 @@
                     if (parsed["[DATE_SIGNED]"] !== undefined) parsed["[DATE_SIGNED]"] = today;
                     if (parsed["DATE_SIGNED"] !== undefined) parsed["DATE_SIGNED"] = today;
                     
-                    // Also ensure ATTY_EMAIL2 matches ATTY_EMAIL if missing
-                    const email = parsed["[ATTY_EMAIL]"] || parsed["ATTY_EMAIL"];
-                    if (email) {
-                        if (parsed["[ATTY_EMAIL2]"] !== undefined) parsed["[ATTY_EMAIL2]"] = email;
-                        if (parsed["ATTY_EMAIL2]"] !== undefined) parsed["ATTY_EMAIL2"] = email;
-                    }
-
                     // Clean PLAINTIFF_NAME (remove trailing comma)
                     let pName = parsed["[PLAINTIFF_NAME]"] || parsed["PLAINTIFF_NAME"];
                     if (pName && typeof pName === 'string') {

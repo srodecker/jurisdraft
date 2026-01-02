@@ -92,12 +92,7 @@ router.post('/extract', upload.array('files'), async (req, res) => {
                         // Also handle unbracketed key just in case
                         if (parsed["DATE_SIGNED"] !== undefined) parsed["DATE_SIGNED"] = todayDateLA;
                         
-                        // 2. Force ATTY_EMAIL2 to match ATTY_EMAIL
-                        const email = parsed["[ATTY_EMAIL]"] || parsed["ATTY_EMAIL"] || "";
-                        parsed["[ATTY_EMAIL2]"] = email;
-                        if (parsed["ATTY_EMAIL2"] !== undefined) parsed["ATTY_EMAIL2"] = email;
-
-                        // 3. Clean PLAINTIFF_NAME (remove trailing comma)
+                        // 2. Clean PLAINTIFF_NAME (remove trailing comma)
                         let pName = parsed["[PLAINTIFF_NAME]"] || parsed["PLAINTIFF_NAME"] || "";
                         if (pName && typeof pName === 'string') {
                             pName = pName.trim().replace(/,\s*$/, ''); // Remove trailing comma

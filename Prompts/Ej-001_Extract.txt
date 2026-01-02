@@ -1,237 +1,85 @@
-You are a legal document extraction engine.
+MISSION
+Extract raw legal data points from the provided source documents (Complaints, Default Judgments, and Declarations of Venue).
 
-You are given a set of source documents which may include a DEFAULT JUDGMENT, a Civil Case Cover Sheet (CM-010), and emails containing sensitive data.
+RULES
+1. Output: Return ONLY a raw JSON object. No markdown.
+2. Values: Use raw text from documents. Use "" for missing text, false for booleans.
+3. Date Signed: Use the CURRENT_DATE_CONTEXT provided.
 
-Your only task is to extract the fields listed in the schema at the bottom.
-Return only a JSON object. No markdown. No commentary. No explanations.
+ATTORNEY LOGIC (PARTNER VS. ASSOCIATE)
+You must identify ALL attorneys listed in the header block.
+
+1. [ATTY_NAME] (Partner): Extract the FIRST attorney name.
+   - [ATTY_SBN]: The SBN for this first attorney.
+   - [ATTY_EMAIL]: The email address associated with this first attorney (usually listed first).
+
+2. [ATTY_NAME2] (Associate): Extract the SECOND attorney name.
+   - [ATTY_SBN2]: The SBN for this second attorney.
+   - [ATTY_EMAIL2]: The email address associated with this second attorney (usually listed second).
+
+For [DEBTOR1_ADDRESS], extract ONLY the street number and name. Do not include City, State, or Zip.
+
+Identifiers:
+- Extract [ATTY_SBN] for the First Attorney.
+- Extract [ATTY_SBN2] for the Second Attorney.
+- Extract only the last 4 digits for SSN and Driver's License numbers.
+
+CREDITOR STATUS LOGIC
+
+Default Assumption: Set [IS_JUDGMENT_CREDITOR] to true.
+
+Assignee Exception: Scan the header and caption for words like 'Assignee of Record', 'Successor in Interest', or 'Buyer'.
+- If these words appear next to the Plaintiff/Creditor's name, set [IS_JUDGMENT_CREDITOR] to false and set [IS_ASSIGNEE_OF_RECORD] to true.
 
 INPUT FORMAT
 <<<SOURCE_DOCUMENTS>>>
 {SOURCE_TEXT}
 <<<END_SOURCE_DOCUMENTS>>>
 
-GLOBAL OUTPUT RULES
-
-Use ONLY information found in the source text unless a hardcoded rule below overrides it.
-
-If a value cannot be determined: "" for text, false for booleans.
-
-Never output: null, NULL, N/A, Unknown, “null”, “none”.
-
-All dates must be formatted as: "Month D, YYYY" (example: "November 3, 2025").
-
-Dollar amounts must include commas and two decimals (example: "19,646.49").
-
-Names must match the spelling in the documents (do not “correct” spelling).
-
-If any extracted value is ALL CAPS but is clearly a normal name/place (firm name, county), convert to normal Title Case for readability, but keep acronyms like "LLP" in caps.
-
-WFZ / KINECTA HARD RULES (OVERRIDE)
-These rules are intended for Wright, Finlay & Zak LLP default judgments, usually for Kinecta Federal Credit Union.
-
-COURT FIELDS (PRIORITIZE CM-010)
-
-Scan the entire input for a Civil Case Cover Sheet (CM-010) or any document header containing the court's physical location.
-
-If a specific court street address is found:
-   - [COURT_STREET_ADDRESS] = Extract street address.
-   - [COURT_MAILING_ADDRESS] = "Same"
-   - [COURT_CITY_ZIP] = Extract City and Zip.
-   - [COURT_BRANCH_NAME] = Extract branch name.
-
-If NO court street address is found:
-   - [COURT_STREET_ADDRESS] = ""
-   - [COURT_MAILING_ADDRESS] = ""
-   - [COURT_CITY_ZIP] = ""
-   - [COURT_BRANCH_NAME] = ""
-
-Note: The Default Judgment itself often lacks this info. You MUST find it in the CM-010 or other attached docs.
-If absolutely no court address is found in any document, then leave empty.
-
-You may still extract [COURT_COUNTY] if present.
-
-Output [COURT_COUNTY] in Title Case (example: "Imperial").
-
-ATTORNEY SELECTION (STRICT RULE: PREFER SECOND ATTORNEY)
-
-Goal: Select the "Associate" or "Working" attorney, who is typically listed SECOND in the header block.
-
-Selection Logic:
-1. If there are multiple attorneys listed in the header:
-   - IGNORE the first attorney (usually the Managing Partner).
-   - SELECT the SECOND attorney listed.
-2. If only one attorney is listed, select that one.
-
-Once the attorney is selected, extract THEIR specific details:
-- [ATTY_NAME]: Their full name and title, remove any SBN.
-- [ATTY_SBN]: Extract that chosen attorney's SBN (5-6 digit number near "SBN").
-- [ATTY_EMAIL]: Their specific email address.
-- [ABSTRACT_SIGNATORY_NAME]: Their name + ", Esq."
-
-Do NOT mix details (e.g., do not take the Partner's SBN and the Associate's email).
-
-SBN extraction:
-
-Extract that chosen attorney’s SBN from the same header block.
-
-SBN is a 5–6 digit number near “SBN”.
-
-Formatting requirements:
-
-Firm block extraction:
-
-Output firm name in normal casing (Title Case) even if the source shows ALL CAPS.
-
-Also force:
-
-[IS_ATTORNEY_FOR_CREDITOR] = true
-
-JUDGMENT CREDITOR (KINECTA)
-If plaintiff/creditor includes “KINECTA” anywhere (case-insensitive):
-
-Remember: the default judgment often does not include a creditor mailing address, so we hardcode the standard Kinecta address.
-
-Force:
-[IS_JUDGMENT_CREDITOR] = true
-[IS_JUDGMENT_CREDITOR2] = true
-
-You must extract BOTH name and last known address if the address appears anywhere in the judgment.
-
-How to find the address (highest to lowest confidence):
-
-Any explicit “Address:” line tied to the defendant/judgment debtor.
-
-Defendant address in the caption/party section.
-
-Address stated near the debtor name in the judgment body.
-
-If no address exists anywhere, leave address blank.
-
-DL rules (WFZ):
-
-Search ALL documents for a Driver's License number (DL, CDL, Lic#).
-If a DL number is found:
-   - [DEBTOR1_DL_LAST4] = extract the LAST 4 DIGITS.
-   - [IS_DEBTOR1_DL_UNKNOWN] = false.
-
-If NO DL number is found in any document:
-   - [DEBTOR1_DL_LAST4] = ""
-   - [IS_DEBTOR1_DL_UNKNOWN] = true.
-
-SSN rules:
-
-Search ALL provided documents (especially emails, correspondence, or cover sheets) for the Debtor's SSN.
-Common patterns to look for: "SSN: XXX-XX-1234", "SS: ***-**-1234", "Social Security: ...".
-
-If a full or partial SSN is found:
-   - [DEBTOR1_SS_LAST4] = extract the LAST 4 DIGITS.
-   - [IS_DEBTOR1_SS_UNKNOWN] = false.
-
-If NO SSN is found in any document:
-   - [DEBTOR1_SS_LAST4] = ""
-   - [IS_DEBTOR1_SS_UNKNOWN] = true.
-
-DEBTOR 2 (ONLY IF CLEARLY PRESENT)
-Only fill Debtor 2 fields if the judgment clearly lists a second debtor AND provides separate identifying info tied to that debtor.
-Otherwise force:
-
-CAPTION + PAGE 2 MIRRORING
-
-[PLAINTIFF_NAME] = plaintiff in judgment
-
-[DEFENDANT_NAME] = Extract the Defendant's name exactly as it appears in the header (e.g., JOHN DOE) into [DEFENDANT_NAME]. Do not add legal phrasing, suffixes, or 'DOES' clauses. Just extract the raw name entity.
-
-Mirror:
-[PLAINTIFF_NAME_P2] = [PLAINTIFF_NAME]
-[DEFENDANT_NAME_P2] = [DEFENDANT_NAME]
-[CASE_NUMBER_P2] = [CASE_NUMBER]
-
-JUDGMENT VALUES
-
-[JUDGMENT_TOTAL_AMOUNT] = total amount formatted with commas and two decimals.
-
-[JUDGMENT_ENTRY_DATE] = date judgment entered, formatted as "Month D, YYYY".
-
-[DEMAND_AMOUNT] = Scan the end of the complaint for "For the total sum of $..." and extract that amount. 
-
-[RAW_IS_BREACH_OF_CONTRACT] = Scan first page caption/causes of action for "Breach of Contract" (or "Breach of Written Contract", "Breach of Agreement"). Extract true if found, false otherwise.
-
-[NUMBER_OF_CAUSES] = Count distinct causes of action listed on first page. Extract the integer count.
-
-[DATE_SIGNED] = CURRENT_DATE_CONTEXT exactly. Never use a document date.
-
-[ABSTRACT_SIGNATORY_NAME] = the chosen associate attorney’s full name, and ALWAYS append ", Esq." exactly:
-"<Associate Full Name>, Esq."
-
-Do NOT include the SBN inside [ABSTRACT_SIGNATORY_NAME]. SBN belongs only in [ATTY_NAME].
-
-STAY + CERTIFICATION DEFAULTS (WFZ)
-Force:
-
-[IS_STAY_ORDERED] = true
-
-[IS_CERTIFIED_ABSTRACT] = true
-Only override if the judgment explicitly says otherwise.
-
-ABSTRACT COUNTY
-
-[ABSTRACT_COUNTY] = county where the abstract is being issued.
-
-If absent, leave "".
-
-OUTPUT SCHEMA
-Return exactly this JSON structure with no additional fields:
-
+SCHEMA
 {
-"[ATTY_NAME]": "",
-"[ATTY_SBN]": "",
-"[FIRM_NAME]": "",
-"[FIRM_ADDRESS]": "",
-"[FIRM_CITY]": "",
-"[FIRM_STATE]": "",
-"[FIRM_ZIP]": "",
-"[ATTY_EMAIL]": "",
-"[FIRM_PHONE]": "",
-"[FIRM_FAX]": "",
-"[ATTY_EMAIL2]": "",
-"[IS_ATTORNEY_FOR_CREDITOR]": false,
-"[IS_JUDGMENT_CREDITOR]": false,
-"[COURT_COUNTY]": "",
-"[COURT_STREET_ADDRESS]": "",
-"[COURT_MAILING_ADDRESS]": "",
-"[COURT_CITY_ZIP]": "",
-"[COURT_BRANCH_NAME]": "",
-"[PLAINTIFF_NAME]": "",
-"[DEFENDANT_NAME]": "",
-"[CASE_NUMBER]": "",
-"[IS_JUDGMENT_CREDITOR2]": false,
-"[DEBTOR1_NAME]": "",
-"[DEBTOR1_DL_LAST4]": "",
-"[IS_DEBTOR1_DL_UNKNOWN]": false,
-"[DEBTOR1_SS_LAST4]": "",
-"[IS_DEBTOR1_SS_UNKNOWN]": false,
-"[DEBTOR1_ADDRESS]": "",
-"[DEBTOR1_CITY]": "",
-"[DEBTOR1_STATE]": "",
-"[DEBTOR1_ZIP]": "",
-"[CREDITOR1_NAME]": "",
-"[ABSTRACT_COUNTY]": "",
-"[DATE_SIGNED]": "",
-"[ABSTRACT_SIGNATORY_NAME]": "",
-"[JUDGMENT_TOTAL_AMOUNT]": "",
-"[JUDGMENT_ENTRY_DATE]": "",
-"[DEMAND_AMOUNT]": "",
-"[RAW_IS_BREACH_OF_CONTRACT]": false,
-"[NUMBER_OF_CAUSES]": "",
-"[IS_STAY_ORDERED]": false,
-"[IS_CERTIFIED_ABSTRACT]": false,
-"[PLAINTIFF_NAME_P2]": "",
-"[DEFENDANT_NAME_P2]": "",
-"[CASE_NUMBER_P2]": "",
-"[DEBTOR2_ADDRESS]": "",
-"[DEBTOR2_DL_LAST4]": "",
-"[DEBTOR2_SS_LAST4]": ""
+  "[ATTY_NAME]": "",
+  "[ATTY_SBN]": "",
+  "[ATTY_NAME2]": "",
+  "[ATTY_SBN2]": "",
+  "[FIRM_NAME]": "",
+  "[FIRM_ADDRESS]": "",
+  "[FIRM_CITY]": "",
+  "[FIRM_STATE]": "",
+  "[FIRM_ZIP]": "",
+  "[ATTY_EMAIL]": "",
+  "[FIRM_PHONE]": "",
+  "[FIRM_FAX]": "",
+  "[ATTY_EMAIL2]": "",
+  "[IS_ATTORNEY_FOR_CREDITOR]": false,
+  "[COURT_COUNTY]": "",
+  "[COURT_STREET_ADDRESS]": "",
+  "[COURT_MAILING_ADDRESS]": "",
+  "[COURT_CITY_ZIP]": "",
+  "[COURT_BRANCH_NAME]": "",
+  "[PLAINTIFF_NAME]": "",
+  "[DEFENDANT_NAME]": "",
+  "[CASE_NUMBER]": "",
+  "[DEBTOR1_NAME]": "",
+  "[DEBTOR1_DL_LAST4]": "",
+  "[IS_DEBTOR1_DL_UNKNOWN]": false,
+  "[DEBTOR1_SS_LAST4]": "",
+  "[IS_DEBTOR1_SS_UNKNOWN]": false,
+  "[DEBTOR1_ADDRESS]": "",
+  "[DEBTOR1_CITY]": "",
+  "[DEBTOR1_STATE]": "",
+  "[DEBTOR1_ZIP]": "",
+  "[CREDITOR1_NAME]": "",
+  "[IS_JUDGMENT_CREDITOR]": false,
+  "[IS_ASSIGNEE_OF_RECORD]": false,
+  "[DATE_SIGNED]": "",
+  "[ABSTRACT_SIGNATORY_NAME]": "",
+  "[JUDGMENT_TOTAL_AMOUNT]": "",
+  "[JUDGMENT_ENTRY_DATE]": "",
+  "[DEMAND_AMOUNT]": "",
+  "[RAW_IS_BREACH_OF_CONTRACT]": false,
+  "[NUMBER_OF_CAUSES]": "",
+  "[PLAINTIFF_NAME_P2]": "",
+  "[DEFENDANT_NAME_P2]": "",
+  "[CASE_NUMBER_P2]": ""
 }
-
-Return ONLY the JSON object.
-
