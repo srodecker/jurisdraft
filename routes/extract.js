@@ -18,7 +18,7 @@ function getTodayDateLA() {
 // POST /api/extract
 router.post('/extract', upload.array('files'), async (req, res) => {
     try {
-        const promptPath = path.join(__dirname, '..', 'Prompts', 'Ej-001_Extract.txt');
+        const promptPath = path.join(__dirname, '..', 'Prompts', 'Extraction_Prompt.txt');
         let promptTemplate = '';
         try {
             promptTemplate = await fs.readFile(promptPath, 'utf8');

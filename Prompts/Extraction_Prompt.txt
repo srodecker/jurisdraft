@@ -19,17 +19,14 @@ You must identify ALL attorneys listed in the header block.
 
 For [DEBTOR1_ADDRESS], extract ONLY the street number and name. Do not include City, State, or Zip.
 
+For [CREDITOR_ADDRESS], extract ONLY the street number and name of the Judgment Creditor's mailing address (the entity listed in [CREDITOR1_NAME]). Do not include City, State, or Zip. Search Strategy: Look for the Creditor's name or logo at the top of documents like "Membership Applications", "Monthly Statements", or "Contracts". Extraction Rule: Capture the street address found immediately near the Creditor's name/logo (often in the letterhead or top header). Exclusion: Do NOT extract the Attorney's address or the Court's address. If the Creditor is "Kinecta", look for the "1440 Rosecrans" address in the header.
+
+For [CREDITOR_CITY], [CREDITOR_STATE], [CREDITOR_ZIP], extract the corresponding city, state, and ZIP code from the Creditor's mailing address.
+
 Identifiers:
 - Extract [ATTY_SBN] for the First Attorney.
 - Extract [ATTY_SBN2] for the Second Attorney.
 - Extract only the last 4 digits for SSN and Driver's License numbers.
-
-CREDITOR STATUS LOGIC
-
-Default Assumption: Set [IS_JUDGMENT_CREDITOR] to true.
-
-Assignee Exception: Scan the header and caption for words like 'Assignee of Record', 'Successor in Interest', or 'Buyer'.
-- If these words appear next to the Plaintiff/Creditor's name, set [IS_JUDGMENT_CREDITOR] to false and set [IS_ASSIGNEE_OF_RECORD] to true.
 
 INPUT FORMAT
 <<<SOURCE_DOCUMENTS>>>
@@ -70,16 +67,23 @@ SCHEMA
   "[DEBTOR1_STATE]": "",
   "[DEBTOR1_ZIP]": "",
   "[CREDITOR1_NAME]": "",
+  "[CREDITOR_ADDRESS]": "",
+  "[CREDITOR_CITY]": "",
+  "[CREDITOR_STATE]": "",
+  "[CREDITOR_ZIP]": "",
   "[IS_JUDGMENT_CREDITOR]": false,
   "[IS_ASSIGNEE_OF_RECORD]": false,
   "[DATE_SIGNED]": "",
   "[ABSTRACT_SIGNATORY_NAME]": "",
   "[JUDGMENT_TOTAL_AMOUNT]": "",
+  "[STAY_ENFORCEMENT_DATE]": "",
   "[JUDGMENT_ENTRY_DATE]": "",
   "[DEMAND_AMOUNT]": "",
   "[RAW_IS_BREACH_OF_CONTRACT]": false,
   "[NUMBER_OF_CAUSES]": "",
   "[PLAINTIFF_NAME_P2]": "",
   "[DEFENDANT_NAME_P2]": "",
+  "[DEBTOR2_NAME]": "",
+  "[DEBTOR2_SERVICE_ADDRESS]": "",
   "[CASE_NUMBER_P2]": ""
 }

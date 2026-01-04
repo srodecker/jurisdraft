@@ -238,6 +238,39 @@ function toTitleCase(str) {
  * Refactored to globally sanitize FIRM_NAME.
  */
 async function processDynamicVariables(data) {
+    // --- GLOBAL SANITIZATION ---
+    // Iterate through every key in the data object.
+    // If a value is literally null, undefined, or the string "null", convert it to an empty string.
+    Object.keys(data).forEach(key => {
+        if (data[key] === null || data[key] === undefined || data[key] === 'null') {
+            data[key] = '';
+        }
+    });
+    
+    // --- SANITIZE: LAST 4 DIGITS ONLY ---
+    // Force DL and SSN fields to take only the last 4 characters, ignoring extra digits or spaces.
+    const sanitizeLast4 = (val) => {
+        if (!val) return '';
+        const digits = String(val).replace(/\D/g, ''); // Remove non-digits
+        return digits.slice(-4); // Take strictly the last 4
+    };
+    
+    // Apply to Debtor 1
+    if (data['[DEBTOR1_DL_LAST4]']) {
+        data['[DEBTOR1_DL_LAST4]'] = sanitizeLast4(data['[DEBTOR1_DL_LAST4]']);
+    }
+    if (data['[DEBTOR1_SS_LAST4]']) {
+        data['[DEBTOR1_SS_LAST4]'] = sanitizeLast4(data['[DEBTOR1_SS_LAST4]']);
+    }
+    
+    // Apply to Debtor 2 (Mirror logic just in case)
+    if (data['[DEBTOR2_DL_LAST4]']) {
+        data['[DEBTOR2_DL_LAST4]'] = sanitizeLast4(data['[DEBTOR2_DL_LAST4]']);
+    }
+    if (data['[DEBTOR2_SS_LAST4]']) {
+        data['[DEBTOR2_SS_LAST4]'] = sanitizeLast4(data['[DEBTOR2_SS_LAST4]']);
+    }
+    
     // Clean up and Title Case Debtor Address/City
     if (data['[DEBTOR1_ADDRESS]']) {
         // Strip trailing commas first, then Title Case
@@ -286,6 +319,19 @@ async function processDynamicVariables(data) {
     // Format: "City, State Zip"
     if (firmCity && firmState && firmZip) {
         data['[VAR_CITY_STATE_ZIP]'] = `${firmCity}, ${firmState} ${firmZip}`;
+    }
+    
+    // 4. SET UNKNOWN FLAGS FOR EMPTY DEBTOR IDENTIFIERS
+    // If DL Last 4 is empty, mark it as unknown
+    const debtorDL = data['[DEBTOR1_DL_LAST4]'];
+    if (!debtorDL || debtorDL.trim() === '') {
+        data['[IS_DEBTOR1_DL_UNKNOWN]'] = true;
+    }
+    
+    // If SS Last 4 is empty, mark it as unknown
+    const debtorSS = data['[DEBTOR1_SS_LAST4]'];
+    if (!debtorSS || debtorSS.trim() === '') {
+        data['[IS_DEBTOR1_SS_UNKNOWN]'] = true;
     }
     
     console.log('=== DEBTOR ZIP DEBUG ===');
@@ -427,7 +473,35 @@ async function processDynamicVariables(data) {
     
     // Handle VAR_DEFENDANT_NAME
     if (defendantName) {
-        data['[VAR_DEFENDANT_NAME]'] = `${defendantName}, et al.`;
+        data['[VAR_DEFENDANT_NAME_ET_AL]'] = `${defendantName}, et al.`;
+        // Mirror to page 2
+        data['[DEFENDANT_NAME_P2]'] = data['[VAR_DEFENDANT_NAME_ET_AL]'];
+    }
+    
+    // Handle VAR_DEFENDANT_NAME_WITH_ADDRESS
+    if (defendantName) {
+        const debtorAddress = data['[DEBTOR1_ADDRESS]'] || '';
+        const debtorCity = data['[DEBTOR1_CITY]'] || '';
+        const debtorState = data['[DEBTOR1_STATE]'] || '';
+        const debtorZipForAddr = data['[DEBTOR1_ZIP]'] || '';
+        
+        const addressLine = `${defendantName}, an individual\n${debtorAddress}\n${debtorCity}, ${debtorState} ${debtorZipForAddr}`;
+        data['[VAR_DEFENDANT_NAME_WITH_ADDRESS]'] = addressLine;
+        
+        // Handle VAR_DEFENDANT_SERVICE_ADDRESS (same as above but without "an individual" and no newlines)
+        // Add period after street suffixes if missing
+        let formattedDebtorAddress = debtorAddress;
+        if (formattedDebtorAddress) {
+            const streetSuffixes = ['St', 'Dr', 'Ter', 'Pl', 'Blvd', 'Ave', 'Rd', 'Ln', 'Ct', 'Cir', 'Pkwy', 'Way'];
+            streetSuffixes.forEach(suffix => {
+                // Match suffix at end of string or before a space, not already followed by a period
+                const regex = new RegExp(`\\b${suffix}(?!\\.)\\b`, 'gi');
+                formattedDebtorAddress = formattedDebtorAddress.replace(regex, suffix + '.');
+            });
+        }
+        
+        const serviceAddressParts = [defendantName + ',', formattedDebtorAddress + ',', `${debtorCity}, ${debtorState} ${debtorZipForAddr}`].filter(Boolean);
+        data['[VAR_DEFENDANT_SERVICE_ADDRESS]'] = serviceAddressParts.join(' ');
     }
     
     // Handle VAR_COURTHOUSE and VAR_COURT_INFO based on debtor ZIP code
@@ -476,11 +550,27 @@ async function processDynamicVariables(data) {
         }
     }
     
-    // Handle VAR_CREDITOR1_NAME
-    const creditor1Name = data['[CREDITOR1_NAME]'] || '';
-    if (creditor1Name) {
-        const titleCasedName = toTitleCase(creditor1Name);
-        data['[VAR_CREDITOR1_NAME]'] = 'Plaintiff, ' + titleCasedName;
+    // --- LOGIC: COURT MAILING ADDRESS ---
+    // If mailing address is missing OR matches the street address, set specific text.
+    const courtStreet = (data['[COURT_STREET_ADDRESS]'] || '').toLowerCase().trim();
+    const courtMailing = (data['[COURT_MAILING_ADDRESS]'] || '').toLowerCase().trim();
+    
+    // Check if mailing is empty or effectively identical to street
+    if (!courtMailing || courtMailing === courtStreet) {
+        data['[COURT_MAILING_ADDRESS]'] = 'Same as street address';
+    }
+    
+    // Handle VAR_CREDITOR1_NAME and VAR_CASE_NAME (reuse plaintiffName)
+    const plaintiffName = data['[PLAINTIFF_NAME]'] || '';
+    const defendantNameForCase = data['[DEFENDANT_NAME]'] || '';
+    
+    if (plaintiffName) {
+        const creditorAddress = data['[CREDITOR_ADDRESS]'] || '';
+        const creditorCity = data['[CREDITOR_CITY]'] || '';
+        const creditorState = data['[CREDITOR_STATE]'] || '';
+        const creditorZip = data['[CREDITOR_ZIP]'] || '';
+        
+        data['[VAR_CREDITOR1_NAME]'] = `${plaintiffName}\n${creditorAddress}\n${creditorCity}, ${creditorState} ${creditorZip}`;
     }
     
     // Handle VAR_COURT_COUNTY
@@ -490,8 +580,6 @@ async function processDynamicVariables(data) {
     }
     
     // Handle VAR_CASE_NAME
-    const plaintiffName = data['[PLAINTIFF_NAME]'] || '';
-    const defendantNameForCase = data['[DEFENDANT_NAME]'] || '';
     if (plaintiffName && defendantNameForCase) {
         const formattedPlaintiff = toTitleCase(plaintiffName);
         const cleanDefendant = defendantNameForCase
@@ -551,6 +639,44 @@ async function processDynamicVariables(data) {
         }
     }
     
+    // Handle Judgment Creditor Checkboxes
+    // Check Names: Look at the Plaintiff and Creditor names
+    const pNameLower = (data['[PLAINTIFF_NAME]'] || '').toLowerCase();
+    const cNameLower = (data['[CREDITOR1_NAME]'] || '').toLowerCase();
+    const combinedNames = pNameLower + ' ' + cNameLower;
+    
+    // Determine Status
+    let isCreditor = true; // Default to True
+    if (combinedNames.includes('assignee') || combinedNames.includes('successor') || combinedNames.includes('buyer')) {
+        isCreditor = false;
+    }
+    
+    // Apply to PDF Fields
+    data['[IS_JUDGMENT_CREDITOR]'] = isCreditor;
+    data['[IS_JUDGMENT_CREDITOR2]'] = isCreditor;
+    data['[IS_ASSIGNEE_OF_RECORD]'] = !isCreditor;
+    data['[IS_ASSIGNEE_OF_RECORD2]'] = !isCreditor;
+    
+    // Stay of Enforcement Logic (Item 11 - Negative Inference)
+    // Look for stay date variables in the extracted data
+    const stayDate = data['[STAY_DATE]'] || data['[STAY_ENFORCEMENT_DATE]'] || '';
+    if (!stayDate || stayDate.trim() === '') {
+        // If NO date is found (standard case): Set to True (maps to 'Not Ordered' checkbox, Item 11a)
+        data['[IS_STAY_ORDERED]'] = true;
+    } else {
+        // If a date IS found: Set to False
+        data['[IS_STAY_ORDERED]'] = false;
+    }
+    
+    // Certification Logic (Item 12a - Standard certification)
+    // Set to True by default for standard certification
+    data['[IS_CERTIFIED_ABSTRACT]'] = true;
+    
+    // Mirror CASE_NUMBER to page 2
+    if (data['[CASE_NUMBER]']) {
+        data['[CASE_NUMBER_P2]'] = data['[CASE_NUMBER]'];
+    }
+      
     return data;
 }
 
