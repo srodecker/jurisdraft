@@ -109,7 +109,6 @@ app.get('/', (req, res) => {
 });
 
 app.use(express.static('public'));
-app.use('/play-tailwind', express.static('play-tailwind')); // Serve play-tailwind assets
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
 // Mount external routers
