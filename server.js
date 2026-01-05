@@ -98,7 +98,18 @@ const apiLimiter = rateLimit({
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Reasonable limit for JSON payloads
+
+// Ensure root URL returns full.html (MUST be before static middleware)
+app.get('/', (req, res) => {
+    console.log('=== ROOT URL REQUEST ===');
+    console.log('Request URL:', req.url);
+    console.log('Request Path:', req.path);
+    console.log('Sending file:', path.join(PUBLIC_DIR, 'full.html'));
+    res.sendFile(path.join(PUBLIC_DIR, 'full.html'));
+});
+
 app.use(express.static('public'));
+app.use('/play-tailwind', express.static('play-tailwind')); // Serve play-tailwind assets
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
 // Mount external routers
@@ -1003,9 +1014,10 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'ok' });
 });
 
-// Ensure root URL returns index.html
-app.get('/', (req, res) => {
-    res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+// Add catch-all debug logging
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
 });
 
 app.listen(PORT, () => {
