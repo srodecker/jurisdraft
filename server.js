@@ -105,10 +105,34 @@ app.get('/', (req, res) => {
     console.log('Request URL:', req.url);
     console.log('Request Path:', req.path);
     console.log('Sending file:', path.join(PUBLIC_DIR, 'full.html'));
+    // Disable caching for development
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     res.sendFile(path.join(PUBLIC_DIR, 'full.html'));
 });
 
-app.use(express.static('public'));
+// Debug endpoint to check file content
+app.get('/debug-file', async (req, res) => {
+    try {
+        const content = await fs.readFile(path.join(PUBLIC_DIR, 'full.html'), 'utf-8');
+        const first500 = content.substring(0, 500);
+        res.send(`<pre>${first500.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`);
+    } catch (error) {
+        res.status(500).send('Error: ' + error.message);
+    }
+});
+
+// Serve static files with no-cache headers in development
+app.use(express.static('public', {
+    setHeaders: (res, path) => {
+        if (path.endsWith('.css') || path.endsWith('.js') || path.endsWith('.html')) {
+            res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+            res.set('Pragma', 'no-cache');
+            res.set('Expires', '0');
+        }
+    }
+}));
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
 // Mount external routers

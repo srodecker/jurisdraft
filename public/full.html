@@ -4,196 +4,436 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>JurisDraft - Complete Workflow</title>
-    <link rel="stylesheet" href="/css/animate.css" />
+    <title>JurisDraft - Legal Workspace</title>
     <link rel="stylesheet" href="/css/tailwind.css" />
-
-
+    <style>
+        * { box-sizing: border-box; }
+        html, body { 
+            height: 100vh; 
+            margin: 0; 
+            overflow: hidden; 
+        }
+        .workspace-container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+        .sidebar {
+            width: 400px;
+            min-width: 400px;
+            height: 100vh;
+            overflow-y: auto;
+            background: #ffffff;
+            border-right: 1px solid #e5e7eb;
+            display: flex;
+            flex-direction: column;
+        }
+        .dark .sidebar {
+            background: #1e293b;
+            border-right-color: #334155;
+        }
+        .main-workspace {
+            flex: 1;
+            height: 100vh;
+            background: #f1f5f9;
+            display: flex;
+            flex-direction: column;
+        }
+        .dark .main-workspace {
+            background: #0f172a;
+        }
+        .pdf-container {
+            flex: 1;
+            width: 100%;
+            height: 100%;
+        }
+        .pdf-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        .sidebar-section {
+            padding: 20px;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        .dark .sidebar-section {
+            border-bottom-color: #334155;
+        }
+        .sidebar-section:last-child {
+            border-bottom: none;
+        }
+        /* Custom scrollbar for sidebar */
+        .sidebar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .sidebar::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .sidebar::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .dark .sidebar::-webkit-scrollbar-thumb {
+            background: #475569;
+        }
+        .btn-primary {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 12px 20px;
+            background: #3758f9;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-primary:hover:not(:disabled) {
+            background: #2748e8;
+        }
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-secondary {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            padding: 12px 20px;
+            background: #6366f1;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background: #4f46e5;
+        }
+        .btn-secondary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-download {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            padding: 12px 16px;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 13px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        .btn-download:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-orange { background: #f97316; }
+        .btn-orange:hover:not(:disabled) { background: #ea580c; }
+        .btn-green { background: #22c55e; }
+        .btn-green:hover:not(:disabled) { background: #16a34a; }
+        
+        .form-select, .form-textarea {
+            width: 100%;
+            padding: 10px 14px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #f9fafb;
+            font-size: 14px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .dark .form-select, .dark .form-textarea {
+            background: #1e293b;
+            border-color: #334155;
+            color: #e2e8f0;
+        }
+        .form-select:focus, .form-textarea:focus {
+            outline: none;
+            border-color: #3758f9;
+            box-shadow: 0 0 0 3px rgba(55, 88, 249, 0.1);
+        }
+        .form-textarea {
+            font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
+            font-size: 12px;
+            resize: none;
+        }
+        .drop-zone {
+            border: 2px dashed #cbd5e1;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: #3758f9;
+            background: #eff6ff;
+        }
+        .dark .drop-zone {
+            border-color: #475569;
+        }
+        .dark .drop-zone:hover, .dark .drop-zone.dragover {
+            border-color: #3758f9;
+            background: rgba(55, 88, 249, 0.1);
+        }
+        .file-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 14px;
+            background: #f1f5f9;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+        .dark .file-card {
+            background: #334155;
+        }
+        .file-card-icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #3758f9;
+            color: white;
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+        .file-card-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .file-card-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: #1e293b;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .dark .file-card-name {
+            color: #e2e8f0;
+        }
+        .file-card-size {
+            font-size: 11px;
+            color: #64748b;
+        }
+        .status-box {
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-top: 12px;
+        }
+        .status-success {
+            background: #dcfce7;
+            color: #166534;
+            border: 1px solid #86efac;
+        }
+        .dark .status-success {
+            background: rgba(34, 197, 94, 0.1);
+            color: #86efac;
+            border-color: rgba(34, 197, 94, 0.3);
+        }
+        .status-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+        .dark .status-error {
+            background: rgba(239, 68, 68, 0.1);
+            color: #fca5a5;
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+        .status-info {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #93c5fd;
+        }
+        .dark .status-info {
+            background: rgba(59, 130, 246, 0.1);
+            color: #93c5fd;
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+        .pdf-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #94a3b8;
+        }
+        .pdf-placeholder svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        .field-stats {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            background: #eff6ff;
+            color: #3758f9;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .dark .field-stats {
+            background: rgba(55, 88, 249, 0.1);
+        }
+        .tip-box {
+            background: #eff6ff;
+            border-left: 4px solid #3758f9;
+            padding: 12px;
+            border-radius: 0 8px 8px 0;
+            font-size: 13px;
+            color: #475569;
+        }
+        .dark .tip-box {
+            background: rgba(55, 88, 249, 0.1);
+            color: #94a3b8;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin {
+            animation: spin 1s linear infinite;
+        }
+    </style>
 </head>
-<body>
-    <!-- Navbar Section Start -->
-    <div class="absolute top-0 left-0 z-40 flex items-center w-full bg-transparent ud-header">
-        <div class="container mx-auto px-4">
-            <div class="relative flex items-center justify-between -mx-4">
-                <div class="max-w-full px-4 w-60">
-                    <a href="index.html" class="block w-full py-5 navbar-logo">
-                        <h1 class="text-2xl font-bold text-dark dark:text-white">JurisDraft</h1>
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Navbar Section End -->
-
-    <!-- Banner Section Start -->
-    <div class="relative z-10 overflow-hidden pb-[60px] pt-[120px] dark:bg-dark md:pt-[130px] lg:pt-[160px]">
-        <div class="absolute bottom-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-stroke to-transparent dark:via-dark-3"></div>
-        <div class="container mx-auto px-4">
-            <div class="flex flex-wrap items-center -mx-4">
-                <div class="w-full px-4">
-                    <div class="text-center wow fadeInUp" data-wow-delay=".2s">
-                        <h1 class="mb-4 text-3xl font-bold text-dark dark:text-white sm:text-4xl md:text-[40px] md:leading-[1.2]">
-                            📄 JurisDraft Complete Workflow
-                        </h1>
-                        <p class="mb-5 text-base text-body-color dark:text-dark-6">
-                            Extract data from documents and fill PDF forms in one seamless process
-                        </p>
+<body class="bg-gray-100 dark:bg-dark">
+    <div class="workspace-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <!-- Header -->
+            <div class="sidebar-section" style="padding: 16px 20px;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <div style="width: 36px; height: 36px; background: #3758f9; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                        <svg width="20" height="20" fill="white" viewBox="0 0 24 24">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14 2 14 8 20 8" fill="none" stroke="white" stroke-width="2"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 style="font-size: 18px; font-weight: 700; color: #1e293b; margin: 0;">JurisDraft</h1>
+                        <p style="font-size: 11px; color: #64748b; margin: 0;">Legal Workspace</p>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-    <!-- Banner Section End -->
 
-    <!-- Main Content Section Start -->
-    <section class="bg-gray-1 pb-8 pt-8 dark:bg-dark-2 lg:pb-[70px] lg:pt-[40px]">
-        <div class="container mx-auto px-4">
-            <!-- Step 1: Extract Section -->
-            <div id="extractSection" class="wow fadeInUp mb-12" data-wow-delay=".2s">
-                <div class="bg-white dark:bg-dark rounded-xl shadow-testimonial dark:shadow-none p-8">
-                    <div class="flex items-center mb-6">
-                        <div class="flex items-center justify-center w-12 h-12 rounded-full bg-primary text-white font-bold text-xl mr-4">
-                            1
-                        </div>
-                        <h2 class="text-2xl font-bold text-dark dark:text-white">Extract Data from Documents</h2>
-                    </div>
-                    
-                    <p class="text-base text-body-color dark:text-dark-6 mb-6">
-                        Drop your files here or click to select. Supported: PDF, DOCX, TXT, JPG, PNG — any document file.
-                    </p>
-
-                    <div id="drop" class="border-2 border-dashed border-stroke dark:border-dark-3 rounded-xl p-8 text-center mb-4 transition-all hover:border-primary hover:bg-gray-1 dark:hover:bg-dark-3 cursor-pointer">
-                        <div class="text-body-color dark:text-dark-6">
-                            <svg class="w-16 h-16 mx-auto mb-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                            </svg>
-                            <p class="mb-4 text-lg font-semibold text-dark dark:text-white">Drop files here or click to select</p>
-                            <button id="selectBtn" type="button" class="inline-flex items-center justify-center rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white hover:bg-dark">
-                                Select Files
-                            </button>
-                        </div>
-                    </div>
-
-                    <input id="fileInput" type="file" multiple style="display:none" />
-
-                    <div id="filesList" class="mb-6"></div>
-
-                    <div class="flex gap-4">
-                        <button id="uploadBtn" disabled class="inline-flex items-center justify-center rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white hover:bg-dark disabled:opacity-50 disabled:cursor-not-allowed">
-                            <span id="uploadBtnText">Upload & Extract</span>
-                        </button>
-                    </div>
-
-                    <div id="extractNote" class="mt-4"></div>
+            <!-- Extract Section -->
+            <div class="sidebar-section">
+                <h2 style="font-size: 13px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
+                    📤 Extract Data
+                </h2>
+                
+                <div id="drop" class="drop-zone">
+                    <svg style="width: 32px; height: 32px; margin: 0 auto 8px; color: #3758f9;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <p style="font-size: 13px; color: #64748b; margin-bottom: 8px;">Drop files or click to select</p>
+                    <button id="selectBtn" type="button" style="padding: 6px 14px; background: #3758f9; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">
+                        Select Files
+                    </button>
                 </div>
+
+                <input id="fileInput" type="file" multiple style="display:none" />
+                <div id="filesList"></div>
+
+                <button id="uploadBtn" disabled class="btn-primary" style="margin-top: 12px;">
+                    <span id="uploadBtnText">Upload & Extract</span>
+                </button>
+
+                <div id="extractNote"></div>
             </div>
 
-            <!-- Step 2: Fill PDF Section -->
-            <div id="fillSection" class="wow fadeInUp" data-wow-delay=".3s">
-                <div class="bg-white dark:bg-dark rounded-xl shadow-testimonial dark:shadow-none p-8">
-                    <div class="flex items-center mb-6">
-                        <div class="flex items-center justify-center w-12 h-12 rounded-full bg-primary text-white font-bold text-xl mr-4">
-                            2
-                        </div>
-                        <h2 class="text-2xl font-bold text-dark dark:text-white">Fill PDF Form</h2>
-                    </div>
+            <!-- Template Selection -->
+            <div class="sidebar-section">
+                <h2 style="font-size: 13px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
+                    📋 Template
+                </h2>
+                <select id="templateSelect" class="form-select">
+                    <option value="">Loading templates...</option>
+                </select>
+            </div>
 
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                        <!-- Controls Column -->
-                        <div class="space-y-6">
-                            <div>
-                                <label for="templateSelect" class="block mb-2 text-base font-medium text-dark dark:text-white">
-                                    Select PDF Template:
-                                </label>
-                                <select id="templateSelect" class="w-full rounded-md border border-stroke dark:border-dark-3 bg-white dark:bg-dark-2 px-4 py-3 text-dark dark:text-white focus:border-primary focus:outline-none">
-                                    <option value="">Loading templates...</option>
-                                </select>
-                            </div>
-
-                            <div>
-                                <label for="jsonInput" class="block mb-2 text-base font-medium text-dark dark:text-white">
-                                    JSON Data:
-                                </label>
-                                <textarea id="jsonInput" rows="12" class="w-full rounded-md border border-stroke dark:border-dark-3 bg-white dark:bg-dark-2 px-4 py-3 text-dark dark:text-white focus:border-primary focus:outline-none font-mono text-sm" placeholder='Enter JSON data, e.g.:
+            <!-- JSON Input -->
+            <div class="sidebar-section" style="flex: 1;">
+                <h2 style="font-size: 13px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
+                    📝 JSON Data
+                </h2>
+                <textarea id="jsonInput" class="form-textarea" rows="10" placeholder='Enter JSON data, e.g.:
 {
   "firstName": "John",
   "lastName": "Doe",
   "email": "john@example.com"
 }'></textarea>
-                            </div>
-
-                            <div class="bg-gray-1 dark:bg-dark-3 border-l-4 border-primary rounded p-4">
-                                <p class="text-sm text-body-color dark:text-dark-6">
-                                    <strong class="text-dark dark:text-white">💡 Tip:</strong> Field names in your JSON should match the form field names in the PDF. Click "Go" to see available fields.
-                                </p>
-                            </div>
-
-                            <div class="space-y-3">
-                                <button id="fillBtn" disabled class="w-full inline-flex items-center justify-center rounded-md bg-primary px-7 py-3 text-center text-base font-medium text-white hover:bg-dark disabled:opacity-50 disabled:cursor-not-allowed">
-                                    <span id="fillBtnText">Go</span>
-                                </button>
-                                
-                                <button id="autoFillBtn" disabled class="w-full inline-flex items-center justify-center rounded-md bg-secondary px-7 py-3 text-center text-base font-medium text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">
-                                    Auto Test Fill
-                                </button>
-
-                                <button id="submitBtn" disabled class="w-full inline-flex items-center justify-center rounded-md bg-secondary px-7 py-3 text-center text-base font-medium text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">
-                                    Submit Additional JSON
-                                </button>
-
-                                <div class="flex gap-3">
-                                    <button id="downloadBtn" disabled class="flex-1 inline-flex items-center justify-center rounded-md bg-[#FF9800] px-5 py-3 text-center text-base font-medium text-white hover:bg-[#F57C00] disabled:opacity-50 disabled:cursor-not-allowed">
-                                        Download PDF
-                                    </button>
-                                    <button id="downloadCourtBtn" disabled class="flex-1 inline-flex items-center justify-center rounded-md bg-[#28a745] px-5 py-3 text-center text-base font-medium text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed">
-                                        Download Court Ready
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div id="statusMessage"></div>
-                        </div>
-
-                        <!-- Preview Column -->
-                        <div>
-                            <div class="flex justify-between items-center mb-4">
-                                <h3 class="text-xl font-semibold text-dark dark:text-white">PDF Preview</h3>
-                                <div id="fieldStats"></div>
-                            </div>
-                            <div id="pdfViewer" class="w-full h-[600px] border-2 border-stroke dark:border-dark-3 rounded-lg bg-gray-1 dark:bg-dark-3 flex items-center justify-center text-body-color dark:text-dark-6">
-                                Select a template and click "Go" to preview
-                            </div>
-                        </div>
-                    </div>
+                
+                <div class="tip-box" style="margin-top: 12px;">
+                    <strong>💡 Tip:</strong> Field names in your JSON should match the form field names in the PDF.
                 </div>
             </div>
-        </div>
-    </section>
-    <!-- Main Content Section End -->
 
-    <!-- Footer Section Start -->
-    <footer class="wow fadeInUp relative z-10 bg-[#090E34] pt-20 lg:pt-[100px]" data-wow-delay=".15s">
-        <div class="container mx-auto px-4">
-            <div class="flex flex-wrap -mx-4">
-                <div class="w-full px-4">
-                    <div class="text-center mb-10">
-                        <p class="text-base text-[#8890A4]">
-                            © 2025 JurisDraft. All rights reserved.
-                        </p>
+            <!-- Action Buttons -->
+            <div class="sidebar-section">
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <button id="fillBtn" disabled class="btn-primary">
+                        <span id="fillBtnText">Generate PDF</span>
+                    </button>
+                    
+                    <button id="autoFillBtn" disabled class="btn-secondary">
+                        Auto Test Fill
+                    </button>
+
+                    <button id="submitBtn" disabled class="btn-secondary">
+                        Submit Additional JSON
+                    </button>
+
+                    <div style="display: flex; gap: 8px; margin-top: 4px;">
+                        <button id="downloadBtn" disabled class="btn-download btn-orange">
+                            <svg style="width: 16px; height: 16px; margin-right: 6px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Download
+                        </button>
+                        <button id="downloadCourtBtn" disabled class="btn-download btn-green">
+                            <svg style="width: 16px; height: 16px; margin-right: 6px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            Court Ready
+                        </button>
                     </div>
                 </div>
+
+                <div id="statusMessage"></div>
+                <div id="fieldStats" style="margin-top: 12px; text-align: center;"></div>
             </div>
-        </div>
-    </footer>
-    <!-- Footer Section End -->
+        </aside>
 
-    <!-- Back To Top Start -->
-    <a href="javascript:void(0)" class="fixed left-auto items-center justify-center hidden w-10 h-10 text-white transition duration-300 ease-in-out rounded-md shadow-md back-to-top bottom-8 right-8 z-999 bg-primary hover:bg-dark">
-        <span class="mt-[6px] h-3 w-3 rotate-45 border-l border-t border-white"></span>
-    </a>
-    <!-- Back To Top End -->
+        <!-- Main PDF Workspace -->
+        <main class="main-workspace">
+            <div id="pdfViewer" class="pdf-container">
+                <div class="pdf-placeholder">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p style="font-size: 16px; font-weight: 500;">PDF Preview</p>
+                    <p style="font-size: 13px; margin-top: 4px;">Select a template and click "Generate PDF" to preview</p>
+                </div>
+            </div>
+        </main>
+    </div>
 
-    <!-- All Scripts -->
     <script>
     // ===== EXTRACT FUNCTIONALITY =====
     const drop = document.getElementById('drop');
@@ -218,13 +458,13 @@
     ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
         e.preventDefault(); 
         e.stopPropagation(); 
-        drop.classList.add('border-primary', 'bg-gray-1', 'dark:bg-dark-3');
+        drop.classList.add('dragover');
     }));
     
     ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, (e) => {
         e.preventDefault(); 
         e.stopPropagation(); 
-        drop.classList.remove('border-primary', 'bg-gray-1', 'dark:bg-dark-3');
+        drop.classList.remove('dragover');
     }));
 
     drop.addEventListener('drop', (e) => {
@@ -236,8 +476,8 @@
 
     function handleFiles(newFiles) {
         for (const f of newFiles) {
-            const key = f.name+":"+f.size;
-            if (!files.some(x=>x._key===key)) {
+            const key = f.name + ":" + f.size;
+            if (!files.some(x => x._key === key)) {
                 f._key = key;
                 files.push(f);
             }
@@ -245,43 +485,64 @@
         renderFiles();
     }
 
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function getFileIcon(filename) {
+        const ext = filename.split('.').pop().toLowerCase();
+        const icons = {
+            pdf: '📄',
+            doc: '📝', docx: '📝',
+            txt: '📃',
+            jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️',
+            xls: '📊', xlsx: '📊', csv: '📊'
+        };
+        return icons[ext] || '📎';
+    }
+
     function renderFiles() {
         filesList.innerHTML = '';
         files.forEach((f, i) => {
             const el = document.createElement('div');
-            el.className = 'flex justify-between items-center p-3 bg-gray-1 dark:bg-dark-3 rounded-lg mb-2';
+            el.className = 'file-card';
             el.innerHTML = `
-                <div class="flex items-center gap-3">
-                    <svg class="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    <span class="text-dark dark:text-white">${escapeHtml(f.name)}</span>
+                <div class="file-card-icon">
+                    <span style="font-size: 16px;">${getFileIcon(f.name)}</span>
                 </div>
-                <button data-i="${i}" class="remove text-red-500 hover:text-red-700 px-3 py-1 rounded hover:bg-red-50 dark:hover:bg-red-900/20">
-                    Remove
+                <div class="file-card-info">
+                    <div class="file-card-name">${escapeHtml(f.name)}</div>
+                    <div class="file-card-size">${formatFileSize(f.size)}</div>
+                </div>
+                <button data-i="${i}" class="remove" style="background: none; border: none; color: #ef4444; cursor: pointer; padding: 4px 8px; font-size: 12px;">
+                    ✕
                 </button>
             `;
             filesList.appendChild(el);
         });
         
-        Array.from(filesList.querySelectorAll('.remove')).forEach(btn=> btn.addEventListener('click', (e)=>{
-            const i = Number(e.target.getAttribute('data-i'));
-            files.splice(i,1);
-            renderFiles();
-        }));
+        Array.from(filesList.querySelectorAll('.remove')).forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const i = Number(e.target.getAttribute('data-i'));
+                files.splice(i, 1);
+                renderFiles();
+            });
+        });
         
-        uploadBtn.disabled = files.length===0;
+        uploadBtn.disabled = files.length === 0;
     }
 
-    function escapeHtml(s){ 
-        return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); 
+    function escapeHtml(s) { 
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); 
     }
 
     uploadBtn.addEventListener('click', async () => {
-        if (files.length===0) return;
+        if (files.length === 0) return;
         
         uploadBtn.disabled = true; 
-        uploadBtnText.innerHTML = '<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>Extracting...';
+        uploadBtnText.innerHTML = '<span style="display: inline-block; width: 14px; height: 14px; border: 2px solid white; border-top-color: transparent; border-radius: 50%; margin-right: 8px;" class="animate-spin"></span>Extracting...';
         showExtractStatus('Uploading and extracting...', 'info');
 
         const form = new FormData();
@@ -325,17 +586,12 @@
                 }
 
                 if (jsonString) {
-                    // Populate the JSON input field
                     jsonInput.value = JSON.stringify(jsonString, null, 2);
-                    showExtractStatus('Data extracted successfully! Now fill out the PDF form below.', 'success');
-                    
-                    // Scroll to fill section
-                    document.getElementById('fillSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    showExtractStatus('Data extracted successfully! Now fill out the PDF form.', 'success');
                     
                     uploadBtn.disabled = false;
                     uploadBtnText.textContent = 'Upload & Extract';
                     
-                    // Clear files
                     files = [];
                     renderFiles();
                     return;
@@ -350,8 +606,6 @@
             const preview = data.promptPreview ? data.promptPreview : JSON.stringify(data.files || data, null, 2);
             jsonInput.value = JSON.stringify({ note: data.note || 'No API key', preview }, null, 2);
             showExtractStatus('Data prepared (no API key detected)', 'info');
-            
-            document.getElementById('fillSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
         } catch (err) {
             console.error(err);
@@ -363,12 +617,7 @@
     });
 
     function showExtractStatus(message, type = 'info') {
-        const colors = {
-            success: 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800',
-            error: 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800',
-            info: 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-        };
-        extractNote.innerHTML = `<div class="p-4 rounded-lg border ${colors[type]}">${message}</div>`;
+        extractNote.innerHTML = `<div class="status-box status-${type}">${message}</div>`;
     }
 
     // ===== PDF FILL FUNCTIONALITY =====
@@ -440,7 +689,7 @@
         }
 
         fillBtn.disabled = true;
-        fillBtnText.innerHTML = '<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>Processing...';
+        fillBtnText.innerHTML = '<span style="display: inline-block; width: 14px; height: 14px; border: 2px solid white; border-top-color: transparent; border-radius: 50%; margin-right: 8px;" class="animate-spin"></span>Processing...';
         showStatus('Processing PDF...', 'info');
 
         try {
@@ -469,22 +718,20 @@
 
             const blob = base64ToBlob(result.pdfData, 'application/pdf');
             currentPDFUrl = URL.createObjectURL(blob);
-            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}" class="w-full h-full rounded-lg"></iframe>`;
+            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}"></iframe>`;
 
-            showStatus(
-                `PDF filled successfully! ${result.filledFields} of ${result.totalFields} fields filled.`,
-                'success'
-            );
+            showStatus(`PDF filled successfully! ${result.filledFields} of ${result.totalFields} fields filled.`, 'success');
 
-            let fieldStatsHTML = `<span class="text-sm px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">${result.filledFields}/${result.totalFields} fields</span>`;
+            let fieldStatsHTML = `<span class="field-stats">${result.filledFields}/${result.totalFields} fields filled</span>`;
             
             if (result.processedData && result.processedData['[ZIP_NOT_FOUND]'] === true) {
                 const debtorZip = result.processedData['[DEBTOR1_ZIP]'] || 'unknown';
-                fieldStatsHTML += `<br><span class="text-sm px-3 py-1 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 mt-2 inline-block">⚠️ Zip ${debtorZip} not found</span>`;
+                fieldStatsHTML += `<br><span class="field-stats" style="background: #fef2f2; color: #ef4444; margin-top: 8px;">⚠️ Zip ${debtorZip} not found</span>`;
             }
             
             fieldStats.innerHTML = fieldStatsHTML;
 
+            // Enable download buttons
             downloadBtn.disabled = false;
             downloadCourtBtn.disabled = false;
             submitBtn.disabled = false;
@@ -500,7 +747,7 @@
             showStatus('Error: ' + error.message, 'error');
         } finally {
             fillBtn.disabled = false;
-            fillBtnText.textContent = 'Go';
+            fillBtnText.textContent = 'Generate PDF';
         }
     }
 
@@ -538,15 +785,13 @@
 
             const blob = base64ToBlob(result.pdfData, 'application/pdf');
             currentPDFUrl = URL.createObjectURL(blob);
-            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}" class="w-full h-full rounded-lg"></iframe>`;
+            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}"></iframe>`;
 
-            showStatus(
-                `Auto fill completed. ${result.filledFields} of ${result.totalFields} fields filled.`,
-                'success'
-            );
+            showStatus(`Auto fill completed. ${result.filledFields} of ${result.totalFields} fields filled.`, 'success');
 
-            fieldStats.innerHTML = `<span class="text-sm px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">${result.filledFields}/${result.totalFields} fields (auto)</span>`;
+            fieldStats.innerHTML = `<span class="field-stats">${result.filledFields}/${result.totalFields} fields (auto)</span>`;
 
+            // Enable download buttons
             downloadBtn.disabled = false;
             downloadCourtBtn.disabled = false;
             submitBtn.disabled = false;
@@ -568,8 +813,27 @@
             return;
         }
 
-        window.location.href = '/api/download';
-        showStatus('Download started!', 'success');
+        try {
+            // Create blob from base64 data
+            const blob = base64ToBlob(currentPDFData, 'application/pdf');
+            const url = URL.createObjectURL(blob);
+            
+            // Create temporary download link
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'JurisDraft_Filing.pdf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            // Cleanup
+            URL.revokeObjectURL(url);
+            
+            showStatus('Download started!', 'success');
+        } catch (error) {
+            console.error('Download error:', error);
+            showStatus('Download failed: ' + error.message, 'error');
+        }
     }
 
     function downloadCourtReadyPDF() {
@@ -578,8 +842,27 @@
             return;
         }
 
-        window.location.href = '/api/download?mode=court';
-        showStatus('Court-ready PDF download started!', 'success');
+        try {
+            // Create blob from base64 data
+            const blob = base64ToBlob(currentPDFData, 'application/pdf');
+            const url = URL.createObjectURL(blob);
+            
+            // Create temporary download link
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'JurisDraft_Court_Ready.pdf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            // Cleanup
+            URL.revokeObjectURL(url);
+            
+            showStatus('Court-ready PDF download started!', 'success');
+        } catch (error) {
+            console.error('Download error:', error);
+            showStatus('Download failed: ' + error.message, 'error');
+        }
     }
 
     function base64ToBlob(base64, mimeType) {
@@ -602,12 +885,7 @@
     }
 
     function showStatus(message, type = 'info') {
-        const colors = {
-            success: 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800',
-            error: 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800',
-            info: 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
-        };
-        statusMessage.innerHTML = `<div class="p-4 rounded-lg border ${colors[type]}">${message}</div>`;
+        statusMessage.innerHTML = `<div class="status-box status-${type}">${message}</div>`;
     }
 
     window.addEventListener('beforeunload', () => {
