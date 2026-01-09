@@ -333,6 +333,8 @@ async function processDynamicVariables(data) {
     // Overwrite the raw ALL CAPS name with the Title Cased version
     if (formattedFirmName) {
         data['[FIRM_NAME]'] = formattedFirmName;
+        // Also create VAR_FIRM_FULL_NAME as title case version
+        data['[VAR_FIRM_FULL_NAME]'] = formattedFirmName;
     }
     
     // 2. CREATE SPECIFIC ATTORNEY VARIABLES
@@ -598,6 +600,12 @@ async function processDynamicVariables(data) {
     const plaintiffName = data['[PLAINTIFF_NAME]'] || '';
     const defendantNameForCase = data['[DEFENDANT_NAME]'] || '';
     
+    // Create VAR_PLAINTIFF_NAME as title case version with "Plaintiff, " prefix
+    if (plaintiffName) {
+        const formattedPlaintiffName = toTitleCase(plaintiffName);
+        data['[VAR_PLAINTIFF_NAME]'] = `Plaintiff, ${formattedPlaintiffName}`;
+    }
+    
     if (plaintiffName) {
         const creditorAddress = data['[CREDITOR_ADDRESS]'] || '';
         const creditorCity = data['[CREDITOR_CITY]'] || '';
@@ -762,12 +770,48 @@ app.post('/api/fill-pdf', async (req, res) => {
         // Read the PDF template
         const existingPdfBytes = await fs.readFile(templatePath);
         
-        // Load the PDF
-        const pdfDoc = await PDFDocument.load(existingPdfBytes);
+        // Validate PDF file (check for PDF magic bytes)
+        if (existingPdfBytes.length < 4 || existingPdfBytes[0] !== 0x25 || existingPdfBytes[1] !== 0x50 || existingPdfBytes[2] !== 0x44 || existingPdfBytes[3] !== 0x46) {
+            return res.status(400).json({ error: 'Invalid PDF file: File does not appear to be a valid PDF' });
+        }
+        
+        // Load the PDF with error handling
+        let pdfDoc;
+        try {
+            // Try loading normally first
+            pdfDoc = await PDFDocument.load(existingPdfBytes);
+        } catch (loadError) {
+            // If normal load fails, try with ignoreEncryption option
+            try {
+                console.log('Normal load failed, trying with ignoreEncryption option...');
+                pdfDoc = await PDFDocument.load(existingPdfBytes, { ignoreEncryption: true });
+            } catch (retryError) {
+                console.error('PDF load error details:', {
+                    error: loadError.message,
+                    retryError: retryError.message,
+                    stack: loadError.stack,
+                    templateName: templateName,
+                    fileSize: existingPdfBytes.length,
+                    firstBytes: Array.from(existingPdfBytes.slice(0, 20))
+                });
+                return res.status(400).json({ 
+                    error: `Failed to load PDF: ${loadError.message}. The PDF file may be corrupted or invalid. Please verify the file is a valid PDF.` 
+                });
+            }
+        }
         
         // Get the form from the PDF
-        const form = pdfDoc.getForm();
-        const fields = form.getFields();
+        let form;
+        let fields;
+        try {
+            form = pdfDoc.getForm();
+            fields = form.getFields();
+        } catch (formError) {
+            console.error('PDF form error:', formError);
+            return res.status(400).json({ 
+                error: `Failed to access PDF form: ${formError.message}. The PDF may not contain form fields.` 
+            });
+        }
         
         // Field info for debugging / returned to client
         const fieldInfo = fields.map(field => ({
@@ -837,16 +881,46 @@ app.post('/api/fill-pdf', async (req, res) => {
         }
         
         // Save the filled PDF (keep form fields editable - don't flatten)
-        const pdfBytes = await pdfDoc.save();
+        let pdfBytes;
+        try {
+            pdfBytes = await pdfDoc.save();
+        } catch (saveError) {
+            console.error('PDF save error details:', {
+                error: saveError.message,
+                stack: saveError.stack,
+                templateName: templateName
+            });
+            
+            // Check if this is the specific corruption error
+            if (saveError.message.includes('Expected instance of PDFDict') || 
+                saveError.message.includes('but got instance of undefined')) {
+                return res.status(400).json({ 
+                    error: `PDF file appears to be corrupted or has invalid internal references. The PDF needs to be repaired before it can be filled. ` +
+                           `Try opening and re-saving the PDF in Adobe Acrobat or another PDF editor, or use a PDF repair tool. ` +
+                           `Original error: ${saveError.message}`
+                });
+            }
+            
+            return res.status(500).json({ 
+                error: `Failed to save PDF: ${saveError.message}` 
+            });
+        }
         
         // Store editable version in memory
         currentFilledPDF = Buffer.from(pdfBytes);
         currentPDFName = templateName.replace('.pdf', '_filled.pdf');
         
         // Create flattened court-ready version
-        form.flatten();
-        const flattenedPdfBytes = await pdfDoc.save();
-        currentCourtReadyPDF = Buffer.from(flattenedPdfBytes);
+        let flattenedPdfBytes;
+        try {
+            form.flatten();
+            flattenedPdfBytes = await pdfDoc.save();
+            currentCourtReadyPDF = Buffer.from(flattenedPdfBytes);
+        } catch (flattenError) {
+            console.error('PDF flatten error:', flattenError);
+            // If flatten fails, just use the non-flattened version
+            currentCourtReadyPDF = Buffer.from(pdfBytes);
+        }
 
         // Send back as base64 for preview
         const base64PDF = currentFilledPDF.toString('base64');
@@ -903,12 +977,48 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         // Read the PDF template
         const existingPdfBytes = await fs.readFile(templatePath);
         
-        // Load the PDF
-        const pdfDoc = await PDFDocument.load(existingPdfBytes);
+        // Validate PDF file (check for PDF magic bytes)
+        if (existingPdfBytes.length < 4 || existingPdfBytes[0] !== 0x25 || existingPdfBytes[1] !== 0x50 || existingPdfBytes[2] !== 0x44 || existingPdfBytes[3] !== 0x46) {
+            return res.status(400).json({ error: 'Invalid PDF file: File does not appear to be a valid PDF' });
+        }
+        
+        // Load the PDF with error handling
+        let pdfDoc;
+        try {
+            // Try loading normally first
+            pdfDoc = await PDFDocument.load(existingPdfBytes);
+        } catch (loadError) {
+            // If normal load fails, try with ignoreEncryption option
+            try {
+                console.log('Normal load failed, trying with ignoreEncryption option...');
+                pdfDoc = await PDFDocument.load(existingPdfBytes, { ignoreEncryption: true });
+            } catch (retryError) {
+                console.error('PDF load error details:', {
+                    error: loadError.message,
+                    retryError: retryError.message,
+                    stack: loadError.stack,
+                    templateName: templateName,
+                    fileSize: existingPdfBytes.length,
+                    firstBytes: Array.from(existingPdfBytes.slice(0, 20))
+                });
+                return res.status(400).json({ 
+                    error: `Failed to load PDF: ${loadError.message}. The PDF file may be corrupted or invalid. Please verify the file is a valid PDF.` 
+                });
+            }
+        }
         
         // Get the form from the PDF
-        const form = pdfDoc.getForm();
-        const fields = form.getFields();
+        let form;
+        let fields;
+        try {
+            form = pdfDoc.getForm();
+            fields = form.getFields();
+        } catch (formError) {
+            console.error('PDF form error:', formError);
+            return res.status(400).json({ 
+                error: `Failed to access PDF form: ${formError.message}. The PDF may not contain form fields.` 
+            });
+        }
         
         // Field info for debugging / returned to client
         const fieldInfo = fields.map(field => ({
@@ -977,16 +1087,46 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         }
         
         // Save the filled PDF (keep form fields editable - don't flatten)
-        const pdfBytes = await pdfDoc.save();
+        let pdfBytes;
+        try {
+            pdfBytes = await pdfDoc.save();
+        } catch (saveError) {
+            console.error('PDF save error details:', {
+                error: saveError.message,
+                stack: saveError.stack,
+                templateName: templateName
+            });
+            
+            // Check if this is the specific corruption error
+            if (saveError.message.includes('Expected instance of PDFDict') || 
+                saveError.message.includes('but got instance of undefined')) {
+                return res.status(400).json({ 
+                    error: `PDF file appears to be corrupted or has invalid internal references. The PDF needs to be repaired before it can be filled. ` +
+                           `Try opening and re-saving the PDF in Adobe Acrobat or another PDF editor, or use a PDF repair tool. ` +
+                           `Original error: ${saveError.message}`
+                });
+            }
+            
+            return res.status(500).json({ 
+                error: `Failed to save PDF: ${saveError.message}` 
+            });
+        }
         
         // Store editable version in memory
         currentFilledPDF = Buffer.from(pdfBytes);
         currentPDFName = templateName.replace('.pdf', '_filled.pdf');
         
         // Create flattened court-ready version
-        form.flatten();
-        const flattenedPdfBytes = await pdfDoc.save();
-        currentCourtReadyPDF = Buffer.from(flattenedPdfBytes);
+        let flattenedPdfBytes;
+        try {
+            form.flatten();
+            flattenedPdfBytes = await pdfDoc.save();
+            currentCourtReadyPDF = Buffer.from(flattenedPdfBytes);
+        } catch (flattenError) {
+            console.error('PDF flatten error:', flattenError);
+            // If flatten fails, just use the non-flattened version
+            currentCourtReadyPDF = Buffer.from(pdfBytes);
+        }
 
         // Send back as base64 for preview
         const base64PDF = currentFilledPDF.toString('base64');
