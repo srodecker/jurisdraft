@@ -15,6 +15,47 @@ function getTodayDateLA() {
     }).format(new Date());
 }
 
+// Retry helper function with exponential backoff
+async function fetchWithRetry(url, options, maxRetries = 3) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await fetch(url, {
+                ...options,
+                signal: AbortSignal.timeout(300000) // 5 min timeout
+            });
+            
+            // If 503 or 429, retry with exponential backoff
+            if (response.status === 503 || response.status === 429) {
+                if (attempt < maxRetries) {
+                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000); // Max 30s
+                    console.log(`API returned ${response.status}, retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue; // Retry
+                }
+            }
+            
+            return response; // Success or non-retryable error
+        } catch (err) {
+            // Handle timeout/abort errors
+            if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+                if (attempt < maxRetries) {
+                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
+                    console.log(`Request timeout, retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
+            }
+            
+            // If this is the last attempt, throw the error
+            if (attempt === maxRetries) throw err;
+            
+            // Otherwise retry with exponential backoff
+            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+}
+
 // POST /api/extract
 router.post('/extract', upload.array('files'), async (req, res) => {
     try {
@@ -65,11 +106,47 @@ router.post('/extract', upload.array('files'), async (req, res) => {
                     }
                 };
 
-                const response = await fetch(url, {
+                // Use retry logic for the API call
+                const response = await fetchWithRetry(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(fetchBody)
                 });
+
+                // Check response status before parsing
+                if (!response.ok) {
+                    let errorText = '';
+                    let errorJson = null;
+                    try {
+                        errorJson = await response.json();
+                        errorText = JSON.stringify(errorJson);
+                    } catch (e) {
+                        errorText = await response.text();
+                    }
+                    
+                    // Handle specific error codes
+                    if (response.status === 503) {
+                        console.error('Gemini API Service Unavailable (503):', errorText);
+                        return res.status(503).json({ 
+                            error: 'The AI service is temporarily unavailable. This can happen with complex documents or during high traffic. Please try again in a few moments.',
+                            details: errorJson || errorText,
+                            retryable: true
+                        });
+                    } else if (response.status === 429) {
+                        console.error('Gemini API Rate Limited (429):', errorText);
+                        return res.status(429).json({ 
+                            error: 'Rate limit exceeded. Please wait a moment and try again.',
+                            details: errorJson || errorText,
+                            retryable: true
+                        });
+                    } else {
+                        console.error(`Gemini API Error (${response.status}):`, errorText);
+                        return res.status(response.status).json({ 
+                            error: `API error: ${response.statusText}`,
+                            details: errorJson || errorText
+                        });
+                    }
+                }
 
                 const json = await response.json();
 
@@ -127,6 +204,24 @@ router.post('/extract', upload.array('files'), async (req, res) => {
                 return res.json({ success: true, generated, raw: json });
             } catch (err) {
                 console.error('Error calling generative API:', err);
+                
+                // Handle timeout errors
+                if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+                    return res.status(504).json({ 
+                        error: 'Request timed out. The document may be too complex or large. Try breaking it into smaller parts or try again later.',
+                        retryable: true
+                    });
+                }
+                
+                // Handle network errors
+                if (err.message.includes('fetch') || err.message.includes('network') || err.message.includes('ECONNREFUSED')) {
+                    return res.status(503).json({ 
+                        error: 'Network error connecting to AI service. Please check your connection and try again.',
+                        details: err.message,
+                        retryable: true
+                    });
+                }
+                
                 return res.status(500).json({ error: 'Generative API call failed', details: err.message });
             }
         }
