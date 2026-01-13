@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "routes/extract.js": {
+      "maxDuration": 300
+    },
+    "api/**/*.js": {
+      "maxDuration": 300
+    }
+  }
+}
