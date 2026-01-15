@@ -413,8 +413,12 @@ uploadBtn.addEventListener('click', async () => {
             console.error('Non-JSON response from /api/extract:', text);
             
             // Check if this is a Vercel/hosting platform timeout error
-            if (res.status === 503 && (text.includes('deployment is currently unavailable') || text.includes('SERVICE_UNAVAILABLE') || text.includes('sfo1::') || text.includes('iad1::') || text.includes('hnd1::'))) {
-                throw new Error('The request timed out. This can happen with complex documents that take longer to process. Please try:\n1. Breaking the document into smaller parts\n2. Using a simpler/cleaner image\n3. Trying again in a few moments');
+            if (res.status === 503 && (text.includes('deployment is currently unavailable') || text.includes('SERVICE_UNAVAILABLE') || text.includes('sfo1::') || text.includes('iad1::') || text.includes('hnd1::') || text.includes('cle1::'))) {
+                const isVercelTimeout = text.includes('sfo1::') || text.includes('iad1::') || text.includes('hnd1::') || text.includes('cle1::');
+                const errorMsg = isVercelTimeout 
+                    ? 'VERCEL TIMEOUT DETECTED: The request exceeded Vercel\'s function timeout limit (10 seconds on Hobby plan). This happens with complex documents that take longer to process. Solutions:\n1. Upgrade to Vercel Pro for longer timeouts (up to 5 minutes)\n2. Break the document into smaller parts\n3. Use a simpler/cleaner image\n4. Try again in a few moments'
+                    : 'The request timed out. This can happen with complex documents that take longer to process. Please try:\n1. Breaking the document into smaller parts\n2. Using a simpler/cleaner image\n3. Trying again in a few moments';
+                throw new Error(errorMsg);
             }
             
             throw new Error('Server returned non-JSON response. Check console.');
