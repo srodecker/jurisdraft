@@ -1,41 +1,98 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="gavelGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#22d3ee;stop-opacity:1" />
+    <!-- Background Gradient: Bright Blue/Cyan to Deep Blue -->
+    <linearGradient id="iconBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" /> 
+      <stop offset="100%" stop-color="#3b82f6" />
     </linearGradient>
-    <linearGradient id="gavelShadow" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#1e40af;stop-opacity:0.3" />
-      <stop offset="100%" style="stop-color:#0891b2;stop-opacity:0.3" />
-    </linearGradient>
+
+    <!-- Mask to create circuit lines on the gavel head -->
+    <mask id="circuitCutout">
+      <rect x="0" y="0" width="512" height="512" fill="white" />
+      <!-- These paths are black so they become transparent in the mask -->
+      <g transform="translate(256, 256) rotate(-45)">
+         <!-- Circuit lines -->
+         <path d="M-40 -40 L40 -40" stroke="black" stroke-width="6" stroke-linecap="round" />
+         <path d="M-50 -10 L10 -10 L25 10" stroke="black" stroke-width="6" stroke-linecap="round" />
+         <path d="M-40 20 L40 20" stroke="black" stroke-width="6" stroke-linecap="round" />
+         <path d="M-10 -50 L-10 0" stroke="black" stroke-width="6" stroke-linecap="round" />
+         <path d="M25 -30 L25 30" stroke="black" stroke-width="6" stroke-linecap="round" />
+         
+         <!-- Nodes on the head -->
+         <circle cx="-40" cy="-40" r="5" fill="black" />
+         <circle cx="25" cy="10" r="5" fill="black" />
+         <circle cx="-10" cy="0" r="5" fill="black" />
+      </g>
+    </mask>
   </defs>
-  
-  <!-- Background circle for better visibility -->
-  <circle cx="50" cy="50" r="48" fill="url(#gavelGradient)" opacity="0.1"/>
-  
-  <!-- Gavel Handle -->
-  <rect x="38" y="18" width="6" height="48" rx="3" fill="url(#gavelGradient)"/>
-  <rect x="38" y="18" width="6" height="24" rx="3" fill="url(#gavelShadow)"/>
-  
-  <!-- Gavel Head (top) -->
-  <rect x="18" y="12" width="40" height="14" rx="7" fill="url(#gavelGradient)"/>
-  <rect x="18" y="12" width="40" height="7" rx="7" fill="url(#gavelShadow)"/>
-  
-  <!-- Gavel Head (side) -->
-  <rect x="18" y="12" width="14" height="28" rx="7" fill="url(#gavelGradient)"/>
-  <rect x="18" y="12" width="7" height="28" rx="7" fill="url(#gavelShadow)"/>
-  
-  <!-- Sound Block (base) -->
-  <rect x="8" y="68" width="64" height="14" rx="7" fill="url(#gavelGradient)"/>
-  <rect x="8" y="68" width="64" height="7" rx="7" fill="url(#gavelShadow)"/>
-  
-  <!-- Sound Block (side) -->
-  <rect x="8" y="68" width="14" height="22" rx="7" fill="url(#gavelGradient)"/>
-  <rect x="8" y="68" width="7" height="22" rx="7" fill="url(#gavelShadow)"/>
-  
-  <!-- Highlight on gavel head -->
-  <rect x="20" y="14" width="36" height="10" rx="5" fill="rgba(255,255,255,0.25)"/>
-  
-  <!-- Highlight on sound block -->
-  <rect x="10" y="70" width="60" height="10" rx="5" fill="rgba(255,255,255,0.25)"/>
+
+  <!-- Rounded Background -->
+  <rect x="0" y="0" width="512" height="512" rx="110" fill="url(#iconBg)" />
+
+  <!-- Main Content Group -->
+  <g fill="white">
+     
+     <!-- Sound Block (Base) -->
+     <path d="M160 380 H300 A10 10 0 0 1 300 400 H160 A10 10 0 0 1 160 380 Z" opacity="0.9" />
+     <path d="M180 350 H280 A8 8 0 0 1 280 365 H180 A8 8 0 0 1 180 350 Z" opacity="0.9" />
+
+     <!-- Gavel Handle -->
+     <g transform="translate(256, 256) rotate(-45)">
+        <rect x="-12" y="-190" width="24" height="160" rx="8" fill="white" />
+     </g>
+
+     <!-- Gavel Head (Masked for Circuit Effect) -->
+     <!-- Positioned at center, rotated -->
+     <g mask="url(#circuitCutout)">
+        <path transform="translate(256, 256) rotate(-45)"
+              d="M-65 -50 H65 V50 H-65 Z" 
+              fill="white" 
+              stroke="white" 
+              stroke-width="12" 
+              stroke-linejoin="round"/> 
+     </g>
+
+     <!-- External Connections (Wires extending left) -->
+     <g stroke="white" stroke-width="4" fill="none" stroke-linecap="round">
+        <!-- Trace 1 -->
+        <path d="M190 280 L140 280 L120 300" />
+        <circle cx="120" cy="300" r="4" fill="white" stroke="none" />
+
+        <!-- Trace 2 -->
+        <path d="M180 250 L100 250" />
+        <circle cx="100" cy="250" r="4" fill="white" stroke="none" />
+        
+        <!-- Trace 3 -->
+        <path d="M195 220 L150 220 L130 190" />
+        <circle cx="130" cy="190" r="4" fill="white" stroke="none" />
+     </g>
+
+     <!-- Floating Icons -->
+     <!-- Doc Icon Top Left -->
+     <g transform="translate(130, 130)">
+        <path d="M0 0 H24 V32 H0 Z" fill="none" stroke="white" stroke-width="2.5" rx="2" />
+        <path d="M6 8 H18 M6 16 H18 M6 24 H14" stroke="white" stroke-width="2.5" stroke-linecap="round" />
+     </g>
+
+     <!-- Plus Sign Top -->
+     <g transform="translate(200, 100)">
+        <path d="M0 -6 V6 M-6 0 H6" stroke="white" stroke-width="3" stroke-linecap="round" />
+     </g>
+     
+     <!-- Small Doc Icon Right -->
+     <g transform="translate(350, 160) scale(0.8)">
+        <path d="M0 0 H24 V32 H0 Z" fill="none" stroke="white" stroke-width="2.5" rx="2" />
+        <path d="M6 10 H18 M6 18 H18" stroke="white" stroke-width="2.5" stroke-linecap="round" />
+        <!-- Arrow up -->
+        <path d="M30 15 L35 10 L40 15 M35 10 V25" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+     </g>
+
+     <!-- Sparkle Bottom Left -->
+     <g transform="translate(100, 350)">
+        <rect width="6" height="6" fill="white" rx="1" />
+     </g>
+     
+     <circle cx="400" cy="300" r="3" fill="white" opacity="0.6" />
+
+  </g>
 </svg>
