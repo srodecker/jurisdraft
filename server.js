@@ -99,28 +99,22 @@ const apiLimiter = rateLimit({
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Reasonable limit for JSON payloads
 
-// Ensure root URL returns full.html (MUST be before static middleware)
+// Root URL returns landing page
 app.get('/', (req, res) => {
-    console.log('=== ROOT URL REQUEST ===');
-    console.log('Request URL:', req.url);
-    console.log('Request Path:', req.path);
-    console.log('Sending file:', path.join(PUBLIC_DIR, 'full.html'));
-    // Disable caching for development
+    console.log('=== ROOT URL REQUEST (Landing Page) ===');
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.sendFile(path.join(PUBLIC_DIR, 'landing.html'));
+});
+
+// Extraction workspace route
+app.get('/extract', (req, res) => {
+    console.log('=== EXTRACT WORKSPACE REQUEST ===');
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
     res.sendFile(path.join(PUBLIC_DIR, 'full.html'));
-});
-
-// Debug endpoint to check file content
-app.get('/debug-file', async (req, res) => {
-    try {
-        const content = await fs.readFile(path.join(PUBLIC_DIR, 'full.html'), 'utf-8');
-        const first500 = content.substring(0, 500);
-        res.send(`<pre>${first500.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`);
-    } catch (error) {
-        res.status(500).send('Error: ' + error.message);
-    }
 });
 
 // Serve static files with no-cache headers in development
