@@ -1,45 +1,24 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JurisDraft — Enterprise Document Automation</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="/css/tailwind.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/design-system.css">
     <style>
-        :root {
-            --navy-900: #0a1628;
-            --navy-800: #101d33;
-            --navy-700: #162544;
-            --navy-600: #1e3a5f;
-            --slate-400: #94a3b8;
-            --slate-300: #cbd5e1;
-            --slate-100: #f1f5f9;
-            --accent-blue: #3b82f6;
-            --accent-cyan: #22d3ee;
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        /* Landing page specific styles */
         body {
-            font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--navy-900);
-            color: var(--slate-100);
+            font-family: var(--font-sans);
+            background: var(--bg-primary);
+            color: var(--text-primary);
             line-height: 1.6;
             overflow-x: hidden;
         }
-        
-        .serif {
-            font-family: 'Source Serif 4', Georgia, serif;
-        }
-        
+
         /* Background Pattern */
         .bg-pattern {
             position: fixed;
@@ -48,26 +27,35 @@
             overflow: hidden;
             pointer-events: none;
         }
-        
-        .bg-pattern::before {
+
+        [data-theme="dark"] .bg-pattern::before {
             content: '';
             position: absolute;
             inset: 0;
-            background: 
-                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59, 130, 246, 0.15), transparent),
-                radial-gradient(ellipse 60% 40% at 80% 60%, rgba(34, 211, 238, 0.08), transparent),
-                radial-gradient(ellipse 50% 30% at 20% 80%, rgba(59, 130, 246, 0.06), transparent);
+            background:
+                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59, 130, 246, 0.12), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 60%, rgba(16, 185, 129, 0.06), transparent);
         }
-        
+
+        [data-theme="light"] .bg-pattern::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(59, 130, 246, 0.08), transparent),
+                radial-gradient(ellipse 60% 40% at 80% 60%, rgba(16, 185, 129, 0.04), transparent);
+        }
+
         .grid-overlay {
             position: absolute;
             inset: 0;
-            background-image: 
-                linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+            background-image:
+                linear-gradient(var(--border-secondary) 1px, transparent 1px),
+                linear-gradient(90deg, var(--border-secondary) 1px, transparent 1px);
             background-size: 60px 60px;
+            opacity: 0.5;
         }
-        
+
         /* Navigation */
         nav {
             position: fixed;
@@ -75,12 +63,12 @@
             left: 0;
             right: 0;
             z-index: 100;
-            padding: 1.25rem 2rem;
-            background: rgba(10, 22, 40, 0.8);
+            padding: 1rem 2rem;
+            background: var(--bg-secondary);
             backdrop-filter: blur(12px);
-            border-bottom: 1px solid rgba(255,255,255,0.05);
+            border-bottom: 1px solid var(--border-secondary);
         }
-        
+
         .nav-inner {
             max-width: 1280px;
             margin: 0 auto;
@@ -88,48 +76,59 @@
             align-items: center;
             justify-content: space-between;
         }
-        
+
         .logo {
             display: flex;
             align-items: center;
             gap: 12px;
             text-decoration: none;
         }
-        
+
         .logo-icon {
             width: 40px;
             height: 40px;
-            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
             border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
+            overflow: hidden;
         }
-        
+
+        .logo-icon img {
+            width: 100%;
+            height: 100%;
+            border-radius: 10px;
+        }
+
         .logo-text {
             font-size: 1.5rem;
             font-weight: 700;
-            color: white;
+            color: var(--text-primary);
             letter-spacing: -0.02em;
         }
-        
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
         .nav-cta {
             padding: 10px 24px;
-            background: rgba(255,255,255,0.1);
-            border: 1px solid rgba(255,255,255,0.15);
-            border-radius: 8px;
+            background: var(--accent-primary);
+            border: none;
+            border-radius: var(--radius-md);
             color: white;
             font-weight: 500;
             font-size: 0.9rem;
             text-decoration: none;
-            transition: all 0.2s;
+            transition: all var(--transition-fast);
         }
-        
+
         .nav-cta:hover {
-            background: rgba(255,255,255,0.15);
-            border-color: rgba(255,255,255,0.25);
+            background: var(--accent-primary-hover);
         }
-        
+
         /* Hero Section */
         .hero {
             position: relative;
@@ -140,308 +139,304 @@
             justify-content: center;
             padding: 8rem 2rem 4rem;
         }
-        
+
         .hero-content {
             max-width: 900px;
             margin: 0 auto;
             text-align: center;
         }
-        
-        .badge {
+
+        .hero-badge {
             display: inline-flex;
             align-items: center;
             gap: 8px;
             padding: 8px 16px;
-            background: rgba(59, 130, 246, 0.1);
+            background: var(--accent-primary-light);
             border: 1px solid rgba(59, 130, 246, 0.2);
-            border-radius: 100px;
+            border-radius: var(--radius-full);
             font-size: 0.85rem;
-            color: var(--accent-cyan);
+            color: var(--accent-primary);
             margin-bottom: 2rem;
         }
-        
-        .badge svg {
+
+        .hero-badge svg {
             width: 16px;
             height: 16px;
         }
-        
+
         h1 {
             font-size: clamp(2.5rem, 6vw, 4rem);
             font-weight: 700;
             line-height: 1.1;
             letter-spacing: -0.03em;
             margin-bottom: 1.5rem;
-            background: linear-gradient(135deg, #ffffff 0%, #94a3b8 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: var(--text-primary);
         }
-        
+
         .hero-subtitle {
             font-size: 1.25rem;
-            color: var(--slate-400);
+            color: var(--text-secondary);
             max-width: 600px;
             margin: 0 auto 3rem;
             line-height: 1.7;
         }
-        
+
         .cta-group {
             display: flex;
             gap: 1rem;
             justify-content: center;
             flex-wrap: wrap;
         }
-        
-        .btn-primary {
+
+        .btn-hero {
             display: inline-flex;
             align-items: center;
             gap: 10px;
             padding: 16px 32px;
-            background: linear-gradient(135deg, var(--accent-blue), #2563eb);
+            background: var(--accent-primary);
             color: white;
             font-weight: 600;
             font-size: 1rem;
-            border-radius: 10px;
+            border-radius: var(--radius-lg);
             text-decoration: none;
-            transition: all 0.3s;
-            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+            transition: all var(--transition-base);
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.25);
         }
-        
-        .btn-primary:hover {
+
+        .btn-hero:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 30px rgba(59, 130, 246, 0.4);
+            box-shadow: 0 8px 30px rgba(59, 130, 246, 0.35);
         }
-        
-        .btn-primary svg {
+
+        .btn-hero svg {
             width: 20px;
             height: 20px;
-            transition: transform 0.2s;
+            transition: transform var(--transition-fast);
         }
-        
-        .btn-primary:hover svg {
+
+        .btn-hero:hover svg {
             transform: translateX(4px);
         }
-        
-        /* Section Styling */
+
+        /* Sections */
         section {
             position: relative;
             z-index: 1;
             padding: 6rem 2rem;
         }
-        
+
         .section-inner {
             max-width: 1200px;
             margin: 0 auto;
         }
-        
+
         .section-header {
             text-align: center;
             margin-bottom: 4rem;
         }
-        
+
         .section-label {
             font-size: 0.8rem;
             text-transform: uppercase;
             letter-spacing: 0.15em;
-            color: var(--accent-cyan);
+            color: var(--accent-primary);
             font-weight: 600;
             margin-bottom: 1rem;
         }
-        
+
         h2 {
             font-size: clamp(1.75rem, 4vw, 2.5rem);
             font-weight: 700;
             letter-spacing: -0.02em;
             margin-bottom: 1rem;
-            color: white;
+            color: var(--text-primary);
         }
-        
+
         .section-subtitle {
             font-size: 1.1rem;
-            color: var(--slate-400);
+            color: var(--text-secondary);
             max-width: 600px;
             margin: 0 auto;
         }
-        
+
         /* Security Section */
         .security-section {
-            background: linear-gradient(180deg, transparent 0%, rgba(16, 29, 51, 0.5) 100%);
+            background: var(--bg-secondary);
         }
-        
+
         .security-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 1.5rem;
         }
-        
+
         .security-card {
-            background: rgba(22, 37, 68, 0.5);
-            border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 16px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-xl);
             padding: 2rem;
-            transition: all 0.3s;
+            transition: all var(--transition-base);
         }
-        
+
         .security-card:hover {
-            background: rgba(22, 37, 68, 0.8);
-            border-color: rgba(59, 130, 246, 0.2);
+            border-color: var(--card-hover-border);
+            box-shadow: var(--shadow-lg);
             transform: translateY(-4px);
         }
-        
+
         .security-icon {
             width: 56px;
             height: 56px;
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(34, 211, 238, 0.1));
-            border-radius: 12px;
+            background: var(--accent-primary-light);
+            border-radius: var(--radius-lg);
             display: flex;
             align-items: center;
             justify-content: center;
             margin-bottom: 1.5rem;
         }
-        
+
         .security-icon svg {
             width: 28px;
             height: 28px;
-            color: var(--accent-cyan);
+            color: var(--accent-primary);
         }
-        
+
         .security-card h3 {
             font-size: 1.15rem;
             font-weight: 600;
             margin-bottom: 0.75rem;
-            color: white;
+            color: var(--text-primary);
         }
-        
+
         .security-card p {
             font-size: 0.95rem;
-            color: var(--slate-400);
+            color: var(--text-secondary);
             line-height: 1.65;
         }
-        
+
         /* How It Works Section */
         .how-section {
-            background: var(--navy-800);
+            background: var(--bg-primary);
         }
-        
+
         .steps-container {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 2rem;
-            position: relative;
         }
-        
+
         .step-card {
             position: relative;
             padding: 2.5rem;
-            background: var(--navy-900);
-            border: 1px solid rgba(255,255,255,0.05);
-            border-radius: 20px;
-            transition: all 0.3s;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-xl);
+            transition: all var(--transition-base);
         }
-        
+
         .step-card:hover {
-            border-color: rgba(59, 130, 246, 0.3);
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            border-color: var(--accent-primary);
+            box-shadow: var(--shadow-lg);
         }
-        
+
         .step-number {
             position: absolute;
             top: -16px;
             left: 2rem;
             width: 36px;
             height: 36px;
-            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
-            border-radius: 10px;
+            background: var(--accent-primary);
+            border-radius: var(--radius-md);
             display: flex;
             align-items: center;
             justify-content: center;
             font-weight: 700;
             font-size: 1rem;
-            color: var(--navy-900);
+            color: white;
         }
-        
+
         .step-icon {
             width: 64px;
             height: 64px;
-            background: rgba(59, 130, 246, 0.1);
-            border-radius: 16px;
+            background: var(--accent-primary-light);
+            border-radius: var(--radius-xl);
             display: flex;
             align-items: center;
             justify-content: center;
             margin-bottom: 1.5rem;
         }
-        
+
         .step-icon svg {
             width: 32px;
             height: 32px;
-            color: var(--accent-blue);
+            color: var(--accent-primary);
         }
-        
+
         .step-card h3 {
             font-size: 1.25rem;
             font-weight: 600;
             margin-bottom: 0.75rem;
-            color: white;
+            color: var(--text-primary);
         }
-        
+
         .step-card p {
             font-size: 0.95rem;
-            color: var(--slate-400);
+            color: var(--text-secondary);
             line-height: 1.7;
         }
-        
+
         /* CTA Section */
         .cta-section {
             padding: 8rem 2rem;
             text-align: center;
         }
-        
+
         .cta-box {
             max-width: 700px;
             margin: 0 auto;
             padding: 4rem;
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(34, 211, 238, 0.05));
-            border: 1px solid rgba(59, 130, 246, 0.2);
-            border-radius: 24px;
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: var(--radius-xl);
             position: relative;
             overflow: hidden;
         }
-        
+
         .cta-box::before {
             content: '';
             position: absolute;
             inset: 0;
-            background: radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.15), transparent 50%);
+            background: radial-gradient(circle at 50% 0%, var(--accent-primary-light), transparent 50%);
             pointer-events: none;
         }
-        
+
         .cta-box h2 {
             position: relative;
             margin-bottom: 1rem;
         }
-        
+
         .cta-box p {
             position: relative;
-            color: var(--slate-400);
+            color: var(--text-secondary);
             margin-bottom: 2rem;
             font-size: 1.1rem;
         }
-        
-        .cta-box .btn-primary {
+
+        .cta-box .btn-hero {
             position: relative;
             padding: 18px 40px;
             font-size: 1.1rem;
         }
-        
+
         /* Footer */
         footer {
             position: relative;
             z-index: 1;
             padding: 3rem 2rem;
-            border-top: 1px solid rgba(255,255,255,0.05);
+            border-top: 1px solid var(--border-secondary);
             text-align: center;
         }
-        
+
         .footer-inner {
             max-width: 1200px;
             margin: 0 auto;
@@ -450,44 +445,56 @@
             align-items: center;
             gap: 1rem;
         }
-        
+
         .footer-logo {
             display: flex;
             align-items: center;
             gap: 10px;
             font-weight: 600;
-            color: var(--slate-300);
+            color: var(--text-secondary);
         }
-        
+
+        .footer-logo svg {
+            width: 20px;
+            height: 20px;
+            color: var(--text-tertiary);
+        }
+
         .footer-text {
             font-size: 0.9rem;
-            color: var(--slate-400);
+            color: var(--text-tertiary);
         }
-        
+
+        /* Theme Toggle in Nav */
+        .theme-toggle {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-primary);
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             nav {
                 padding: 1rem;
             }
-            
+
             .hero {
                 padding: 7rem 1.5rem 3rem;
             }
-            
+
             section {
                 padding: 4rem 1.5rem;
             }
-            
+
             .cta-box {
                 padding: 2.5rem 1.5rem;
             }
-            
+
             .security-card,
             .step-card {
                 padding: 1.5rem;
             }
         }
-        
+
         /* Animations */
         @keyframes fadeInUp {
             from {
@@ -499,15 +506,14 @@
                 transform: translateY(0);
             }
         }
-        
+
         .animate-in {
             animation: fadeInUp 0.6s ease forwards;
         }
-        
+
         .delay-1 { animation-delay: 0.1s; }
         .delay-2 { animation-delay: 0.2s; }
         .delay-3 { animation-delay: 0.3s; }
-        .delay-4 { animation-delay: 0.4s; }
     </style>
 </head>
 <body>
@@ -515,38 +521,48 @@
     <div class="bg-pattern">
         <div class="grid-overlay"></div>
     </div>
-    
+
     <!-- Navigation -->
     <nav>
         <div class="nav-inner">
             <a href="/" class="logo">
-                <div class="logo-icon" style="background: none;">
-                    <img src="/favicon.svg" alt="JurisDraft" style="width: 100%; height: 100%; border-radius: 10px;">
+                <div class="logo-icon">
+                    <img src="/favicon.svg" alt="JurisDraft">
                 </div>
                 <span class="logo-text">JurisDraft</span>
             </a>
-            <a href="/extract" class="nav-cta">Launch Workspace</a>
+            <div class="nav-actions">
+                <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                    <svg class="sun-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                    </svg>
+                    <svg class="moon-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                    </svg>
+                </button>
+                <a href="/full" class="nav-cta">Launch Workspace</a>
+            </div>
         </div>
     </nav>
-    
+
     <!-- Hero Section -->
     <section class="hero">
         <div class="hero-content">
-            <div class="badge animate-in">
+            <div class="hero-badge animate-in">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
                 </svg>
                 Enterprise-Grade Security
             </div>
-            
+
             <h1 class="animate-in delay-1">Document Automation<br>for High-Volume Litigation</h1>
-            
+
             <p class="hero-subtitle animate-in delay-2">
                 Transform case files into court-ready documents in seconds. Built for legal teams demanding precision, security, and speed.
             </p>
-            
+
             <div class="cta-group animate-in delay-3">
-                <a href="/extract" class="btn-primary">
+                <a href="/full" class="btn-hero">
                     Launch Workspace
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
@@ -555,7 +571,7 @@
             </div>
         </div>
     </section>
-    
+
     <!-- Security Section -->
     <section class="security-section" id="security">
         <div class="section-inner">
@@ -564,7 +580,7 @@
                 <h2>Enterprise-Grade Legal Data Security</h2>
                 <p class="section-subtitle">Built for firms requiring the highest standards of confidentiality and compliance.</p>
             </div>
-            
+
             <div class="security-grid">
                 <!-- SOC2 -->
                 <div class="security-card">
@@ -576,7 +592,7 @@
                     <h3>SOC2 Type II Compliance</h3>
                     <p>Hosted on secure infrastructure meeting global data protection standards with continuous monitoring and auditing.</p>
                 </div>
-                
+
                 <!-- Encryption -->
                 <div class="security-card">
                     <div class="security-icon">
@@ -587,7 +603,7 @@
                     <h3>End-to-End Encryption</h3>
                     <p>Data is encrypted at rest (AES-256) and in transit (TLS 1.2+). Your documents remain protected at every stage.</p>
                 </div>
-                
+
                 <!-- Zero Retention -->
                 <div class="security-card">
                     <div class="security-icon">
@@ -598,7 +614,7 @@
                     <h3>Zero-Retention Policy</h3>
                     <p>Source documents are processed ephemerally. No PII is stored on our servers after the session ends.</p>
                 </div>
-                
+
                 <!-- Private AI -->
                 <div class="security-card">
                     <div class="security-icon">
@@ -612,7 +628,7 @@
             </div>
         </div>
     </section>
-    
+
     <!-- How It Works Section -->
     <section class="how-section" id="how-it-works">
         <div class="section-inner">
@@ -621,7 +637,7 @@
                 <h2>How It Works</h2>
                 <p class="section-subtitle">From source documents to court-ready filings in three simple steps.</p>
             </div>
-            
+
             <div class="steps-container">
                 <!-- Step 1 -->
                 <div class="step-card">
@@ -634,7 +650,7 @@
                     <h3>Secure Upload</h3>
                     <p>Drop your source documents—contracts, account files, or case records—into the secure interface. All transfers are encrypted.</p>
                 </div>
-                
+
                 <!-- Step 2 -->
                 <div class="step-card">
                     <div class="step-number">2</div>
@@ -646,7 +662,7 @@
                     <h3>Intelligent Extraction</h3>
                     <p>The system identifies and extracts key data points based on your specific case templates, ensuring accuracy and consistency.</p>
                 </div>
-                
+
                 <!-- Step 3 -->
                 <div class="step-card">
                     <div class="step-number">3</div>
@@ -661,13 +677,13 @@
             </div>
         </div>
     </section>
-    
+
     <!-- CTA Section -->
     <section class="cta-section">
         <div class="cta-box">
             <h2>Ready to Streamline Your Workflow?</h2>
             <p>Transform your document automation process with enterprise-grade security and precision.</p>
-            <a href="/extract" class="btn-primary">
+            <a href="/full" class="btn-hero">
                 Go to Extraction Tool
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
@@ -675,33 +691,45 @@
             </a>
         </div>
     </section>
-    
+
     <!-- Footer -->
     <footer>
         <div class="footer-inner">
             <div class="footer-logo">
-                <svg width="20" height="20" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <defs>
-                        <linearGradient id="gavelGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
-                            <stop offset="0%" style="stop-color:#cbd5e1;stop-opacity:1" />
-                            <stop offset="100%" style="stop-color:#94a3b8;stop-opacity:1" />
-                        </linearGradient>
-                    </defs>
-                    <!-- Gavel Handle -->
-                    <rect x="35" y="20" width="8" height="50" rx="4" fill="url(#gavelGrad2)"/>
-                    <!-- Gavel Head (top) -->
-                    <rect x="20" y="15" width="38" height="12" rx="6" fill="url(#gavelGrad2)"/>
-                    <!-- Gavel Head (side) -->
-                    <rect x="20" y="15" width="12" height="25" rx="6" fill="url(#gavelGrad2)"/>
-                    <!-- Sound Block (base) -->
-                    <rect x="10" y="65" width="60" height="12" rx="6" fill="url(#gavelGrad2)"/>
-                    <!-- Sound Block (side) -->
-                    <rect x="10" y="65" width="12" height="20" rx="6" fill="url(#gavelGrad2)"/>
+                <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="35" y="20" width="8" height="50" rx="4" fill="currentColor"/>
+                    <rect x="20" y="15" width="38" height="12" rx="6" fill="currentColor"/>
+                    <rect x="20" y="15" width="12" height="25" rx="6" fill="currentColor"/>
+                    <rect x="10" y="65" width="60" height="12" rx="6" fill="currentColor"/>
+                    <rect x="10" y="65" width="12" height="20" rx="6" fill="currentColor"/>
                 </svg>
                 JurisDraft
             </div>
             <p class="footer-text">Secure Document Automation for Legal Professionals</p>
         </div>
     </footer>
+
+    <script>
+    // Theme toggle functionality
+    function getPreferredTheme() {
+        const stored = localStorage.getItem('theme');
+        if (stored) return stored;
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }
+
+    function toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        setTheme(next);
+    }
+
+    // Initialize theme
+    setTheme(getPreferredTheme());
+    </script>
 </body>
 </html>

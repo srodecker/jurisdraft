@@ -105,20 +105,31 @@ app.get('/', (req, res) => {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
-    res.sendFile(path.join(PUBLIC_DIR, 'landing.html'));
+    console.log('Serving landing page from:', path.join(PUBLIC_DIR, 'landing.html'));
+    res.sendFile(path.join(PUBLIC_DIR, 'landing.html'), { dotfiles: 'allow' });
 });
 
-// Extraction workspace route
+// Main workspace route
+app.get('/full', (req, res) => {
+    console.log('=== FULL WORKSPACE REQUEST ===');
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.sendFile(path.join(PUBLIC_DIR, 'full.html'), { dotfiles: 'allow' });
+});
+
+// Extraction workspace route (legacy - redirects to /full)
 app.get('/extract', (req, res) => {
     console.log('=== EXTRACT WORKSPACE REQUEST ===');
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
-    res.sendFile(path.join(PUBLIC_DIR, 'full.html'));
+    res.sendFile(path.join(PUBLIC_DIR, 'full.html'), { dotfiles: 'allow' });
 });
 
 // Serve static files with no-cache headers in development
 app.use(express.static('public', {
+    dotfiles: 'allow',
     setHeaders: (res, path) => {
         if (path.endsWith('.css') || path.endsWith('.js') || path.endsWith('.html')) {
             res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');

@@ -1,372 +1,64 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>JurisDraft - Legal Workspace</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="stylesheet" href="/css/tailwind.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/design-system.css" />
     <style>
-        * { box-sizing: border-box; }
-        html, body { 
-            height: 100vh; 
-            margin: 0; 
-            overflow: hidden; 
+        html, body {
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
         }
         .workspace-container {
             display: flex;
             height: 100vh;
             width: 100vw;
         }
-        .sidebar {
-            width: 400px;
-            min-width: 400px;
-            height: 100vh;
-            overflow-y: auto;
-            background: #ffffff;
-            border-right: 1px solid #e5e7eb;
-            display: flex;
-            flex-direction: column;
-        }
-        .dark .sidebar {
-            background: #1e293b;
-            border-right-color: #334155;
-        }
-        .main-workspace {
-            flex: 1;
-            height: 100vh;
-            background: #f1f5f9;
-            display: flex;
-            flex-direction: column;
-        }
-        .dark .main-workspace {
-            background: #0f172a;
-        }
-        .pdf-container {
-            flex: 1;
-            width: 100%;
-            height: 100%;
-        }
-        .pdf-container iframe {
-            width: 100%;
-            height: 100%;
-            border: none;
-        }
-        .sidebar-section {
-            padding: 20px;
-            border-bottom: 1px solid #e5e7eb;
-        }
-        .dark .sidebar-section {
-            border-bottom-color: #334155;
-        }
-        .sidebar-section:last-child {
-            border-bottom: none;
-        }
-        /* Custom scrollbar for sidebar */
-        .sidebar::-webkit-scrollbar {
-            width: 6px;
-        }
-        .sidebar::-webkit-scrollbar-track {
-            background: transparent;
-        }
-        .sidebar::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 3px;
-        }
-        .dark .sidebar::-webkit-scrollbar-thumb {
-            background: #475569;
-        }
-        .btn-primary {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            padding: 12px 20px;
-            background: #3758f9;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 500;
-            font-size: 14px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .btn-primary:hover:not(:disabled) {
-            background: #2748e8;
-        }
-        .btn-primary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .btn-secondary {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            padding: 12px 20px;
-            background: #6366f1;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 500;
-            font-size: 14px;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .btn-secondary:hover:not(:disabled) {
-            background: #4f46e5;
-        }
-        .btn-secondary:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .btn-download {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            flex: 1;
-            padding: 12px 16px;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-weight: 500;
-            font-size: 13px;
-            cursor: pointer;
-            transition: opacity 0.2s;
-        }
-        .btn-download:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .btn-orange { background: #f97316; }
-        .btn-orange:hover:not(:disabled) { background: #ea580c; }
-        .btn-green { background: #22c55e; }
-        .btn-green:hover:not(:disabled) { background: #16a34a; }
-        
-        .form-select, .form-textarea {
-            width: 100%;
-            padding: 10px 14px;
-            border: 1px solid #e5e7eb;
-            border-radius: 8px;
-            background: #f9fafb;
-            font-size: 14px;
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-        .dark .form-select, .dark .form-textarea {
-            background: #1e293b;
-            border-color: #334155;
-            color: #e2e8f0;
-        }
-        .form-select:focus, .form-textarea:focus {
-            outline: none;
-            border-color: #3758f9;
-            box-shadow: 0 0 0 3px rgba(55, 88, 249, 0.1);
-        }
-        .form-textarea {
-            font-family: 'Fira Code', 'Monaco', 'Consolas', monospace;
-            font-size: 12px;
-            resize: none;
-        }
-        .drop-zone {
-            border: 2px dashed #cbd5e1;
-            border-radius: 12px;
-            padding: 24px;
-            text-align: center;
-            transition: all 0.2s;
-            cursor: pointer;
-        }
-        .drop-zone:hover, .drop-zone.dragover {
-            border-color: #3758f9;
-            background: #eff6ff;
-        }
-        .dark .drop-zone {
-            border-color: #475569;
-        }
-        .dark .drop-zone:hover, .dark .drop-zone.dragover {
-            border-color: #3758f9;
-            background: rgba(55, 88, 249, 0.1);
-        }
-        .file-card {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 10px 14px;
-            background: #f1f5f9;
-            border-radius: 8px;
-            margin-top: 8px;
-        }
-        .dark .file-card {
-            background: #334155;
-        }
-        .file-card-icon {
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: #3758f9;
-            color: white;
-            border-radius: 6px;
-            flex-shrink: 0;
-        }
-        .file-card-info {
-            flex: 1;
-            min-width: 0;
-        }
-        .file-card-name {
-            font-size: 13px;
-            font-weight: 500;
-            color: #1e293b;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .dark .file-card-name {
-            color: #e2e8f0;
-        }
-        .file-card-size {
-            font-size: 11px;
-            color: #64748b;
-        }
-        .status-box {
-            padding: 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            margin-top: 12px;
-        }
-        .status-success {
-            background: #dcfce7;
-            color: #166534;
-            border: 1px solid #86efac;
-        }
-        .dark .status-success {
-            background: rgba(34, 197, 94, 0.1);
-            color: #86efac;
-            border-color: rgba(34, 197, 94, 0.3);
-        }
-        .status-error {
-            background: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fca5a5;
-        }
-        .dark .status-error {
-            background: rgba(239, 68, 68, 0.1);
-            color: #fca5a5;
-            border-color: rgba(239, 68, 68, 0.3);
-        }
-        .status-info {
-            background: #dbeafe;
-            color: #1e40af;
-            border: 1px solid #93c5fd;
-        }
-        .dark .status-info {
-            background: rgba(59, 130, 246, 0.1);
-            color: #93c5fd;
-            border-color: rgba(59, 130, 246, 0.3);
-        }
-        .pdf-placeholder {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: #94a3b8;
-        }
-        .pdf-placeholder svg {
-            width: 80px;
-            height: 80px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-        .field-stats {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 12px;
-            background: #eff6ff;
-            color: #3758f9;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        .dark .field-stats {
-            background: rgba(55, 88, 249, 0.1);
-        }
-        .tip-box {
-            background: #eff6ff;
-            border-left: 4px solid #3758f9;
-            padding: 12px;
-            border-radius: 0 8px 8px 0;
-            font-size: 13px;
-            color: #475569;
-        }
-        .dark .tip-box {
-            background: rgba(55, 88, 249, 0.1);
-            color: #94a3b8;
-        }
-        .home-link {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            padding: 6px 12px;
-            background: #f1f5f9;
-            border-radius: 6px;
-            font-size: 12px;
-            color: #64748b;
-            text-decoration: none;
-            transition: background 0.2s;
-        }
-        .home-link:hover {
-            background: #e2e8f0;
-        }
-        .dark .home-link {
-            background: #334155;
-            color: #94a3b8;
-        }
-        .dark .home-link:hover {
-            background: #475569;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .animate-spin {
-            animation: spin 1s linear infinite;
-        }
     </style>
 </head>
-<body class="bg-gray-100 dark:bg-dark">
+<body>
     <div class="workspace-container">
         <!-- Sidebar -->
         <aside class="sidebar">
             <!-- Header -->
-            <div class="sidebar-section" style="padding: 16px 20px;">
-                <div style="display: flex; align-items: center; justify-content: space-between;">
-                    <a href="/" style="display: flex; align-items: center; gap: 10px; text-decoration: none;">
-                        <div style="width: 36px; height: 36px; background: #3758f9; border-radius: 8px; display: flex; align-items: center; justify-content: center;">
-                            <svg width="20" height="20" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <defs>
-                                    <linearGradient id="gavelGrad3" x1="0%" y1="0%" x2="100%" y2="100%">
-                                        <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
-                                        <stop offset="100%" style="stop-color:#e0e7ff;stop-opacity:1" />
-                                    </linearGradient>
-                                </defs>
-                                <!-- Gavel Handle -->
-                                <rect x="35" y="20" width="8" height="50" rx="4" fill="url(#gavelGrad3)"/>
-                                <!-- Gavel Head (top) -->
-                                <rect x="20" y="15" width="38" height="12" rx="6" fill="url(#gavelGrad3)"/>
-                                <!-- Gavel Head (side) -->
-                                <rect x="20" y="15" width="12" height="25" rx="6" fill="url(#gavelGrad3)"/>
-                                <!-- Sound Block (base) -->
-                                <rect x="10" y="65" width="60" height="12" rx="6" fill="url(#gavelGrad3)"/>
-                                <!-- Sound Block (side) -->
-                                <rect x="10" y="65" width="12" height="20" rx="6" fill="url(#gavelGrad3)"/>
-                            </svg>
-                        </div>
-                        <div>
-                            <h1 style="font-size: 18px; font-weight: 700; color: #1e293b; margin: 0;">JurisDraft</h1>
-                            <p style="font-size: 11px; color: #64748b; margin: 0;">Legal Workspace</p>
-                        </div>
-                    </a>
+            <div class="app-header">
+                <a href="/" class="app-logo">
+                    <div class="app-logo-icon">
+                        <svg width="20" height="20" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <defs>
+                                <linearGradient id="gavelGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+                                    <stop offset="100%" style="stop-color:#e0e7ff;stop-opacity:1" />
+                                </linearGradient>
+                            </defs>
+                            <rect x="35" y="20" width="8" height="50" rx="4" fill="url(#gavelGrad)"/>
+                            <rect x="20" y="15" width="38" height="12" rx="6" fill="url(#gavelGrad)"/>
+                            <rect x="20" y="15" width="12" height="25" rx="6" fill="url(#gavelGrad)"/>
+                            <rect x="10" y="65" width="60" height="12" rx="6" fill="url(#gavelGrad)"/>
+                            <rect x="10" y="65" width="12" height="20" rx="6" fill="url(#gavelGrad)"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="app-logo-text">JurisDraft</div>
+                        <div class="app-logo-subtitle">Legal Workspace</div>
+                    </div>
+                </a>
+                <div class="header-actions">
+                    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                        <svg class="sun-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                        </svg>
+                        <svg class="moon-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                        </svg>
+                    </button>
                     <a href="/" class="home-link">
                         <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
@@ -376,18 +68,39 @@
                 </div>
             </div>
 
+            <!-- Workflow Stepper -->
+            <div class="workflow-stepper">
+                <div class="step" id="step1">
+                    <span class="step-number">1</span>
+                    <span>Upload</span>
+                </div>
+                <div class="step-connector" id="connector1"></div>
+                <div class="step" id="step2">
+                    <span class="step-number">2</span>
+                    <span>Extract</span>
+                </div>
+                <div class="step-connector" id="connector2"></div>
+                <div class="step" id="step3">
+                    <span class="step-number">3</span>
+                    <span>Generate</span>
+                </div>
+            </div>
+
             <!-- Extract Section -->
             <div class="sidebar-section">
-                <h2 style="font-size: 13px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
-                    📤 Extract Data
-                </h2>
-                
-                <div id="drop" class="drop-zone">
-                    <svg style="width: 32px; height: 32px; margin: 0 auto 8px; color: #3758f9;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                <h2 class="sidebar-header">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display: inline-block; vertical-align: -2px; margin-right: 6px;">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                     </svg>
-                    <p style="font-size: 13px; color: #64748b; margin-bottom: 8px;">Drop files or click to select</p>
-                    <button id="selectBtn" type="button" style="padding: 6px 14px; background: #3758f9; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">
+                    Extract Data
+                </h2>
+
+                <div id="drop" class="upload-zone">
+                    <svg class="upload-zone-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <p class="upload-zone-text">Drop files or click to select</p>
+                    <button id="selectBtn" type="button" class="btn btn-primary btn-sm">
                         Select Files
                     </button>
                 </div>
@@ -395,7 +108,7 @@
                 <input id="fileInput" type="file" multiple style="display:none" />
                 <div id="filesList"></div>
 
-                <button id="uploadBtn" disabled class="btn-primary" style="margin-top: 12px;">
+                <button id="uploadBtn" disabled class="btn btn-primary btn-full mt-3">
                     <span id="uploadBtnText">Upload & Extract</span>
                 </button>
 
@@ -404,8 +117,11 @@
 
             <!-- Template Selection -->
             <div class="sidebar-section">
-                <h2 style="font-size: 13px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
-                    📋 Template
+                <h2 class="sidebar-header">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display: inline-block; vertical-align: -2px; margin-right: 6px;">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                    Template
                 </h2>
                 <select id="templateSelect" class="form-select">
                     <option value="">Loading templates...</option>
@@ -414,45 +130,48 @@
 
             <!-- JSON Input -->
             <div class="sidebar-section" style="flex: 1;">
-                <h2 style="font-size: 13px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
-                    📝 JSON Data
+                <h2 class="sidebar-header">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display: inline-block; vertical-align: -2px; margin-right: 6px;">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                    </svg>
+                    JSON Data
                 </h2>
-                <textarea id="jsonInput" class="form-textarea" rows="10" placeholder='Enter JSON data, e.g.:
+                <textarea id="jsonInput" class="form-textarea code" rows="10" placeholder='Enter JSON data, e.g.:
 {
   "firstName": "John",
   "lastName": "Doe",
   "email": "john@example.com"
 }'></textarea>
-                
-                <div class="tip-box" style="margin-top: 12px;">
-                    <strong>💡 Tip:</strong> Field names in your JSON should match the form field names in the PDF.
+
+                <div class="tip-box mt-3">
+                    <strong>Tip:</strong> Field names in your JSON should match the form field names in the PDF.
                 </div>
             </div>
 
             <!-- Action Buttons -->
             <div class="sidebar-section">
-                <div style="display: flex; flex-direction: column; gap: 8px;">
-                    <button id="fillBtn" disabled class="btn-primary">
+                <div class="flex flex-col gap-2">
+                    <button id="fillBtn" disabled class="btn btn-primary btn-full">
                         <span id="fillBtnText">Generate PDF</span>
                     </button>
-                    
-                    <button id="autoFillBtn" disabled class="btn-secondary">
+
+                    <button id="autoFillBtn" disabled class="btn btn-secondary btn-full">
                         Auto Test Fill
                     </button>
 
-                    <button id="submitBtn" disabled class="btn-secondary">
+                    <button id="submitBtn" disabled class="btn btn-secondary btn-full">
                         Submit Additional JSON
                     </button>
 
-                    <div style="display: flex; gap: 8px; margin-top: 4px;">
-                        <button id="downloadBtn" disabled class="btn-download btn-orange">
-                            <svg style="width: 16px; height: 16px; margin-right: 6px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="flex gap-2 mt-2">
+                        <button id="downloadBtn" disabled class="btn btn-warning btn-full">
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
                             Download
                         </button>
-                        <button id="downloadCourtBtn" disabled class="btn-download btn-green">
-                            <svg style="width: 16px; height: 16px; margin-right: 6px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <button id="downloadCourtBtn" disabled class="btn btn-success btn-full">
+                            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
                             Court Ready
@@ -461,7 +180,7 @@
                 </div>
 
                 <div id="statusMessage"></div>
-                <div id="fieldStats" style="margin-top: 12px; text-align: center;"></div>
+                <div id="fieldStats" class="mt-3 text-center"></div>
             </div>
         </aside>
 
@@ -480,6 +199,54 @@
     </div>
 
     <script>
+    // ===== THEME TOGGLE =====
+    function getPreferredTheme() {
+        const stored = localStorage.getItem('theme');
+        if (stored) return stored;
+        return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+
+    function setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+    }
+
+    function toggleTheme() {
+        const current = document.documentElement.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        setTheme(next);
+    }
+
+    // Initialize theme
+    setTheme(getPreferredTheme());
+
+    // ===== WORKFLOW STEPPER =====
+    function updateWorkflowStep(step) {
+        const steps = ['step1', 'step2', 'step3'];
+        const connectors = ['connector1', 'connector2'];
+
+        steps.forEach((s, i) => {
+            const el = document.getElementById(s);
+            el.classList.remove('active', 'completed');
+            if (i + 1 < step) {
+                el.classList.add('completed');
+            } else if (i + 1 === step) {
+                el.classList.add('active');
+            }
+        });
+
+        connectors.forEach((c, i) => {
+            const el = document.getElementById(c);
+            el.classList.remove('completed');
+            if (i + 1 < step) {
+                el.classList.add('completed');
+            }
+        });
+    }
+
+    // Initialize workflow
+    updateWorkflowStep(1);
+
     // ===== EXTRACT FUNCTIONALITY =====
     const drop = document.getElementById('drop');
     const fileInput = document.getElementById('fileInput');
@@ -495,20 +262,20 @@
         e.stopPropagation();
         fileInput.click();
     });
-    
+
     drop.addEventListener('click', () => fileInput.click());
-    
+
     fileInput.addEventListener('change', (e) => handleFiles(Array.from(e.target.files)));
 
     ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
-        e.preventDefault(); 
-        e.stopPropagation(); 
+        e.preventDefault();
+        e.stopPropagation();
         drop.classList.add('dragover');
     }));
-    
+
     ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, (e) => {
-        e.preventDefault(); 
-        e.stopPropagation(); 
+        e.preventDefault();
+        e.stopPropagation();
         drop.classList.remove('dragover');
     }));
 
@@ -528,6 +295,9 @@
             }
         }
         renderFiles();
+        if (files.length > 0) {
+            updateWorkflowStep(1);
+        }
     }
 
     function formatFileSize(bytes) {
@@ -539,13 +309,13 @@
     function getFileIcon(filename) {
         const ext = filename.split('.').pop().toLowerCase();
         const icons = {
-            pdf: '📄',
-            doc: '📝', docx: '📝',
-            txt: '📃',
-            jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️',
-            xls: '📊', xlsx: '📊', csv: '📊'
+            pdf: 'PDF',
+            doc: 'DOC', docx: 'DOC',
+            txt: 'TXT',
+            jpg: 'IMG', jpeg: 'IMG', png: 'IMG', gif: 'IMG',
+            xls: 'XLS', xlsx: 'XLS', csv: 'CSV'
         };
-        return icons[ext] || '📎';
+        return icons[ext] || 'FILE';
     }
 
     function renderFiles() {
@@ -554,40 +324,36 @@
             const el = document.createElement('div');
             el.className = 'file-card';
             el.innerHTML = `
-                <div class="file-card-icon">
-                    <span style="font-size: 16px;">${getFileIcon(f.name)}</span>
-                </div>
+                <div class="file-card-icon">${getFileIcon(f.name)}</div>
                 <div class="file-card-info">
                     <div class="file-card-name">${escapeHtml(f.name)}</div>
                     <div class="file-card-size">${formatFileSize(f.size)}</div>
                 </div>
-                <button data-i="${i}" class="remove" style="background: none; border: none; color: #ef4444; cursor: pointer; padding: 4px 8px; font-size: 12px;">
-                    ✕
-                </button>
+                <button data-i="${i}" class="file-card-remove">&#10005;</button>
             `;
             filesList.appendChild(el);
         });
-        
-        Array.from(filesList.querySelectorAll('.remove')).forEach(btn => {
+
+        Array.from(filesList.querySelectorAll('.file-card-remove')).forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const i = Number(e.target.getAttribute('data-i'));
                 files.splice(i, 1);
                 renderFiles();
             });
         });
-        
+
         uploadBtn.disabled = files.length === 0;
     }
 
-    function escapeHtml(s) { 
-        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); 
+    function escapeHtml(s) {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     uploadBtn.addEventListener('click', async () => {
         if (files.length === 0) return;
-        
-        uploadBtn.disabled = true; 
-        uploadBtnText.innerHTML = '<span style="display: inline-block; width: 14px; height: 14px; border: 2px solid white; border-top-color: transparent; border-radius: 50%; margin-right: 8px;" class="animate-spin"></span>Extracting...';
+
+        uploadBtn.disabled = true;
+        uploadBtnText.innerHTML = '<span class="spinner"></span> Extracting...';
         showExtractStatus('Uploading and extracting...', 'info');
 
         const form = new FormData();
@@ -603,16 +369,15 @@
             } else {
                 const text = await res.text();
                 console.error('Non-JSON response from /api/extract:', text);
-                
-                // Check if this is a Vercel/hosting platform timeout error
+
                 if (res.status === 503 && (text.includes('deployment is currently unavailable') || text.includes('SERVICE_UNAVAILABLE') || text.includes('sfo1::') || text.includes('iad1::') || text.includes('hnd1::') || text.includes('cle1::'))) {
                     const isVercelTimeout = text.includes('sfo1::') || text.includes('iad1::') || text.includes('hnd1::') || text.includes('cle1::');
-                    const errorMsg = isVercelTimeout 
-                        ? 'VERCEL TIMEOUT DETECTED: The request exceeded Vercel\'s function timeout limit (10 seconds on Hobby plan). This happens with complex documents that take longer to process. Solutions:\n1. Upgrade to Vercel Pro for longer timeouts (up to 5 minutes)\n2. Break the document into smaller parts\n3. Use a simpler/cleaner image\n4. Try again in a few moments'
-                        : 'The request timed out. This can happen with complex documents that take longer to process. Please try:\n1. Breaking the document into smaller parts\n2. Using a simpler/cleaner image\n3. Trying again in a few moments';
+                    const errorMsg = isVercelTimeout
+                        ? 'VERCEL TIMEOUT: The request exceeded the function timeout limit. Try smaller/simpler documents or upgrade to Vercel Pro for longer timeouts.'
+                        : 'Request timed out. Try smaller documents or try again.';
                     throw new Error(errorMsg);
                 }
-                
+
                 throw new Error('Server returned non-JSON response. Check console.');
             }
 
@@ -621,9 +386,9 @@
             if (data.generated) {
                 let txt = data.generated;
                 let jsonString = null;
-                
-                try { 
-                    jsonString = JSON.parse(txt); 
+
+                try {
+                    jsonString = JSON.parse(txt);
                 } catch (e) {
                     const match = txt.match(/\{[\s\S]*\}/m);
                     if (match) {
@@ -642,11 +407,12 @@
 
                 if (jsonString) {
                     jsonInput.value = JSON.stringify(jsonString, null, 2);
-                    showExtractStatus('Data extracted successfully! Now fill out the PDF form.', 'success');
-                    
+                    showExtractStatus('Data extracted successfully! Now select a template and generate PDF.', 'success');
+                    updateWorkflowStep(2);
+
                     uploadBtn.disabled = false;
                     uploadBtnText.textContent = 'Upload & Extract';
-                    
+
                     files = [];
                     renderFiles();
                     return;
@@ -695,9 +461,9 @@
         try {
             const response = await fetch('/api/templates');
             const data = await response.json();
-            
+
             templateSelect.innerHTML = '<option value="">-- Select a PDF Template --</option>';
-            
+
             if (data.templates && data.templates.length > 0) {
                 data.templates.forEach(template => {
                     const option = document.createElement('option');
@@ -744,7 +510,7 @@
         }
 
         fillBtn.disabled = true;
-        fillBtnText.innerHTML = '<span style="display: inline-block; width: 14px; height: 14px; border: 2px solid white; border-top-color: transparent; border-radius: 50%; margin-right: 8px;" class="animate-spin"></span>Processing...';
+        fillBtnText.innerHTML = '<span class="spinner"></span> Processing...';
         showStatus('Processing PDF...', 'info');
 
         try {
@@ -773,20 +539,20 @@
 
             const blob = base64ToBlob(result.pdfData, 'application/pdf');
             currentPDFUrl = URL.createObjectURL(blob);
-            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}"></iframe>`;
+            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}" class="no-transition"></iframe>`;
 
             showStatus(`PDF filled successfully! ${result.filledFields} of ${result.totalFields} fields filled.`, 'success');
+            updateWorkflowStep(3);
 
             let fieldStatsHTML = `<span class="field-stats">${result.filledFields}/${result.totalFields} fields filled</span>`;
-            
+
             if (result.processedData && result.processedData['[ZIP_NOT_FOUND]'] === true) {
                 const debtorZip = result.processedData['[DEBTOR1_ZIP]'] || 'unknown';
-                fieldStatsHTML += `<br><span class="field-stats" style="background: #fef2f2; color: #ef4444; margin-top: 8px;">⚠️ Zip ${debtorZip} not found</span>`;
+                fieldStatsHTML += `<br><span class="badge badge-warning mt-2">Zip ${debtorZip} not found</span>`;
             }
-            
+
             fieldStats.innerHTML = fieldStatsHTML;
 
-            // Enable download buttons
             downloadBtn.disabled = false;
             downloadCourtBtn.disabled = false;
             submitBtn.disabled = false;
@@ -840,13 +606,13 @@
 
             const blob = base64ToBlob(result.pdfData, 'application/pdf');
             currentPDFUrl = URL.createObjectURL(blob);
-            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}"></iframe>`;
+            pdfViewer.innerHTML = `<iframe src="${currentPDFUrl}" class="no-transition"></iframe>`;
 
             showStatus(`Auto fill completed. ${result.filledFields} of ${result.totalFields} fields filled.`, 'success');
+            updateWorkflowStep(3);
 
             fieldStats.innerHTML = `<span class="field-stats">${result.filledFields}/${result.totalFields} fields (auto)</span>`;
 
-            // Enable download buttons
             downloadBtn.disabled = false;
             downloadCourtBtn.disabled = false;
             submitBtn.disabled = false;
@@ -869,21 +635,18 @@
         }
 
         try {
-            // Create blob from base64 data
             const blob = base64ToBlob(currentPDFData, 'application/pdf');
             const url = URL.createObjectURL(blob);
-            
-            // Create temporary download link
+
             const a = document.createElement('a');
             a.href = url;
             a.download = 'JurisDraft_Filing.pdf';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            
-            // Cleanup
+
             URL.revokeObjectURL(url);
-            
+
             showStatus('Download started!', 'success');
         } catch (error) {
             console.error('Download error:', error);
@@ -898,21 +661,18 @@
         }
 
         try {
-            // Create blob from base64 data
             const blob = base64ToBlob(currentPDFData, 'application/pdf');
             const url = URL.createObjectURL(blob);
-            
-            // Create temporary download link
+
             const a = document.createElement('a');
             a.href = url;
             a.download = 'JurisDraft_Court_Ready.pdf';
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            
-            // Cleanup
+
             URL.revokeObjectURL(url);
-            
+
             showStatus('Court-ready PDF download started!', 'success');
         } catch (error) {
             console.error('Download error:', error);
@@ -927,11 +687,11 @@
         for (let offset = 0; offset < byteCharacters.length; offset += 512) {
             const slice = byteCharacters.slice(offset, offset + 512);
             const byteNumbers = new Array(slice.length);
-            
+
             for (let i = 0; i < slice.length; i++) {
                 byteNumbers[i] = slice.charCodeAt(i);
             }
-            
+
             const byteArray = new Uint8Array(byteNumbers);
             byteArrays.push(byteArray);
         }
