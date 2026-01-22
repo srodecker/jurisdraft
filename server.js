@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // Cache for CSV data to avoid reading files on every request
-let limitedCourtsCache = null;
+let jurisdictionRulesCache = null;
 let courtInfoCache = null;
 
 /**
@@ -66,27 +66,168 @@ function parseCSV(csvContent) {
 }
 
 /**
- * Load and cache CSV data
- * @returns {Promise<{limitedCourts: Array, courtInfo: Array}>}
+ * Load and cache CSV data from Jurisdiction_Rules and Court_Info
+ * @returns {Promise<{jurisdictionRules: Array, courtInfo: Array}>}
  */
 async function loadCourtData() {
-    if (!limitedCourtsCache || !courtInfoCache) {
-        const limitedCourtsPath = path.join(__dirname, 'data', 'Limited_Courts.csv');
+    if (!jurisdictionRulesCache || !courtInfoCache) {
+        const jurisdictionRulesPath = path.join(__dirname, 'data', 'Jurisdiction_Rules.csv');
         const courtInfoPath = path.join(__dirname, 'data', 'Court_Info.csv');
-        
-        const [limitedCourtsContent, courtInfoContent] = await Promise.all([
-            fs.readFile(limitedCourtsPath, 'utf-8'),
+
+        const [jurisdictionRulesContent, courtInfoContent] = await Promise.all([
+            fs.readFile(jurisdictionRulesPath, 'utf-8'),
             fs.readFile(courtInfoPath, 'utf-8')
         ]);
-        
-        limitedCourtsCache = parseCSV(limitedCourtsContent);
+
+        jurisdictionRulesCache = parseCSV(jurisdictionRulesContent);
         courtInfoCache = parseCSV(courtInfoContent);
     }
-    
+
     return {
-        limitedCourts: limitedCourtsCache,
+        jurisdictionRules: jurisdictionRulesCache,
         courtInfo: courtInfoCache
     };
+}
+
+/**
+ * Normalize court name for fuzzy matching
+ * @param {string} name - The court name to normalize
+ * @returns {string} - Normalized court name
+ */
+function normalizeCourtName(name) {
+    return (name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Determine the appropriate court based on ZIP code, demand amount, and optional city selection
+ * @param {string} zipCode - The debtor's ZIP code
+ * @param {number|string} demandAmount - The demand amount (determines Limited vs Unlimited)
+ * @param {string|null} citySelection - Optional city/condition selection for geographic splits or venue choice
+ * @returns {Promise<Object>} - Court determination result
+ */
+async function determineCourt(zipCode, demandAmount, citySelection = null) {
+    const { jurisdictionRules, courtInfo } = await loadCourtData();
+
+    // Step 1: Parse amount and determine case type
+    // Limited if demandAmount <= 35000, else Unlimited
+    // Default to Unlimited if amount is missing/null
+    let amount = 0;
+    if (demandAmount) {
+        const cleanAmount = String(demandAmount).replace(/[^0-9.]/g, '');
+        amount = parseFloat(cleanAmount);
+    }
+    const caseType = (!isNaN(amount) && amount > 0 && amount <= 35000) ? 'Limited' : 'Unlimited';
+
+    // Step 2: Filter rows where ZipCode matches AND CaseType matches
+    const matches = jurisdictionRules.filter(row =>
+        row['ZipCode'] === zipCode && row['CaseType'] === caseType
+    );
+
+    // Step 3: Decision tree based on number of matches
+    if (matches.length === 0) {
+        // No matches - ZIP not supported for this case type
+        return {
+            success: false,
+            error: `ZIP code ${zipCode} not found in court database for ${caseType} cases`,
+            caseType: caseType.toLowerCase()
+        };
+    }
+
+    if (matches.length === 1) {
+        // Single match - auto-fill court
+        const match = matches[0];
+        const courtName = match['CourtName'];
+
+        if (!courtName || courtName === 'nan' || courtName.trim() === '') {
+            return {
+                success: false,
+                error: `No court assigned for ZIP code ${zipCode} (${caseType} cases)`,
+                caseType: caseType.toLowerCase()
+            };
+        }
+
+        // Look up court details in Court_Info
+        const courtEntry = courtInfo.find(row =>
+            normalizeCourtName(row['Courthouse']) === normalizeCourtName(courtName)
+        );
+
+        return {
+            success: true,
+            courtName: courtName,
+            courtAddress: courtEntry ? courtEntry['Address'] : '',
+            courtDistrict: courtEntry ? courtEntry['District'] : '',
+            caseType: caseType.toLowerCase()
+        };
+    }
+
+    // Multiple matches - check if this is a geographic split or venue choice
+    const hasConditions = matches.some(row => row['Condition'] && row['Condition'].trim() !== '');
+
+    if (hasConditions) {
+        // Geographic Split - MANDATORY selection based on Condition
+        if (citySelection) {
+            // User has made a selection - find matching entry
+            const matchedEntry = matches.find(row => row['Condition'] === citySelection);
+            if (matchedEntry) {
+                const courtName = matchedEntry['CourtName'];
+                const courtEntry = courtInfo.find(row =>
+                    normalizeCourtName(row['Courthouse']) === normalizeCourtName(courtName)
+                );
+
+                return {
+                    success: true,
+                    courtName: courtName,
+                    courtAddress: courtEntry ? courtEntry['Address'] : '',
+                    courtDistrict: courtEntry ? courtEntry['District'] : '',
+                    caseType: caseType.toLowerCase()
+                };
+            }
+        }
+
+        // No selection or invalid selection - return options
+        const options = matches.map(row => row['Condition']).filter(c => c && c.trim() !== '');
+        return {
+            success: false,
+            needsSelection: true,
+            type: 'split',
+            options: options,
+            caseType: caseType.toLowerCase()
+        };
+    } else {
+        // Venue Choice - OPTIONAL selection with default
+        if (citySelection) {
+            // User has made a selection - find matching entry by court name
+            const matchedEntry = matches.find(row => row['CourtName'] === citySelection);
+            if (matchedEntry) {
+                const courtName = matchedEntry['CourtName'];
+                const courtEntry = courtInfo.find(row =>
+                    normalizeCourtName(row['Courthouse']) === normalizeCourtName(courtName)
+                );
+
+                return {
+                    success: true,
+                    courtName: courtName,
+                    courtAddress: courtEntry ? courtEntry['Address'] : '',
+                    courtDistrict: courtEntry ? courtEntry['District'] : '',
+                    caseType: caseType.toLowerCase()
+                };
+            }
+        }
+
+        // Return venue choice options with default
+        const options = matches.map(row => row['CourtName']);
+        const defaultEntry = matches.find(row => row['Is_Default'] === 'True');
+        const defaultOption = defaultEntry ? defaultEntry['CourtName'] : options[0];
+
+        return {
+            success: false,
+            needsSelection: true,
+            type: 'choice',
+            options: options,
+            defaultOption: defaultOption,
+            caseType: caseType.toLowerCase()
+        };
+    }
 }
 
 // Rate limiting to prevent abuse
@@ -549,24 +690,26 @@ async function processDynamicVariables(data) {
     if (debtorZip) {
         console.log('=== ENTERING ZIP LOOKUP ===');
         try {
-            const { limitedCourts, courtInfo } = await loadCourtData();
-            // Find the courthouse for this ZIP code
-            const zipEntry = limitedCourts.find(row => row['Zip Code'] === debtorZip);
-            
-            if (zipEntry && zipEntry['Courthouse']) {
-                const courthouseName = zipEntry['Courthouse'];
+            // Get demand amount for case type determination
+            const lookupDemandAmount = data['[DEMAND_AMOUNT]'] || data['[JUDGMENT_TOTAL_AMOUNT]'] || '';
+            // Get city selection if provided (for special cases with multiple courts per ZIP)
+            const citySelection = data['[COURT_CITY_SELECTION]'] || null;
+
+            const courtResult = await determineCourt(debtorZip, lookupDemandAmount, citySelection);
+
+            if (courtResult.success) {
+                // Court resolved successfully
+                const courthouseName = courtResult.courtName;
                 data['[VAR_COURTHOUSE]'] = courthouseName;
                 data['[COURT_BRANCH_NAME]'] = courthouseName;
-                
-                const courtEntry = courtInfo.find(row => row['Courthouse'] === courthouseName);
-                
-                if (courtEntry && courtEntry['Address']) {
-                    const fullAddress = courtEntry['Address'];
+
+                if (courtResult.courtAddress) {
+                    const fullAddress = courtResult.courtAddress;
                     data['[VAR_COURT_INFO]'] = fullAddress;
-                    data['[COURT_DISTRICT]'] = courtEntry['District'] || '';
-                    
+                    data['[COURT_DISTRICT]'] = courtResult.courtDistrict || '';
+
                     const parts = fullAddress.split(',').map(p => p.trim());
-                    
+
                     if (parts.length >= 3) {
                         const streetParts = parts.slice(0, -2);
                         data['[COURT_STREET_ADDRESS]'] = streetParts.join(', ');
@@ -582,9 +725,15 @@ async function processDynamicVariables(data) {
                         data['[COURT_CITY_ZIP]'] = '';
                     }
                 }
+            } else if (courtResult.needsSelection) {
+                // Multiple courts available for this ZIP - user needs to select
+                console.log(`ZIP code ${debtorZip} requires court selection from options:`, courtResult.options);
+                data['[NEED_COURT_SELECTION]'] = true;
+                data['[COURT_OPTIONS]'] = courtResult.options;
             } else {
-                 console.log(`ZIP code ${debtorZip} not found in court database`);
-                 data['[ZIP_NOT_FOUND]'] = true;
+                // ZIP not found
+                console.log(`ZIP code ${debtorZip} not found in court database`);
+                data['[ZIP_NOT_FOUND]'] = true;
             }
         } catch (error) {
             console.error('Error loading court data:', error);
@@ -726,6 +875,23 @@ async function processDynamicVariables(data) {
       
     return data;
 }
+
+// Court lookup API endpoint
+app.get('/api/court-lookup', async (req, res) => {
+    try {
+        const { zip, amount, citySelection } = req.query;
+
+        if (!zip) {
+            return res.status(400).json({ error: 'ZIP code is required' });
+        }
+
+        const result = await determineCourt(zip, amount, citySelection || null);
+        res.json(result);
+    } catch (error) {
+        console.error('Error in court lookup:', error);
+        res.status(500).json({ error: 'Failed to lookup court: ' + error.message });
+    }
+});
 
 // Get list of available PDF templates
 app.get('/api/templates', async (req, res) => {
