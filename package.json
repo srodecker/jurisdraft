@@ -14,11 +14,13 @@
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.5",
+    "docxtemplater": "^3.67.6",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-rate-limit": "^8.2.1",
     "multer": "^2.0.2",
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "^1.17.1",
+    "pizzip": "^3.2.0"
   },
   "devDependencies": {
     "chrome-devtools-mcp": "^0.12.1"

@@ -5,6 +5,12 @@ const path = require('path');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const PizZip = require('pizzip');
+const Docxtemplater = require('docxtemplater');
+const { exec } = require('child_process');
+const util = require('util');
+const os = require('os');
+const execAsync = util.promisify(exec);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -239,6 +245,30 @@ const apiLimiter = rateLimit({
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Reasonable limit for JSON payloads
+
+// Resolve LibreOffice binary path for environments without global PATH setup
+async function resolveSofficePath() {
+    const candidates = [
+        process.env.SOFFICE_PATH,
+        '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+        'C:\\Program Files\\LibreOffice\\program\\soffice.exe'
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+        try {
+            await fs.access(candidate);
+            // Set env var used by libreoffice-convert for extra safety
+            if (!process.env.LIBRE_OFFICE_EXE) {
+                process.env.LIBRE_OFFICE_EXE = candidate;
+            }
+            return candidate;
+        } catch (error) {
+            // Try next candidate
+        }
+    }
+
+    return null;
+}
 
 // Root URL returns landing page
 app.get('/', (req, res) => {
@@ -893,15 +923,259 @@ app.get('/api/court-lookup', async (req, res) => {
     }
 });
 
-// Get list of available PDF templates
+// Get list of available PDF and DOCX templates
 app.get('/api/templates', async (req, res) => {
     try {
         const files = await fs.readdir(path.join(__dirname, 'templates'));
-        const pdfFiles = files.filter(file => file.toLowerCase().endsWith('.pdf'));
-        res.json({ templates: pdfFiles });
+        const templateFiles = files.filter(file => {
+            const ext = file.toLowerCase();
+            return ext.endsWith('.pdf') || ext.endsWith('.docx');
+        });
+        res.json({ templates: templateFiles });
     } catch (error) {
         console.error('Error reading templates:', error);
         res.status(500).json({ error: 'Failed to read templates' });
+    }
+});
+
+// Serve raw template files (for docx preview)
+app.get('/api/fetch-template/:filename', (req, res) => {
+    const filename = req.params.filename;
+    // Security: prevent path traversal
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return res.status(400).json({ error: 'Invalid filename' });
+    }
+    const filePath = path.join(__dirname, 'templates', filename);
+    res.download(filePath); // This handles setting the correct headers automatically
+});
+
+async function convertDocxToPdf(docxBuffer) {
+    const sofficePath = await resolveSofficePath();
+    if (!sofficePath) {
+        throw new Error('Could not find soffice binary');
+    }
+
+    const id = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+    const inputPath = path.join(os.tmpdir(), `temp_${id}.docx`);
+    const outDir = os.tmpdir();
+    const outputPath = path.join(outDir, `temp_${id}.pdf`);
+
+    try {
+        await fs.writeFile(inputPath, docxBuffer);
+
+        const command = `"${sofficePath}" --headless --convert-to pdf --outdir "${outDir}" "${inputPath}"`;
+
+        try {
+            await execAsync(command);
+        } catch (error) {
+            if (error && error.stderr) {
+                console.error('LibreOffice stderr:', error.stderr);
+            }
+            throw error;
+        }
+
+        const pdfBuffer = await fs.readFile(outputPath);
+        return pdfBuffer;
+    } finally {
+        try { await fs.unlink(inputPath); } catch (error) { /* ignore */ }
+        try { await fs.unlink(outputPath); } catch (error) { /* ignore */ }
+    }
+}
+
+// Preview DOCX as PDF (using LibreOffice conversion)
+app.get('/api/preview-docx/:filename', async (req, res) => {
+    try {
+        const filename = req.params.filename;
+        // Security: prevent path traversal
+        if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+            return res.status(400).json({ error: 'Invalid filename' });
+        }
+        
+        const filePath = path.join(__dirname, 'templates', filename);
+        const docxBuffer = await fs.readFile(filePath);
+        
+        console.log(`Converting ${filename} to PDF for preview...`);
+        
+        // Convert DOCX to PDF using LibreOffice
+        const pdfBuffer = await convertDocxToPdf(docxBuffer);
+        
+        console.log(`Conversion complete: ${pdfBuffer.length} bytes`);
+        
+        // Send PDF for preview
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${filename.replace('.docx', '.pdf')}"`);
+        res.send(pdfBuffer);
+    } catch (error) {
+        console.error('Error converting DOCX to PDF:', error);
+        res.status(500).json({ error: 'Failed to convert DOCX: ' + error.message });
+    }
+});
+
+// Preview filled DOCX as PDF (using LibreOffice conversion)
+app.post('/api/preview-filled-docx', async (req, res) => {
+    try {
+        const { templateName, jsonData } = req.body;
+        
+        if (!templateName || !jsonData) {
+            return res.status(400).json({ error: 'Template name and JSON data are required' });
+        }
+        
+        // Security: prevent path traversal
+        if (templateName.includes('..') || templateName.includes('/') || templateName.includes('\\')) {
+            return res.status(400).json({ error: 'Invalid filename' });
+        }
+
+        // Parse JSON if it's a string
+        let data;
+        try {
+            data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid JSON format' });
+        }
+
+        const filePath = path.join(__dirname, 'templates', templateName);
+        const content = await fs.readFile(filePath);
+        
+        // Load and fill the docx
+        const zip = new PizZip(content);
+        const doc = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true,
+            delimiters: { start: '[', end: ']' }
+        });
+        
+        doc.render(data);
+        
+        // Generate filled DOCX buffer
+        const filledDocxBuffer = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+        
+        console.log(`Converting filled ${templateName} to PDF for preview...`);
+        
+        // Convert to PDF for preview
+        const pdfBuffer = await convertDocxToPdf(filledDocxBuffer);
+        
+        // Return as base64 for the frontend
+        const base64PDF = pdfBuffer.toString('base64');
+        
+        res.json({
+            success: true,
+            pdfData: base64PDF
+        });
+    } catch (error) {
+        console.error('Error previewing filled DOCX:', error);
+        res.status(500).json({ error: 'Failed to preview: ' + error.message });
+    }
+});
+
+// Scan DOCX file for [VARIABLE] placeholders
+app.get('/api/scan-docx/:filename', async (req, res) => {
+    try {
+        const filename = req.params.filename;
+        // Security: prevent path traversal
+        if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+            return res.status(400).json({ error: 'Invalid filename' });
+        }
+        
+        const filePath = path.join(__dirname, 'templates', filename);
+        const content = await fs.readFile(filePath);
+        
+        // Load the docx file using PizZip
+        const zip = new PizZip(content);
+        
+        // Get the raw text content from word/document.xml
+        const documentXml = zip.file('word/document.xml');
+        if (!documentXml) {
+            return res.status(400).json({ error: 'Invalid DOCX file: missing document.xml' });
+        }
+        
+        const xmlContent = documentXml.asText();
+        
+        // Find all [VARIABLE] patterns using regex
+        // Match variables with 3+ chars like [DEFENDANT_NAME], [DATE_SIGNED]
+        // Ignores short checkboxes like [X] or [ ]
+        const variableRegex = /\[([A-Z0-9_]{3,})\]/g;
+        const matches = xmlContent.match(variableRegex) || [];
+        
+        // Get unique variable names (without brackets)
+        const uniqueVars = [...new Set(matches.map(m => m.slice(1, -1)))];
+        
+        console.log(`Scanned ${filename}: found ${uniqueVars.length} unique variables`);
+        
+        res.json({ 
+            success: true, 
+            variables: uniqueVars,
+            filename: filename
+        });
+    } catch (error) {
+        console.error('Error scanning DOCX:', error);
+        res.status(500).json({ error: 'Failed to scan DOCX: ' + error.message });
+    }
+});
+
+// Fill DOCX with provided JSON data
+app.post('/api/fill-docx', async (req, res) => {
+    try {
+        const { templateName, jsonData } = req.body;
+        
+        if (!templateName || !jsonData) {
+            return res.status(400).json({ error: 'Template name and JSON data are required' });
+        }
+        
+        // Security: prevent path traversal
+        if (templateName.includes('..') || templateName.includes('/') || templateName.includes('\\')) {
+            return res.status(400).json({ error: 'Invalid filename' });
+        }
+
+        // Parse JSON if it's a string
+        let data;
+        try {
+            data = typeof jsonData === 'string' ? JSON.parse(jsonData) : jsonData;
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid JSON format' });
+        }
+
+        const filePath = path.join(__dirname, 'templates', templateName);
+        const content = await fs.readFile(filePath);
+        
+        // Load the docx file using PizZip
+        const zip = new PizZip(content);
+        
+        // Initialize Docxtemplater with square bracket delimiters and data
+        const doc = new Docxtemplater(zip, {
+            paragraphLoop: true,
+            linebreaks: true,
+            delimiters: { start: '[', end: ']' }
+        });
+        
+        // Render the document with data (replace all variables)
+        doc.render(data);
+        
+        // Generate the filled document as a buffer
+        const filledBuffer = doc.getZip().generate({
+            type: 'nodebuffer',
+            compression: 'DEFLATE'
+        });
+        
+        // Return as base64 for preview/download
+        const base64Doc = filledBuffer.toString('base64');
+        
+        console.log(`Filled DOCX template: ${templateName}`);
+        
+        res.json({
+            success: true,
+            docxData: base64Doc,
+            filename: templateName.replace('.docx', '_filled.docx')
+        });
+    } catch (error) {
+        console.error('Error filling DOCX:', error);
+        
+        // Handle docxtemplater-specific errors
+        if (error.properties && error.properties.errors) {
+            const errorMessages = error.properties.errors.map(e => e.message).join(', ');
+            return res.status(400).json({ error: 'Template error: ' + errorMessages });
+        }
+        
+        res.status(500).json({ error: 'Failed to fill DOCX: ' + error.message });
     }
 });
 

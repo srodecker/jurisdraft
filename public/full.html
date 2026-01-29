@@ -10,6 +10,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/css/design-system.css" />
+    <script src="https://unpkg.com/jszip/dist/jszip.min.js"></script>
+    <script src="https://unpkg.com/docx-preview/dist/docx-preview.min.js"></script>
     <style>
         html, body {
             height: 100vh;
@@ -192,7 +194,7 @@
             </div>
         </aside>
 
-        <!-- Main PDF Workspace -->
+        <!-- Main PDF/DOCX Workspace -->
         <main class="main-workspace">
             <div id="pdfViewer" class="pdf-container">
                 <div class="pdf-placeholder">
@@ -203,6 +205,7 @@
                     <p style="font-size: 13px; margin-top: 4px;">Select a template and click "Generate PDF" to preview</p>
                 </div>
             </div>
+            <div id="docx-container" class="pdf-container"></div>
         </main>
     </div>
 
@@ -344,6 +347,34 @@
         .court-status-pending {
             background: rgba(59, 130, 246, 0.15);
             color: #3b82f6;
+        }
+        /* DOCX Container Styles */
+        #docx-container {
+            width: 100%;
+            height: 800px; /* Fixed height to ensure visibility */
+            background-color: #f3f4f6;
+            overflow-y: scroll;
+            display: none; /* Hidden by default */
+        }
+        #docx-container .docx-wrapper {
+            background: #e5e7eb;
+            padding: 20px;
+            min-height: 100%;
+        }
+        #docx-container .docx-wrapper > section.docx {
+            background: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            margin: 0 auto 20px auto;
+        }
+        [data-theme="dark"] #docx-container {
+            background-color: #1f2937;
+        }
+        [data-theme="dark"] #docx-container .docx-wrapper {
+            background: #374151;
+        }
+        [data-theme="dark"] #docx-container .docx-wrapper > section.docx {
+            background: #1e1e1e;
+            color: #d4d4d4;
         }
     </style>
 
@@ -605,13 +636,16 @@
 
     let currentPDFData = null;
     let currentPDFUrl = null;
+    let currentDocxData = null;
+    let currentDocxVariables = [];
+    let currentDocxTemplate = null;
 
     async function loadTemplates() {
         try {
             const response = await fetch('/api/templates');
             const data = await response.json();
 
-            templateSelect.innerHTML = '<option value="">-- Select a PDF Template --</option>';
+            templateSelect.innerHTML = '<option value="">-- Select a Template --</option>';
 
             if (data.templates && data.templates.length > 0) {
                 data.templates.forEach(template => {
@@ -631,18 +665,131 @@
         }
     }
 
-    templateSelect.addEventListener('change', () => {
-        const hasTemplate = !!templateSelect.value;
-        fillBtn.disabled = !hasTemplate;
-        autoFillBtn.disabled = !hasTemplate;
+    templateSelect.addEventListener('change', async () => {
+        const templateName = templateSelect.value;
+        const hasTemplate = !!templateName;
+        
+        // Get container references
+        const docxContainer = document.getElementById('docx-container');
+        
+        if (!hasTemplate) {
+            // No template selected - show PDF placeholder, hide docx
+            fillBtn.disabled = true;
+            autoFillBtn.disabled = true;
+            pdfViewer.style.display = '';
+            pdfViewer.innerHTML = `<div class="pdf-placeholder">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p style="font-size: 16px; font-weight: 500;">PDF Preview</p>
+                <p style="font-size: 13px; margin-top: 4px;">Select a template and click "Generate PDF" to preview</p>
+            </div>`;
+            docxContainer.style.display = 'none';
+            currentDocxTemplate = null;
+            currentDocxVariables = [];
+            return;
+        }
+        
+        // Check file extension
+        const isDocx = templateName.toLowerCase().endsWith('.docx');
+        const isPdf = templateName.toLowerCase().endsWith('.pdf');
+        
+        if (isDocx) {
+            currentDocxTemplate = templateName;
+            currentDocxData = null;
+            
+            // Show PDF viewer (will display converted preview), hide docx container
+            pdfViewer.style.display = '';
+            docxContainer.style.display = 'none';
+            
+            // Show loading state in PDF viewer
+            pdfViewer.innerHTML = `<div class="pdf-placeholder">
+                <div class="spinner" style="width: 40px; height: 40px; margin-bottom: 16px;"></div>
+                <p style="font-size: 16px; font-weight: 500;">Converting preview...</p>
+                <p style="font-size: 13px; margin-top: 4px;">LibreOffice is generating a PDF preview</p>
+            </div>`;
+            
+            try {
+                // Step 1: Scan for variables (in parallel with preview)
+                console.log('Scanning DOCX for variables:', templateName);
+                const scanPromise = fetch('/api/scan-docx/' + encodeURIComponent(templateName));
+                
+                // Step 2: Load PDF preview using LibreOffice conversion
+                console.log('Loading PDF preview for:', templateName);
+                const previewUrl = '/api/preview-docx/' + encodeURIComponent(templateName);
+                
+                // Wait for scan results
+                const scanResponse = await scanPromise;
+                if (!scanResponse.ok) {
+                    throw new Error('Failed to scan document');
+                }
+                const scanResult = await scanResponse.json();
+                currentDocxVariables = scanResult.variables || [];
+                
+                console.log('Found variables:', currentDocxVariables);
+                
+                // Build form fields in the JSON input area
+                buildDocxVariableForm(currentDocxVariables);
+                
+                // Set the PDF iframe source to the preview endpoint
+                pdfViewer.innerHTML = `<iframe src="${previewUrl}" class="no-transition"></iframe>`;
+                
+                // Enable Generate button for DOCX
+                fillBtn.disabled = false;
+                fillBtnText.textContent = 'Generate & Download DOCX';
+                autoFillBtn.disabled = true; // No auto-fill for DOCX yet
+                
+                showStatus(`Document loaded: ${templateName} (${currentDocxVariables.length} variables found)`, 'success');
+            } catch (error) {
+                console.error('Error loading DOCX:', error);
+                pdfViewer.innerHTML = `<div class="pdf-placeholder">
+                    <p style="font-size: 16px; font-weight: 500; color: #ef4444;">Error loading document</p>
+                    <p style="font-size: 13px; margin-top: 4px;">${escapeHtml(error.message)}</p>
+                </div>`;
+                showStatus('Error loading document: ' + error.message, 'error');
+                fillBtn.disabled = true;
+            }
+        } else if (isPdf) {
+            currentDocxTemplate = null;
+            currentDocxVariables = [];
+            currentDocxData = null; // Clear any previous DOCX data
+            
+            // PDF file selected - enable buttons, show PDF viewer
+            fillBtn.disabled = false;
+            fillBtnText.textContent = 'Generate PDF';
+            autoFillBtn.disabled = false;
+            
+            // Show PDF viewer, hide docx container
+            pdfViewer.style.display = '';
+            docxContainer.style.display = 'none';
+        }
     });
+
+    // Build form fields for DOCX variables
+    function buildDocxVariableForm(variables) {
+        if (variables.length === 0) {
+            jsonInput.value = '{\n  // No variables found in this document\n}';
+            return;
+        }
+        
+        // Create a JSON object with empty values for each variable
+        const formData = {};
+        variables.forEach(varName => {
+            formData[varName] = '';
+        });
+        
+        jsonInput.value = JSON.stringify(formData, null, 2);
+        
+        // Show tip about DOCX variables
+        showStatus(`Found ${variables.length} variables. Fill in values and click "Generate & Download DOCX".`, 'info');
+    }
 
     async function fillPDF() {
         const templateName = templateSelect.value;
         const jsonData = jsonInput.value.trim();
 
         if (!templateName) {
-            showStatus('Please select a PDF template', 'error');
+            showStatus('Please select a template', 'error');
             return;
         }
 
@@ -658,6 +805,100 @@
             return;
         }
 
+        // Check if this is a DOCX or PDF
+        const isDocx = templateName.toLowerCase().endsWith('.docx');
+        
+        if (isDocx) {
+            await fillDOCX(templateName, jsonData);
+        } else {
+            await fillPDFInternal(templateName, jsonData);
+        }
+    }
+
+    async function fillDOCX(templateName, jsonData) {
+        fillBtn.disabled = true;
+        fillBtnText.innerHTML = '<span class="spinner"></span> Generating...';
+        showStatus('Generating filled DOCX...', 'info');
+
+        try {
+            // Step 1: Fill the DOCX and get the file for download
+            const response = await fetch('/api/fill-docx', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    templateName,
+                    jsonData
+                })
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                throw new Error(result.error || 'Failed to fill DOCX');
+            }
+
+            currentDocxData = result.docxData;
+
+            // Step 2: Show PDF preview of the filled document
+            showStatus('Generating PDF preview...', 'info');
+            pdfViewer.innerHTML = `<div class="pdf-placeholder">
+                <div class="spinner" style="width: 40px; height: 40px; margin-bottom: 16px;"></div>
+                <p style="font-size: 16px; font-weight: 500;">Converting preview...</p>
+            </div>`;
+
+            const previewResponse = await fetch('/api/preview-filled-docx', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    templateName,
+                    jsonData
+                })
+            });
+
+            const previewResult = await previewResponse.json();
+
+            if (previewResponse.ok && previewResult.pdfData) {
+                // Display the PDF preview
+                const pdfBlob = base64ToBlob(previewResult.pdfData, 'application/pdf');
+                const pdfUrl = URL.createObjectURL(pdfBlob);
+                pdfViewer.innerHTML = `<iframe src="${pdfUrl}" class="no-transition"></iframe>`;
+            }
+
+            // Step 3: Auto-download the filled DOCX
+            const docxBlob = base64ToBlob(currentDocxData, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            const downloadUrl = URL.createObjectURL(docxBlob);
+            
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = templateName.replace('.docx', '_filled.docx');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(downloadUrl);
+
+            showStatus(`DOCX generated and downloaded! Preview shown above.`, 'success');
+            updateWorkflowStep(3);
+
+            fieldStats.innerHTML = `<span class="field-stats">${currentDocxVariables.length} variables filled</span>`;
+
+            downloadBtn.disabled = false;
+            downloadCourtBtn.disabled = true; // No court-ready for DOCX
+            submitBtn.disabled = false;
+
+        } catch (error) {
+            console.error('Error filling DOCX:', error);
+            showStatus('Error: ' + error.message, 'error');
+        } finally {
+            fillBtn.disabled = false;
+            fillBtnText.textContent = 'Generate & Download DOCX';
+        }
+    }
+
+    async function fillPDFInternal(templateName, jsonData) {
         fillBtn.disabled = true;
         fillBtnText.innerHTML = '<span class="spinner"></span> Processing...';
         showStatus('Processing PDF...', 'info');
@@ -778,8 +1019,14 @@
     }
 
     function downloadPDF() {
+        // Check if we have a DOCX or PDF to download
+        if (currentDocxData) {
+            downloadDOCX();
+            return;
+        }
+        
         if (!currentPDFData) {
-            showStatus('No PDF available for download', 'error');
+            showStatus('No document available for download', 'error');
             return;
         }
 
@@ -797,6 +1044,32 @@
             URL.revokeObjectURL(url);
 
             showStatus('Download started!', 'success');
+        } catch (error) {
+            console.error('Download error:', error);
+            showStatus('Download failed: ' + error.message, 'error');
+        }
+    }
+
+    function downloadDOCX() {
+        if (!currentDocxData) {
+            showStatus('No DOCX available for download', 'error');
+            return;
+        }
+
+        try {
+            const blob = base64ToBlob(currentDocxData, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = currentDocxTemplate ? currentDocxTemplate.replace('.docx', '_filled.docx') : 'JurisDraft_Filing.docx';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            URL.revokeObjectURL(url);
+
+            showStatus('DOCX download started!', 'success');
         } catch (error) {
             console.error('Download error:', error);
             showStatus('Download failed: ' + error.message, 'error');
