@@ -12,6 +12,8 @@ const util = require('util');
 const os = require('os');
 const execAsync = util.promisify(exec);
 
+const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -1012,6 +1014,7 @@ app.get('/api/preview-docx/:filename', async (req, res) => {
 });
 
 // Preview filled DOCX as PDF (using LibreOffice conversion)
+// Uses the same robust filling logic as /api/fill-docx
 app.post('/api/preview-filled-docx', async (req, res) => {
     try {
         const { templateName, jsonData } = req.body;
@@ -1033,18 +1036,31 @@ app.post('/api/preview-filled-docx', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
+        // Normalize keys: support both "[VAR]" and "VAR" formats
+        const normalizedData = normalizeDocxData(data);
+
         const filePath = path.join(__dirname, 'templates', templateName);
         const content = await fs.readFile(filePath);
         
-        // Load and fill the docx
-        const zip = new PizZip(content);
+        // Load the docx file
+        let zip = new PizZip(content);
+        
+        // Repair XML to fix Word's tag splitting issues (same as /api/fill-docx)
+        zip = repairDocxZip(zip);
+        
         const doc = new Docxtemplater(zip, {
             paragraphLoop: true,
             linebreaks: true,
-            delimiters: { start: '[', end: ']' }
+            // Use square bracket delimiters (same as /api/fill-docx)
+            delimiters: { start: '[', end: ']' },
+            nullGetter: function(part) {
+                if (!part.module) return '[' + part.value + ']';
+                if (part.module === 'loop') return [];
+                return '[' + part.value + ']';
+            }
         });
         
-        doc.render(data);
+        doc.render(normalizedData);
         
         // Generate filled DOCX buffer
         const filledDocxBuffer = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
@@ -1067,7 +1083,315 @@ app.post('/api/preview-filled-docx', async (req, res) => {
     }
 });
 
-// Scan DOCX file for [VARIABLE] placeholders
+// ============================================================================
+// ============================================================================
+// DOCX HANDLING - "TEXT MAPPING" SURGICAL QUOTE REMOVAL
+// ============================================================================
+// 
+// Word splits variables across multiple <w:t> nodes. This strategy uses DOM
+// parsing and text mapping to surgically remove quote characters from the
+// exact XML nodes that contain them.
+//
+// TEXT MAPPING STRATEGY:
+//   Step 1: BUILD THE MAP - Parse XML, extract all <w:t> nodes, track positions
+//   Step 2: FIND TARGETS - Search concatenated text for "[VAR]" patterns
+//   Step 3: SURGICAL DELETION - Mutate specific nodes to remove quote chars
+//   Step 4: SERIALIZE - Convert modified DOM back to XML string
+//
+// Only quoted variables are detected for filling:
+// - "[VAR_NAME]" → Detected, quotes surgically removed, variable preserved
+// - [PROPOSED]   → Ignored (no quotes), preserved as literal text
+// ============================================================================
+
+const WORDML_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+
+/**
+ * Build a text map from all <w:t> nodes in the document.
+ * Each entry tracks the node, its text, and its position in the full text.
+ * 
+ * @param {Document} doc - Parsed XML document
+ * @returns {{fullText: string, textMap: Array}} - Full text and position map
+ */
+function buildTextMap(doc) {
+    const textMap = [];
+    const wTElements = doc.getElementsByTagNameNS(WORDML_NS, 't');
+    
+    let fullText = '';
+    
+    for (let i = 0; i < wTElements.length; i++) {
+        const node = wTElements[i];
+        const text = node.textContent || '';
+        const startIndex = fullText.length;
+        fullText += text;
+        const endIndex = fullText.length;
+        
+        textMap.push({
+            node,
+            text,
+            startIndex,
+            endIndex
+        });
+    }
+    
+    return { fullText, textMap };
+}
+
+/**
+ * Find all quoted variables in the full text.
+ * Returns detailed info about each match including quote positions.
+ * 
+ * Pattern: "[VAR_NAME]" or "[VAR_NAME]" (curly quotes)
+ * 
+ * @param {string} fullText - Concatenated text from all <w:t> nodes
+ * @returns {Array} - Array of match objects with position info
+ */
+function findQuotedVariablesWithPositions(fullText) {
+    // Pattern captures: (openQuote) [ (varName) ] (closeQuote)
+    const pattern = /([""\u201C\u201D])(\[)([A-Za-z][A-Za-z0-9_]*)(\])([""\u201C\u201D])/g;
+    const matches = [];
+    let match;
+    
+    while ((match = pattern.exec(fullText)) !== null) {
+        const openQuote = match[1];
+        const openBracket = match[2];
+        const varName = match[3];
+        const closeBracket = match[4];
+        const closeQuote = match[5];
+        
+        // Calculate exact positions for each part
+        const openQuoteStart = match.index;
+        const openQuoteEnd = openQuoteStart + openQuote.length;
+        
+        const closeQuoteStart = openQuoteEnd + openBracket.length + varName.length + closeBracket.length;
+        const closeQuoteEnd = closeQuoteStart + closeQuote.length;
+        
+        matches.push({
+            varName: varName.toUpperCase(),
+            fullMatch: match[0],
+            openQuoteIndex: openQuoteStart,
+            closeQuoteIndex: closeQuoteStart,
+            // Store the actual quote characters for accurate deletion
+            openQuoteChar: openQuote,
+            closeQuoteChar: closeQuote
+        });
+    }
+    
+    return matches;
+}
+
+/**
+ * Find which text node contains a specific character index.
+ * Returns the node and the local offset within that node.
+ * 
+ * @param {Array} textMap - The text position map
+ * @param {number} charIndex - Index in the full concatenated text
+ * @returns {{node: Node, localOffset: number}|null} - Node and offset, or null
+ */
+function findNodeAtIndex(textMap, charIndex) {
+    for (const entry of textMap) {
+        if (charIndex >= entry.startIndex && charIndex < entry.endIndex) {
+            return {
+                node: entry.node,
+                localOffset: charIndex - entry.startIndex,
+                entry
+            };
+        }
+    }
+    return null;
+}
+
+/**
+ * Surgically remove a character from a text node at a specific position.
+ * Mutates the node's textContent directly.
+ * 
+ * @param {Node} node - The <w:t> XML node
+ * @param {number} localOffset - Position within the node's text
+ */
+function removeCharAtOffset(node, localOffset) {
+    const text = node.textContent || '';
+    if (localOffset >= 0 && localOffset < text.length) {
+        const newText = text.slice(0, localOffset) + text.slice(localOffset + 1);
+        node.textContent = newText;
+    }
+}
+
+/**
+ * Repair DOCX XML using the Text Mapping strategy.
+ * 
+ * 1. Parse XML into DOM
+ * 2. Build text map of all <w:t> nodes
+ * 3. Find quoted variables in concatenated text
+ * 4. Surgically delete quote characters from their specific nodes
+ * 5. Serialize DOM back to XML
+ * 
+ * @param {string} xmlContent - Raw XML content
+ * @returns {{repairedXml: string, variables: string[]}} - Repaired XML and variables
+ */
+function repairXmlContent(xmlContent) {
+    // Step 1: Parse XML into DOM
+    const doc = new DOMParser().parseFromString(xmlContent, 'text/xml');
+    
+    // Step 2: Build the text map
+    const { fullText, textMap } = buildTextMap(doc);
+    
+    // Step 3: Find quoted variables
+    const matches = findQuotedVariablesWithPositions(fullText);
+    
+    if (matches.length === 0) {
+        return { repairedXml: xmlContent, variables: [] };
+    }
+    
+    console.log(`[Text Map] Found ${matches.length} quoted variables: ${matches.map(m => m.varName).join(', ')}`);
+    
+    // Step 4: Surgically remove quotes
+    // IMPORTANT: Process in reverse order so indices remain valid!
+    // Sort matches by closeQuoteIndex descending, then openQuoteIndex descending
+    const sortedMatches = [...matches].sort((a, b) => b.closeQuoteIndex - a.closeQuoteIndex);
+    
+    const variables = new Set();
+    
+    for (const match of sortedMatches) {
+        variables.add(match.varName);
+        
+        // Remove closing quote first (higher index)
+        const closeNode = findNodeAtIndex(textMap, match.closeQuoteIndex);
+        if (closeNode) {
+            console.log(`[Text Map] Removing closing quote from node at index ${match.closeQuoteIndex} (local offset ${closeNode.localOffset})`);
+            removeCharAtOffset(closeNode.node, closeNode.localOffset);
+            // Update the text map entry
+            closeNode.entry.text = closeNode.node.textContent || '';
+        }
+        
+        // Remove opening quote (lower index - still valid since we haven't touched it yet)
+        const openNode = findNodeAtIndex(textMap, match.openQuoteIndex);
+        if (openNode) {
+            console.log(`[Text Map] Removing opening quote from node at index ${match.openQuoteIndex} (local offset ${openNode.localOffset})`);
+            removeCharAtOffset(openNode.node, openNode.localOffset);
+            // Update the text map entry
+            openNode.entry.text = openNode.node.textContent || '';
+        }
+    }
+    
+    // Step 5: Serialize DOM back to XML
+    const serializer = new XMLSerializer();
+    const repairedXml = serializer.serializeToString(doc);
+    
+    return {
+        repairedXml,
+        variables: Array.from(variables).sort()
+    };
+}
+
+/**
+ * Scan DOCX XML for quoted variables using text mapping.
+ * This extracts all text, concatenates it, and finds patterns.
+ * 
+ * @param {string} xmlContent - Raw XML content
+ * @returns {string[]} - Array of variable names found
+ */
+function scanXmlForVariables(xmlContent) {
+    const doc = new DOMParser().parseFromString(xmlContent, 'text/xml');
+    const { fullText } = buildTextMap(doc);
+    const matches = findQuotedVariablesWithPositions(fullText);
+    
+    // Extract unique variable names
+    const variables = new Set();
+    matches.forEach(m => variables.add(m.varName));
+    
+    return Array.from(variables).sort();
+}
+
+/**
+ * Apply text-mapping repair to all text-containing files in a DOCX zip
+ * 
+ * @param {PizZip} zip - The PizZip instance containing the DOCX
+ * @returns {PizZip} - Modified PizZip with repaired XML
+ */
+function repairDocxZip(zip) {
+    const xmlFiles = [
+        'word/document.xml',
+        'word/header1.xml',
+        'word/header2.xml',
+        'word/header3.xml',
+        'word/footer1.xml',
+        'word/footer2.xml',
+        'word/footer3.xml'
+    ];
+    
+    let totalVarsFound = 0;
+    let allVars = [];
+    
+    for (const fileName of xmlFiles) {
+        const file = zip.file(fileName);
+        if (!file) continue;
+        
+        const originalContent = file.asText();
+        const { repairedXml, variables } = repairXmlContent(originalContent);
+        
+        totalVarsFound += variables.length;
+        allVars = allVars.concat(variables);
+        
+        // Only update if changes were made
+        if (repairedXml !== originalContent) {
+            console.log(`[Text Map] Processed ${fileName} (${variables.length} vars: ${variables.join(', ')})`);
+            zip.file(fileName, repairedXml);
+        }
+    }
+    
+    console.log(`[Text Map] Total variables processed: ${totalVarsFound}`);
+    if (allVars.length > 0) {
+        console.log(`[Text Map] All variables: ${[...new Set(allVars)].join(', ')}`);
+    }
+    return zip;
+}
+
+/**
+ * Scan DOCX for variables using text-mapping extraction.
+ * 
+ * ONLY returns variables that are enclosed in quotes.
+ * Unquoted brackets like [PROPOSED] are intentionally ignored.
+ * 
+ * @param {Buffer} docxBuffer - The DOCX file content as a buffer
+ * @returns {string[]} - Array of unique variable names (without brackets)
+ */
+function scanDocxForVariables(docxBuffer) {
+    const zip = new PizZip(docxBuffer);
+    const allVariables = new Set();
+    
+    const xmlFiles = [
+        'word/document.xml',
+        'word/header1.xml',
+        'word/header2.xml',
+        'word/header3.xml',
+        'word/footer1.xml',
+        'word/footer2.xml',
+        'word/footer3.xml'
+    ];
+    
+    console.log(`[Scan] Starting text-mapping DOCX variable scan...`);
+    
+    for (const fileName of xmlFiles) {
+        const file = zip.file(fileName);
+        if (!file) continue;
+        
+        const xmlContent = file.asText();
+        
+        // Use text-mapping extraction to find quoted variables
+        const variables = scanXmlForVariables(xmlContent);
+        
+        if (variables.length > 0) {
+            console.log(`[Scan] ${fileName}: found ${variables.length} vars: ${variables.join(', ')}`);
+        }
+        
+        // Add all found variables to our set
+        variables.forEach(v => allVariables.add(v));
+    }
+    
+    const result = Array.from(allVariables).sort();
+    console.log(`[Scan] FINAL RESULT: ${result.length} quoted variables detected: ${result.join(', ')}`);
+    return result;
+}
+
 app.get('/api/scan-docx/:filename', async (req, res) => {
     try {
         const filename = req.params.filename;
@@ -1079,27 +1403,10 @@ app.get('/api/scan-docx/:filename', async (req, res) => {
         const filePath = path.join(__dirname, 'templates', filename);
         const content = await fs.readFile(filePath);
         
-        // Load the docx file using PizZip
-        const zip = new PizZip(content);
+        // Use strict scanning - ONLY finds quoted variables
+        const uniqueVars = scanDocxForVariables(content);
         
-        // Get the raw text content from word/document.xml
-        const documentXml = zip.file('word/document.xml');
-        if (!documentXml) {
-            return res.status(400).json({ error: 'Invalid DOCX file: missing document.xml' });
-        }
-        
-        const xmlContent = documentXml.asText();
-        
-        // Find all [VARIABLE] patterns using regex
-        // Match variables with 3+ chars like [DEFENDANT_NAME], [DATE_SIGNED]
-        // Ignores short checkboxes like [X] or [ ]
-        const variableRegex = /\[([A-Z0-9_]{3,})\]/g;
-        const matches = xmlContent.match(variableRegex) || [];
-        
-        // Get unique variable names (without brackets)
-        const uniqueVars = [...new Set(matches.map(m => m.slice(1, -1)))];
-        
-        console.log(`Scanned ${filename}: found ${uniqueVars.length} unique variables`);
+        console.log(`Scanned ${filename}: found ${uniqueVars.length} quoted variables`);
         
         res.json({ 
             success: true, 
@@ -1111,6 +1418,33 @@ app.get('/api/scan-docx/:filename', async (req, res) => {
         res.status(500).json({ error: 'Failed to scan DOCX: ' + error.message });
     }
 });
+
+/**
+ * Normalize JSON keys for Docxtemplater
+ * Accepts both "[VAR_NAME]" and "VAR_NAME" formats from JSON
+ * Maps to "VAR_NAME" format that Docxtemplater expects
+ * 
+ * @param {Object} data - The input JSON data
+ * @returns {Object} - Normalized data object with keys in "VAR_NAME" format (no brackets)
+ */
+function normalizeDocxData(data) {
+    const normalized = {};
+    
+    for (const [key, value] of Object.entries(data)) {
+        // Extract variable name without brackets
+        let varName;
+        if (key.startsWith('[') && key.endsWith(']')) {
+            varName = key.slice(1, -1);
+        } else {
+            varName = key;
+        }
+        
+        // Store in normalized format (without brackets)
+        normalized[varName] = value;
+    }
+    
+    return normalized;
+}
 
 // Fill DOCX with provided JSON data
 app.post('/api/fill-docx', async (req, res) => {
@@ -1134,21 +1468,46 @@ app.post('/api/fill-docx', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
+        // Normalize keys: support both "[VAR]" and "VAR" formats
+        const normalizedData = normalizeDocxData(data);
+        
         const filePath = path.join(__dirname, 'templates', templateName);
         const content = await fs.readFile(filePath);
         
         // Load the docx file using PizZip
-        const zip = new PizZip(content);
+        let zip = new PizZip(content);
         
-        // Initialize Docxtemplater with square bracket delimiters and data
+        // ============================================================
+        // CRUCIAL PRE-PROCESSING STEP
+        // ============================================================
+        // Run the STRICT repair: strips quotes from quoted variables ONLY
+        // - "[VAR]" becomes [VAR] (ready for Docxtemplater)
+        // - [PROPOSED] stays [PROPOSED] (no quotes, untouched)
+        zip = repairDocxZip(zip);
+        
+        // Initialize Docxtemplater with SQUARE BRACKET delimiters
         const doc = new Docxtemplater(zip, {
             paragraphLoop: true,
             linebreaks: true,
-            delimiters: { start: '[', end: ']' }
+            // Use square bracket delimiters to match [VAR_NAME] format
+            delimiters: { start: '[', end: ']' },
+            // nullGetter: Return the raw tag if variable is missing
+            // This preserves unquoted brackets like [PROPOSED] and [X]
+            // Since [PROPOSED] has no data, it will be returned as "[PROPOSED]"
+            nullGetter: function(part, scopeManager) {
+                if (!part.module) {
+                    // Return the original tag wrapped in brackets
+                    return '[' + part.value + ']';
+                }
+                if (part.module === 'loop') {
+                    return [];
+                }
+                return '[' + part.value + ']';
+            }
         });
         
-        // Render the document with data (replace all variables)
-        doc.render(data);
+        // Render the document with normalized data
+        doc.render(normalizedData);
         
         // Generate the filled document as a buffer
         const filledBuffer = doc.getZip().generate({
@@ -1159,12 +1518,16 @@ app.post('/api/fill-docx', async (req, res) => {
         // Return as base64 for preview/download
         const base64Doc = filledBuffer.toString('base64');
         
-        console.log(`Filled DOCX template: ${templateName}`);
+        // Count how many variables were actually filled
+        const filledCount = Object.keys(data).filter(k => data[k] && data[k] !== '').length;
+        
+        console.log(`Filled DOCX template: ${templateName} (${filledCount} variables with values)`);
         
         res.json({
             success: true,
             docxData: base64Doc,
-            filename: templateName.replace('.docx', '_filled.docx')
+            filename: templateName.replace('.docx', '_filled.docx'),
+            filledCount: filledCount
         });
     } catch (error) {
         console.error('Error filling DOCX:', error);
@@ -1628,6 +1991,29 @@ app.use((req, res, next) => {
     next();
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
+});
+
+// Graceful shutdown handling for Ctrl+C
+process.on('SIGINT', () => {
+    console.log('\n[Server] Received SIGINT (Ctrl+C). Shutting down gracefully...');
+    server.close(() => {
+        console.log('[Server] Closed all connections. Exiting.');
+        process.exit(0);
+    });
+    
+    // Force exit after 10 seconds if graceful shutdown fails
+    setTimeout(() => {
+        console.error('[Server] Forced shutdown after timeout');
+        process.exit(1);
+    }, 10000);
+});
+
+process.on('SIGTERM', () => {
+    console.log('\n[Server] Received SIGTERM. Shutting down gracefully...');
+    server.close(() => {
+        console.log('[Server] Closed all connections. Exiting.');
+        process.exit(0);
+    });
 });

@@ -57,6 +57,7 @@ SCHEMA
   "[PLAINTIFF_NAME]": "",
   "[DEFENDANT_NAME]": "",
   "[CASE_NUMBER]": "",
+  "[COMPLAINT_FILED]": "",
   "[DEBTOR1_NAME]": "",
   "[DEBTOR1_DL_LAST4]": "",
   "[IS_DEBTOR1_DL_UNKNOWN]": false,
