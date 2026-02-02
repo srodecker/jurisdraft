@@ -959,7 +959,7 @@ app.get('/api/templates', async (req, res) => {
     }
 });
 
-// Serve raw template files (for docx preview)
+// Serve raw template files (for docx preview and PDF inline viewing)
 app.get('/api/fetch-template/:filename', (req, res) => {
     const filename = req.params.filename;
     // Security: prevent path traversal
@@ -967,7 +967,13 @@ app.get('/api/fetch-template/:filename', (req, res) => {
         return res.status(400).json({ error: 'Invalid filename' });
     }
     const filePath = path.join(__dirname, 'templates', filename);
-    // Use sendFile with inline disposition to prevent browser download prompt
+    
+    // For PDFs, explicitly set headers to force inline display (prevent download prompt)
+    if (filename.toLowerCase().endsWith('.pdf')) {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    }
+    
     res.sendFile(filePath);
 });
 
