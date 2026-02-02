@@ -967,7 +967,8 @@ app.get('/api/fetch-template/:filename', (req, res) => {
         return res.status(400).json({ error: 'Invalid filename' });
     }
     const filePath = path.join(__dirname, 'templates', filename);
-    res.download(filePath); // This handles setting the correct headers automatically
+    // Use sendFile with inline disposition to prevent browser download prompt
+    res.sendFile(filePath);
 });
 
 async function convertDocxToPdf(docxBuffer) {
