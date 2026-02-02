@@ -513,6 +513,7 @@ async function processDynamicVariables(data) {
         data['[FIRM_NAME]'] = formattedFirmName;
         // Also create VAR_FIRM_FULL_NAME as title case version
         data['[VAR_FIRM_FULL_NAME]'] = formattedFirmName;
+        data['[VAR_FIRM_FULL_NAME_CAPITAL]'] = formattedFirmName.toUpperCase();
     }
     
     // 2. CREATE SPECIFIC ATTORNEY VARIABLES
@@ -527,6 +528,7 @@ async function processDynamicVariables(data) {
     if (attyName2) {
         const sbn2 = data['[ATTY_SBN2]'] || '';
         data['[VAR_ATTY2_NAME]'] = sbn2 ? `${attyName2}, SBN: ${sbn2}` : attyName2;
+        data['[VAR_CAPITAL_ATTY_NAME2]'] = attyName2.toUpperCase();
     }
     
     // 3. CREATE VAR_CITY_STATE_ZIP
@@ -673,6 +675,11 @@ async function processDynamicVariables(data) {
         if (firmFullAddr) {
             data['[VAR_FIRM_FULL_ADDR]'] = firmFullAddr;
         }
+        
+        // Also create VAR_FIRM_FULL_ADDR_NO_FIRM (address only, no firm name)
+        if (addressString) {
+            data['[VAR_FIRM_FULL_ADDR_NO_FIRM]'] = addressString;
+        }
     }
     
     // Handle VAR_DEFENDANT_WITH_DOES for SUM-100
@@ -687,7 +694,12 @@ async function processDynamicVariables(data) {
     
     // Handle VAR_DEFENDANT_NAME
     if (defendantName) {
-        data['[VAR_DEFENDANT_NAME_ET_AL]'] = `${defendantName}, et al.`;
+        let cleanName = defendantName
+            .replace(/,\s*(an individual|a corporation|a limited liability company|an LLC|a partnership|a sole proprietorship|etc\.?)$/i, '')
+            .trim();
+        data['[VAR_DEFENDANT_NAME]'] = cleanName;
+        data['[VAR_DEFENDANT_NAME_ET_AL]'] = `${cleanName}, et al.`;
+        data['[VAR_DEFENDANT_INDIVIDUAL]'] = `${cleanName}, an individual`;
         // Mirror to page 2
         data['[DEFENDANT_NAME_P2]'] = data['[VAR_DEFENDANT_NAME_ET_AL]'];
     }
@@ -701,6 +713,10 @@ async function processDynamicVariables(data) {
         
         const addressLine = `${defendantName}, an individual\n${debtorAddress}\n${debtorCity}, ${debtorState} ${debtorZipForAddr}`;
         data['[VAR_DEFENDANT_NAME_WITH_ADDRESS]'] = addressLine;
+        
+        // Also create version without ", an individual"
+        const addressLineNoIndividual = `${defendantName}\n${debtorAddress}\n${debtorCity}, ${debtorState} ${debtorZipForAddr}`;
+        data['[VAR_DEFENDANT_NAME_WITH_ADDRESS_NO_INDIVIDUAL]'] = addressLineNoIndividual;
         
         // Handle VAR_DEFENDANT_SERVICE_ADDRESS (same as above but without "an individual" and no newlines)
         // Add period after street suffixes if missing
@@ -835,13 +851,16 @@ async function processDynamicVariables(data) {
         if (amount <= 35000) {
             data['[IS_LIMITED]'] = true;
             data['[IS_UNLIMITED]'] = false;
+            data['[VAR_UNLIMITED_OR_LIMITED]'] = 'Limited Civil Case';
         } else {
             data['[IS_UNLIMITED]'] = true;
             data['[IS_LIMITED]'] = false;
+            data['[VAR_UNLIMITED_OR_LIMITED]'] = 'Unlimited Civil Case';
         }
     } else {
         data['[IS_LIMITED]'] = false;
         data['[IS_UNLIMITED]'] = false;
+        data['[VAR_UNLIMITED_OR_LIMITED]'] = '';
     }
     
     // Handle IS_BREACH_OF_CONTRACT_06
@@ -1468,6 +1487,15 @@ app.post('/api/fill-docx', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
+        // === INSERTED LOGIC START ===
+        // 1. Sanitize all values
+        data = sanitizeAllValues(data);
+
+        // 2. Process computed variables (e.g. VAR_ATTY_EMAIL, VAR_CITY_STATE_ZIP)
+        // This generates the combined fields needed for the template
+        data = await processDynamicVariables(data);
+        // === INSERTED LOGIC END ===
+
         // Normalize keys: support both "[VAR]" and "VAR" formats
         const normalizedData = normalizeDocxData(data);
         
@@ -1626,6 +1654,40 @@ app.post('/api/fill-pdf', async (req, res) => {
             name: field.getName(),
             type: field.constructor ? field.constructor.name : typeof field
         }));
+
+        // Strip "Rich Text" flag from fields to prevent pdf-lib crash on .save()
+        // Check both the field's own dictionary and each widget's dictionary
+        const { PDFName, PDFNumber } = require('pdf-lib');
+        fields.forEach(field => {
+            try {
+                // First, check the field's own acroField dictionary
+                const acroField = field.acroField;
+                if (acroField && acroField.dict) {
+                    const fieldDict = acroField.dict;
+                    if (fieldDict.has(PDFName.of('Ff'))) {
+                        const flags = fieldDict.get(PDFName.of('Ff')).asNumber();
+                        // Bitwise remove the 26th bit (0x2000000) - Rich Text flag
+                        fieldDict.set(PDFName.of('Ff'), PDFNumber.of(flags & ~0x2000000));
+                    }
+                }
+                
+                // Also check each widget's dictionary
+                const widgets = field.getWidgets();
+                widgets.forEach(widget => {
+                    const dict = widget.dict;
+                    // PDF spec: Bit 26 of the Ff (Field Flags) entry is for Rich Text
+                    // We want to ensure it is off so pdf-lib doesn't crash on .save()
+                    if (dict.has(PDFName.of('Ff'))) {
+                        const flags = dict.get(PDFName.of('Ff')).asNumber();
+                        // Bitwise remove the 26th bit (0x2000000)
+                        dict.set(PDFName.of('Ff'), PDFNumber.of(flags & ~0x2000000));
+                    }
+                });
+            } catch (e) {
+                // Skip fields that don't support this
+                console.log(`Could not strip Rich Text flag from field: ${e.message}`);
+            }
+        });
 
         // Build a lookup map for exact and case-insensitive names
         const fieldMap = {};

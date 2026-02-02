@@ -787,33 +787,67 @@
     });
 
     // Build form fields for DOCX variables
+    // MERGE STRATEGY: Preserve ALL existing data + add new template fields
     function buildDocxVariableForm(variables) {
         if (variables.length === 0) {
-            jsonInput.value = '{\n  // No variables found in this document\n}';
+            // No variables in this template - but still preserve existing data!
             showStatus('No fillable variables found in this document.', 'info');
             return;
         }
         
-        // Check if current JSON data has values we should preserve
+        // Step 1: Capture current data from the editor
         let existingData = {};
         try {
-            existingData = JSON.parse(jsonInput.value.trim());
+            const currentJson = jsonInput.value.trim();
+            if (currentJson && currentJson !== '{}') {
+                existingData = JSON.parse(currentJson);
+            }
         } catch (e) {
             // Ignore parse errors - start fresh
+            console.log('[Merge] Could not parse existing JSON, starting fresh');
         }
         
-        // Create a JSON object, preserving any existing values
-        const formData = {};
+        // Step 2: Create a scaffold with new template fields (empty values)
+        const newTemplateFields = {};
         variables.forEach(varName => {
-            // Check for existing value with or without brackets
-            const existingValue = existingData[varName] || existingData[`[${varName}]`] || '';
-            formData[varName] = existingValue;
+            newTemplateFields[varName] = '';
         });
         
-        jsonInput.value = JSON.stringify(formData, null, 2);
+        // Step 3: MERGE - New fields first, then overlay existing data
+        // This ensures: 
+        //   - All new template fields are present (with empty defaults)
+        //   - All existing data is preserved (overwrites empty defaults)
+        //   - Fields from previous templates that aren't in new template are KEPT
+        const mergedData = { ...newTemplateFields, ...existingData };
         
-        // Show tip about DOCX variables
-        showStatus(`Found ${variables.length} variables. Fill in values and click "Generate DOCX".`, 'info');
+        // Step 4: Also check for bracket-wrapped keys and merge those values
+        // (handles both "[VAR_NAME]" and "VAR_NAME" formats from extraction)
+        for (const key of Object.keys(existingData)) {
+            // If existing key has brackets, also set the non-bracketed version
+            if (key.startsWith('[') && key.endsWith(']')) {
+                const bareKey = key.slice(1, -1);
+                if (!mergedData[bareKey] || mergedData[bareKey] === '') {
+                    mergedData[bareKey] = existingData[key];
+                }
+            }
+            // If existing key has no brackets, check if bracketed version exists in template
+            else if (variables.includes(key) && !mergedData[key]) {
+                mergedData[key] = existingData[key];
+            }
+        }
+        
+        // Step 5: Update the editor with merged data
+        jsonInput.value = JSON.stringify(mergedData, null, 2);
+        
+        // Count how many template fields have values
+        const filledCount = variables.filter(v => mergedData[v] && mergedData[v] !== '').length;
+        
+        // Show status with preserved data count
+        if (filledCount > 0) {
+            showStatus(`Found ${variables.length} variables (${filledCount} pre-filled from existing data). Click "Generate DOCX".`, 'success');
+        } else {
+            showStatus(`Found ${variables.length} variables. Fill in values and click "Generate DOCX".`, 'info');
+        }
     }
 
     async function fillPDF() {
