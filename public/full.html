@@ -1031,9 +1031,21 @@
             const blob = base64ToBlob(currentPDFData, 'application/pdf');
             const url = URL.createObjectURL(blob);
 
+            // Determine filename based on template
+            const templateName = templateSelect.value || '';
+            let filename = 'JurisDraft_Filing.pdf';
+            
+            if (templateName.includes('CM-010')) {
+                filename = 'CCCS.pdf';
+            } else if (templateName.includes('SUM-100')) {
+                filename = 'Summons.pdf';
+            } else if (templateName.includes('LASC')) {
+                filename = 'LA Addendum.pdf';
+            }
+
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'JurisDraft_Filing.pdf';
+            a.download = filename;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1057,25 +1069,16 @@
             const blob = base64ToBlob(currentDocxData, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
             const url = URL.createObjectURL(blob);
 
-            // Generate a meaningful filename
+            // Determine filename based on template
+            const templateName = templateSelect.value || currentDocxTemplate || '';
             let filename = 'JurisDraft_Filing.docx';
-            if (currentDocxTemplate) {
-                filename = currentDocxTemplate.replace('.docx', '_filled.docx');
-            }
             
-            // Try to get case name from JSON for better filename
-            try {
-                const jsonData = JSON.parse(jsonInput.value.trim());
-                const caseName = jsonData['VAR_CASE_NAME'] || jsonData['[VAR_CASE_NAME]'] || '';
-                if (caseName) {
-                    // Sanitize the case name for filename use
-                    const safeName = caseName.replace(/[^a-zA-Z0-9\s]/g, '').trim().substring(0, 50);
-                    if (safeName) {
-                        filename = safeName.replace(/\s+/g, '_') + '_filled.docx';
-                    }
-                }
-            } catch (e) {
-                // Ignore JSON parse errors
+            if (templateName.includes('CM-010')) {
+                filename = 'CCCS.docx';
+            } else if (templateName.includes('SUM-100')) {
+                filename = 'Summons.docx';
+            } else if (templateName.includes('LASC')) {
+                filename = 'LA Addendum.docx';
             }
 
             const a = document.createElement('a');
