@@ -494,6 +494,12 @@ async function processDynamicVariables(data) {
         data['[DEBTOR1_CITY]'] = toTitleCase(data['[DEBTOR1_CITY]']);
     }
     
+    // --- FIX: Remove Double Esq ---
+    // If the name is "John Doe, Esq." or "John Doe Esq", strip the suffix so we can add it cleanly later.
+    let rawAttorneyName = data['[ATTORNEY_NAME]'] || '';
+    // Regex removes ", Esq." or " Esq" (case insensitive) from the end of the string
+    data['[ATTORNEY_NAME]'] = rawAttorneyName.replace(/,?\s*Esq\.?$/i, '').trim();
+
     const attyName = data['[ATTY_NAME]'] || '';
     const firmName = data['[FIRM_NAME]'] || '';
     
@@ -1594,6 +1600,31 @@ app.post('/api/fill-pdf', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
+        // ============================================================
+        // SANITIZATION BLOCK: Anti-Double-Esq
+        // ============================================================
+        // The AI sometimes puts "Esq." in the name. We MUST remove it 
+        // because our template logic adds it back manually.
+        const keysToClean = ['[ATTY_NAME]', '[ATTY_NAME2]', 'ATTY_NAME', 'ATTY_NAME2'];
+        
+        keysToClean.forEach(key => {
+            if (data[key] && typeof data[key] === 'string') {
+                // 1. Trim whitespace
+                let val = data[key].trim();
+                // 2. Remove ", Esq." or " Esq" or ", Esq" or "Esq." at the end
+                // Regex explanation:
+                // (,\s*)?   -> Optional comma and whitespace
+                // Esq       -> Literal "Esq" (case insensitive flag 'i')
+                // \.?       -> Optional dot
+                // $         -> End of string
+                val = val.replace(/(,\s*)?Esq\.?$/i, '');
+                
+                // 3. Final trim to remove any trailing comma left behind
+                data[key] = val.trim().replace(/,$/, '');
+            }
+        });
+        // ============================================================
+
         // Sanitize all values (replace curly quotes with standard quotes)
         data = sanitizeAllValues(data);
 
@@ -1756,7 +1787,143 @@ app.post('/api/fill-pdf', async (req, res) => {
                 console.log(`Error filling field '${field.getName()}' (json key '${key}'): ${err.message}`);
             }
         }
+
+        // ============================================================
+        // SIGNATURE DEBUGGING BLOCK
+        // ============================================================
+        console.log('--- STARTING SIGNATURE LOGIC ---');
         
+        // 1. Check for the Image
+        const signaturePath = path.join(__dirname, 'signatures', 'SDG.jpg');
+        console.log(`Checking for signature at: ${signaturePath}`);
+        
+        let signatureImage = null;
+        try {
+            await fs.access(signaturePath);
+            console.log('SUCCESS: Signature file found.');
+            const sigBytes = await fs.readFile(signaturePath);
+            signatureImage = await pdfDoc.embedJpg(sigBytes);
+            console.log('SUCCESS: Signature image embedded.');
+        } catch (e) {
+            console.error(`FAILURE: Signature file NOT found or could not be loaded. Error: ${e.message}`);
+        }
+
+        // 2. Check for the Field
+        if (signatureImage) {
+            console.log('Looking for field: [ATTORNEY_SIGNATURE]...');
+            let sigField = null;
+            try { sigField = form.getField('[ATTORNEY_SIGNATURE]'); } catch (_) {}
+            
+            if (!sigField) {
+                console.log('...Not found with brackets. Trying without: ATTORNEY_SIGNATURE...');
+                try { sigField = form.getField('ATTORNEY_SIGNATURE'); } catch (_) {}
+            }
+
+            if (sigField) {
+                console.log('SUCCESS: Signature field found!');
+                
+                try {
+                    const widgets = sigField.acroField.getWidgets();
+                    const widget = widgets[0];
+                    const rect = widget.getRectangle();
+                    console.log(`Target Box: x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}`);
+                    
+                    // ============================================================
+                    // 1. FAIL-PROOF PAGE LOOKUP (Dictionary Match)
+                    // ============================================================
+                    let pageIndex = -1;
+                    const pages = pdfDoc.getPages();
+                    
+                    // We need the underlying dictionary of our widget to compare identity
+                    const widgetDict = widget.dict;
+                    
+                    console.log('Starting Dictionary-Based Page Search...');
+                    
+                    pageLoop:
+                    for (let i = 0; i < pages.length; i++) {
+                        const page = pages[i];
+                        
+                        // Get the raw 'Annots' array from the page
+                        const annots = page.node.Annots && page.node.Annots();
+                        
+                        if (annots) {
+                            const size = annots.size();
+                            for (let j = 0; j < size; j++) {
+                                // Get the raw annotation reference or object
+                                const annotRef = annots.get(j);
+                                
+                                // Lookup the actual dictionary object (dereference it)
+                                const annotDict = pdfDoc.context.lookup(annotRef);
+                                
+                                // EXACT OBJECT COMPARISON
+                                if (annotDict === widgetDict) {
+                                    pageIndex = i;
+                                    console.log(`MATCH FOUND: Widget belongs to Page ${i + 1} (Index ${i})`);
+                                    break pageLoop;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (pageIndex === -1) {
+                        console.error('CRITICAL FAILURE: Could not find widget on ANY page even with dictionary match. Defaulting to 0.');
+                        pageIndex = 0;
+                    }
+                    
+                    // ============================================================
+                    // 2. DRAWING LOGIC
+                    // ============================================================
+                    console.log(`Drawing signature on Page Index: ${pageIndex}`);
+                    const page = pages[pageIndex];
+                    
+                    // Scale & Position
+                    const { width: imgW, height: imgH } = signatureImage.scale(1);
+                    
+                    // 1. Make it Bigger (Target Height 65 instead of 45)
+                    let targetH = rect.height;
+                    if (targetH < 20) targetH = 65; // Increased size
+                    
+                    // Calculate scale to fit width/height
+                    const scaleX = rect.width / imgW;
+                    const scaleY = targetH / imgH; // Use targetH instead of rect.height for the Y scale
+                    
+                    // Use the smaller scale to ensure it fits, but prioritize our new target height
+                    // We allow it to slightly overflow the tiny box height if needed (since it's a signature)
+                    const scale = Math.min(scaleX, scaleY);
+                    
+                    const drawW = imgW * scale;
+                    const drawH = imgH * scale;
+                    
+                    // 2. Move to Left (Left Align instead of Center)
+                    const drawX = rect.x; // Left align
+                    // const drawX = rect.x + (rect.width - drawW) / 2; // OLD: Center
+                    
+                    // Keep Vertical Center
+                    const drawY = rect.y + (rect.height - drawH) / 2;
+                    
+                    page.drawImage(signatureImage, {
+                        x: drawX,
+                        y: drawY,
+                        width: drawW,
+                        height: drawH
+                    });
+                    console.log(`SUCCESS: Image drawn at (${drawX}, ${drawY}) size (${drawW}x${drawH})`);
+                    
+                    // Clear the text field so it doesn't show through
+                    sigField.setText('');
+                    
+                } catch (drawErr) {
+                    console.error('FAILURE: Error during drawing calculation:', drawErr);
+                }
+            } else {
+                console.log('Signature field [ATTORNEY_SIGNATURE] not found in this PDF.');
+            }
+        } else {
+            console.log('Skipping stamping because image was not loaded.');
+        }
+        console.log('--- END SIGNATURE LOGIC ---');
+        // ============================================================
+
         // Save the filled PDF (keep form fields editable - don't flatten)
         let pdfBytes;
         try {

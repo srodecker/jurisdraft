@@ -800,21 +800,51 @@
     }
 
     async function fillPDF() {
+        // ============================================================
+        // SCRAPE AND UPDATE LOOP: Capture manual edits from form fields
+        // ============================================================
+        let jsonData = {};
+        try {
+            const currentJson = jsonInput.value.trim();
+            if (currentJson) {
+                jsonData = JSON.parse(currentJson);
+            }
+        } catch (e) {
+            // If JSON is invalid, start with empty object
+            jsonData = {};
+        }
+
+        // --- SCRAper LOOP: FORCE ADD ---
+        // 1. Loop through EVERY text input and textarea
+        document.querySelectorAll('input[type="text"], textarea').forEach(input => {
+            // 2. If the input has an ID (e.g., id="[DEFENDANT_NAME]"), GRAB IT.
+            if (input.id) {
+                // FORCE ADD: Even if this key didn't exist before, create it now.
+                jsonData[input.id] = input.value;
+            }
+        });
+        
+        console.log('Final JSON sending to server:', jsonData);
+        
+        // Update JSON string with scraped values
+        const jsonDataString = JSON.stringify(jsonData, null, 2);
+        jsonInput.value = jsonDataString; // Update the textarea so user can see the changes
+        // ============================================================
+
         const templateName = templateSelect.value;
-        const jsonData = jsonInput.value.trim();
 
         if (!templateName) {
             showStatus('Please select a template', 'error');
             return;
         }
 
-        if (!jsonData) {
+        if (!jsonDataString || jsonDataString === '{}') {
             showStatus('Please enter JSON data', 'error');
             return;
         }
 
         try {
-            JSON.parse(jsonData);
+            JSON.parse(jsonDataString);
         } catch (e) {
             showStatus('Invalid JSON format: ' + e.message, 'error');
             return;
@@ -824,9 +854,9 @@
         const isDocx = templateName.toLowerCase().endsWith('.docx');
         
         if (isDocx) {
-            await fillDOCX(templateName, jsonData);
+            await fillDOCX(templateName, jsonDataString);
         } else {
-            await fillPDFInternal(templateName, jsonData);
+            await fillPDFInternal(templateName, jsonDataString);
         }
     }
 
