@@ -136,17 +136,21 @@
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display: inline-block; vertical-align: -2px; margin-right: 6px;">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
                     </svg>
-                    JSON Data
+                    Case Data
                 </h2>
-                <textarea id="jsonInput" class="form-textarea code" rows="10" placeholder='Enter JSON data, e.g.:
+                <div class="flex justify-end mb-2">
+                    <button id="toggleRawJsonBtn" class="text-xs text-blue-400 underline" style="background:none;border:none;color:var(--accent-color);font-size:11px;cursor:pointer;text-decoration:underline;padding:0;">Switch to Raw JSON</button>
+                </div>
+                <div id="easyFormContainer" class="easy-form-scroll"></div>
+                <textarea id="jsonInput" class="form-textarea code" rows="10" style="display:none" placeholder='Enter JSON data, e.g.:
 {
   "firstName": "John",
   "lastName": "Doe",
   "email": "john@example.com"
 }'></textarea>
 
-                <div class="tip-box mt-3">
-                    <strong>Tip:</strong> Field names in your JSON should match the form field names in the PDF.
+                <div id="tipBox" class="tip-box mt-3">
+                    <strong>Tip:</strong> Upload documents to auto-extract case data, or switch to Raw JSON for manual entry.
                 </div>
 
                 <button id="checkCourtBtn" class="btn btn-secondary btn-full mt-3">
@@ -348,6 +352,64 @@
             background: rgba(59, 130, 246, 0.15);
             color: #3b82f6;
         }
+        /* ===== Easy Form Styles ===== */
+        .easy-form-scroll {
+            max-height: 60vh;
+            overflow-y: auto;
+            padding-right: 5px;
+            margin-bottom: 10px;
+        }
+        .easy-form-scroll::-webkit-scrollbar {
+            width: 5px;
+        }
+        .easy-form-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .easy-form-scroll::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 3px;
+        }
+        .easy-field-group {
+            margin-bottom: 12px;
+        }
+        .easy-field-label {
+            display: block;
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .easy-field-input {
+            width: 100%;
+            padding: 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+            box-sizing: border-box;
+            transition: border-color 0.15s ease;
+        }
+        .easy-field-input:focus {
+            border-color: var(--accent-color);
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+        }
+        .easy-form-empty {
+            text-align: center;
+            color: var(--text-secondary);
+            padding: 30px 10px;
+            font-size: 13px;
+        }
+        .easy-form-empty svg {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 10px;
+            opacity: 0.4;
+        }
+
         /* DOCX Container Styles */
         #docx-container {
             width: 100%;
@@ -590,7 +652,18 @@
 
                 if (jsonString) {
                     jsonInput.value = JSON.stringify(jsonString, null, 2);
-                    showExtractStatus('Data extracted successfully! Now select a template and generate PDF.', 'success');
+                    
+                    // Render the Easy Form with extracted data
+                    renderEasyForm(jsonString);
+                    // Ensure Easy Form is visible (not raw JSON mode)
+                    if (isRawJsonMode) {
+                        isRawJsonMode = false;
+                        easyFormContainer.style.display = '';
+                        jsonInput.style.display = 'none';
+                        toggleRawJsonBtn.textContent = 'Switch to Raw JSON';
+                    }
+                    
+                    showExtractStatus('Data extracted successfully! Review and edit fields below, then generate PDF.', 'success');
                     updateWorkflowStep(2);
 
                     uploadBtn.disabled = false;
@@ -818,7 +891,7 @@
         // 1. Loop through EVERY text input and textarea
         document.querySelectorAll('input[type="text"], textarea').forEach(input => {
             // 2. If the input has an ID (e.g., id="[DEFENDANT_NAME]"), GRAB IT.
-            if (input.id) {
+            if (input.id && input.id !== 'jsonInput') {
                 // FORCE ADD: Even if this key didn't exist before, create it now.
                 jsonData[input.id] = input.value;
             }
@@ -1189,6 +1262,109 @@
     autoFillBtn.addEventListener('click', autoFillPDF);
 
     loadTemplates();
+
+    // ===== EASY FORM MODE =====
+    const easyFormContainer = document.getElementById('easyFormContainer');
+    const toggleRawJsonBtn = document.getElementById('toggleRawJsonBtn');
+    const tipBox = document.getElementById('tipBox');
+    let isRawJsonMode = false;
+
+    function renderEasyForm(jsonData) {
+        easyFormContainer.innerHTML = '';
+
+        const keys = Object.keys(jsonData);
+        if (keys.length === 0) {
+            easyFormContainer.innerHTML = `
+                <div class="easy-form-empty">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                    </svg>
+                    <p>Upload documents to extract case data</p>
+                </div>`;
+            return;
+        }
+
+        keys.forEach(key => {
+            const group = document.createElement('div');
+            group.className = 'easy-field-group';
+
+            // Strip brackets for label: [ATTY_NAME] -> ATTY_NAME
+            let labelText = key.replace(/^\[/, '').replace(/\]$/, '');
+            // Convert underscores to spaces for readability
+            let displayLabel = labelText.replace(/_/g, ' ');
+
+            const label = document.createElement('label');
+            label.className = 'easy-field-label';
+            label.textContent = displayLabel;
+            label.setAttribute('for', 'easy_' + labelText);
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'easy-field-input';
+            input.id = 'easy_' + labelText;
+            input.dataset.jsonKey = key;
+            input.value = (jsonData[key] !== null && jsonData[key] !== undefined) ? String(jsonData[key]) : '';
+            input.placeholder = displayLabel;
+
+            // Real-time sync: when user types, update the hidden jsonInput
+            input.addEventListener('input', () => {
+                syncEasyFormToJson();
+            });
+
+            group.appendChild(label);
+            group.appendChild(input);
+            easyFormContainer.appendChild(group);
+        });
+    }
+
+    // Sync all easy form fields back to the hidden jsonInput textarea
+    function syncEasyFormToJson() {
+        let currentData = {};
+        try {
+            currentData = JSON.parse(jsonInput.value.trim());
+        } catch (e) {
+            currentData = {};
+        }
+
+        easyFormContainer.querySelectorAll('.easy-field-input').forEach(input => {
+            const key = input.dataset.jsonKey;
+            if (key) {
+                currentData[key] = input.value;
+            }
+        });
+
+        jsonInput.value = JSON.stringify(currentData, null, 2);
+    }
+
+    // Toggle between Easy Form and Raw JSON modes
+    toggleRawJsonBtn.addEventListener('click', () => {
+        isRawJsonMode = !isRawJsonMode;
+
+        if (isRawJsonMode) {
+            // Switch to Raw JSON
+            easyFormContainer.style.display = 'none';
+            jsonInput.style.display = '';
+            toggleRawJsonBtn.textContent = 'Switch to Easy Form';
+            tipBox.innerHTML = '<strong>Tip:</strong> Editing raw JSON. Switch back to Easy Form for a friendlier view.';
+        } else {
+            // Switch to Easy Form - re-render from current JSON
+            jsonInput.style.display = 'none';
+            easyFormContainer.style.display = '';
+            toggleRawJsonBtn.textContent = 'Switch to Raw JSON';
+            tipBox.innerHTML = '<strong>Tip:</strong> Upload documents to auto-extract case data, or switch to Raw JSON for manual entry.';
+
+            // Re-render easy form from current JSON
+            try {
+                const data = JSON.parse(jsonInput.value.trim());
+                renderEasyForm(data);
+            } catch (e) {
+                easyFormContainer.innerHTML = '<div class="easy-form-empty"><p>Invalid JSON in editor. Fix it in Raw JSON mode.</p></div>';
+            }
+        }
+    });
+
+    // Show empty state on initial load
+    renderEasyForm({});
 
     // ===== COURT LOOKUP FUNCTIONALITY =====
     const checkCourtBtn = document.getElementById('checkCourtBtn');
