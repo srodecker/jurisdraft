@@ -15,6 +15,12 @@ const execAsync = util.promisify(exec);
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 const crypto = require('crypto');
 
+// ============================================================
+// CENTRAL CONFIGURATION — loaded from firm-config.json
+// Edit firm-config.json to change attorney/firm details.
+// ============================================================
+const firmConfig = require('./firm-config.json');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -29,7 +35,7 @@ let courtInfoCache = null;
 // Tokens are stored in memory (cleared on server restart)
 // ============================================================
 const activeSessions = new Set();
-const PRIVATE_TEMPLATES = ['POS_Def_Package.docx'];
+const PRIVATE_TEMPLATES = firmConfig.privateTemplates || ['POS_Def_Package.docx'];
 
 function isAuthenticated(req) {
     const authHeader = req.headers['authorization'] || '';
@@ -354,6 +360,23 @@ app.post('/api/logout', (req, res) => {
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (token) activeSessions.delete(token);
     res.json({ ok: true });
+});
+
+// ============================================================
+// FIRM CONFIG ENDPOINT — returns firm-config.json contents
+// Only returns sensitive data (signature, private templates)
+// to authenticated sessions.
+// ============================================================
+app.get('/api/firm-config', (req, res) => {
+    const safeConfig = {
+        firm: firmConfig.firm,
+        attorneys: firmConfig.attorneys
+    };
+    if (isAuthenticated(req)) {
+        safeConfig.signature = firmConfig.signature;
+        safeConfig.privateTemplates = firmConfig.privateTemplates;
+    }
+    res.json(safeConfig);
 });
 
 app.get('/api/auth-status', (req, res) => {
@@ -1847,7 +1870,7 @@ app.post('/api/fill-pdf', async (req, res) => {
         let signatureImage = null;
         if (isAuthenticated(req)) {
             // 1. Check for the Image
-            const signaturePath = path.join(__dirname, 'signatures', 'SDG.jpg');
+            const signaturePath = path.join(__dirname, 'signatures', firmConfig.signature.file);
             console.log(`Checking for signature at: ${signaturePath}`);
             try {
                 await fs.access(signaturePath);
@@ -2045,12 +2068,11 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         return res.status(400).json({ error: 'Template name is required' });
     }
 
-    const dummyData = {
+    const dummyData = firmConfig.autoFillTestData || {
         "[ATTY_NAME]": "Auto Test Attorney",
         "[DEFENDANT_NAME]": "Auto Test Debtor",
         "[CASE_NUMBER]": "AUTO-TEST-123",
         "[JUDGMENT_TOTAL_AMOUNT]": "12345.67",
-        // Add more realistic fields as needed
         "[ADDRESS]": "123 Auto Lane",
         "[CITY]": "Autoville",
         "[STATE]": "CA",
