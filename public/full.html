@@ -1573,40 +1573,53 @@
     </script>
 
     <!-- ============================================================
-         ATTORNEY LOGIN MODAL
+         AUTH MODAL — Login / Sign Up / Guest
          ============================================================ -->
     <div id="authModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;" onclick="if(event.target===this)closeAuthModal()">
-        <div style="background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border-color,#333);border-radius:12px;padding:28px 32px;width:320px;box-shadow:0 24px 64px rgba(0,0,0,0.5);">
-            <h3 id="authModalTitle" style="margin:0 0 6px;font-size:15px;font-weight:600;color:var(--text-primary,#e2e8f0);">Attorney Login</h3>
-            <p id="authModalSub" style="margin:0 0 18px;font-size:12px;color:var(--text-secondary,#94a3b8);">Enter your password to unlock private templates and signature.</p>
+        <div style="background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border-color,#333);border-radius:12px;padding:28px 32px;width:340px;box-shadow:0 24px 64px rgba(0,0,0,0.5);">
+            <h3 id="authModalTitle" style="margin:0 0 6px;font-size:15px;font-weight:600;color:var(--text-primary,#e2e8f0);">Sign In</h3>
+            <p id="authModalSub" style="margin:0 0 18px;font-size:12px;color:var(--text-secondary,#94a3b8);">Log in to load your profile, templates, and signature.</p>
+
+            <input id="authUsernameInput" type="text" placeholder="Username" autocomplete="username"
+                style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:14px;outline:none;margin-bottom:8px;" />
             <input id="authPasswordInput" type="password" placeholder="Password" autocomplete="current-password"
                 style="width:100%;box-sizing:border-box;padding:9px 12px;border-radius:8px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:14px;outline:none;margin-bottom:10px;"
                 onkeydown="if(event.key==='Enter')submitAuthModal()" />
             <div id="authModalError" style="color:#f87171;font-size:12px;margin-bottom:10px;display:none;"></div>
-            <div style="display:flex;gap:8px;justify-content:flex-end;">
+
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:12px;">
                 <button onclick="closeAuthModal()" style="padding:8px 16px;border-radius:8px;border:1px solid var(--border-color,#444);background:none;color:var(--text-secondary,#94a3b8);cursor:pointer;font-size:13px;">Cancel</button>
-                <button id="authSubmitBtn" onclick="submitAuthModal()" style="padding:8px 16px;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-size:13px;font-weight:500;">Unlock</button>
+                <button id="authSubmitBtn" onclick="submitAuthModal()" style="padding:8px 16px;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-size:13px;font-weight:500;">Sign In</button>
+            </div>
+
+            <div style="border-top:1px solid var(--border-color,#333);padding-top:12px;display:flex;justify-content:space-between;align-items:center;">
+                <button id="authToggleBtn" onclick="toggleAuthMode()" style="background:none;border:none;color:#6366f1;cursor:pointer;font-size:12px;padding:0;">Need an account? Sign up</button>
+                <button onclick="closeAuthModal()" style="background:none;border:none;color:var(--text-secondary,#94a3b8);cursor:pointer;font-size:12px;padding:0;">Continue as guest</button>
             </div>
         </div>
     </div>
 
     <script>
     // ============================================================
-    // ATTORNEY AUTH — client-side session management
+    // PROFILE AUTH — client-side session management
     // ============================================================
     (function() {
-        const TOKEN_KEY = 'jd_attorney_token';
+        const TOKEN_KEY = 'jd_token';
+        const USER_KEY  = 'jd_username';
+        let authMode = 'login'; // 'login' or 'signup'
 
-        function getToken() { return localStorage.getItem(TOKEN_KEY); }
-        function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
-        function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+        function getToken()    { return localStorage.getItem(TOKEN_KEY); }
+        function setToken(t)   { localStorage.setItem(TOKEN_KEY, t); }
+        function clearToken()  { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); }
+        function getUsername()  { return localStorage.getItem(USER_KEY) || ''; }
+        function setUsername(u) { localStorage.setItem(USER_KEY, u); }
 
         function authHeaders() {
             const t = getToken();
             return t ? { 'Authorization': 'Bearer ' + t } : {};
         }
 
-        // Expose globally so existing fetch calls can include auth headers
+        // Expose globally
         window.getAuthHeaders = authHeaders;
 
         async function checkAndApplyAuthState() {
@@ -1616,6 +1629,7 @@
                 const res = await fetch('/api/auth-status', { headers: authHeaders() });
                 const data = await res.json();
                 if (data.authenticated) {
+                    if (data.username) setUsername(data.username);
                     applyAuthUI(true);
                 } else {
                     clearToken();
@@ -1630,29 +1644,56 @@
             const label = document.getElementById('authLabel');
             if (!btn) return;
             if (isAuth) {
-                label.textContent = 'Attorney';
-                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 11V7a4 4 0 118 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z"/>';
+                const name = getUsername();
+                label.textContent = name || 'Profile';
+                icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>';
                 btn.style.color = '#6366f1';
-                btn.title = 'Logged in as attorney — click to log out';
-                btn.onclick = logoutAttorney;
+                btn.title = 'Signed in as ' + name + ' — click to sign out';
+                btn.onclick = logoutUser;
             } else {
-                label.textContent = 'Login';
+                label.textContent = 'Sign In';
                 icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>';
                 btn.style.color = '';
-                btn.title = 'Attorney login';
+                btn.title = 'Sign in or create a profile';
                 btn.onclick = openAuthModal;
             }
-            // Reload templates to show/hide private ones
             if (typeof loadTemplates === 'function') loadTemplates();
         }
 
+        window.toggleAuthMode = function() {
+            const titleEl = document.getElementById('authModalTitle');
+            const subEl   = document.getElementById('authModalSub');
+            const submitBtn = document.getElementById('authSubmitBtn');
+            const toggleBtn = document.getElementById('authToggleBtn');
+            const errEl = document.getElementById('authModalError');
+            errEl.style.display = 'none';
+
+            if (authMode === 'login') {
+                authMode = 'signup';
+                titleEl.textContent = 'Create Account';
+                subEl.textContent = 'Create a profile to save your firm info, templates, and signature.';
+                submitBtn.textContent = 'Create Account';
+                toggleBtn.textContent = 'Already have an account? Sign in';
+            } else {
+                authMode = 'login';
+                titleEl.textContent = 'Sign In';
+                subEl.textContent = 'Log in to load your profile, templates, and signature.';
+                submitBtn.textContent = 'Sign In';
+                toggleBtn.textContent = 'Need an account? Sign up';
+            }
+        };
+
         window.openAuthModal = function() {
+            authMode = 'login';
             document.getElementById('authModal').style.display = 'flex';
+            document.getElementById('authUsernameInput').value = '';
             document.getElementById('authPasswordInput').value = '';
             document.getElementById('authModalError').style.display = 'none';
-            document.getElementById('authModalTitle').textContent = 'Attorney Login';
-            document.getElementById('authModalSub').textContent = 'Enter your password to unlock private templates and signature.';
-            setTimeout(() => document.getElementById('authPasswordInput').focus(), 50);
+            document.getElementById('authModalTitle').textContent = 'Sign In';
+            document.getElementById('authModalSub').textContent = 'Log in to load your profile, templates, and signature.';
+            document.getElementById('authSubmitBtn').textContent = 'Sign In';
+            document.getElementById('authToggleBtn').textContent = 'Need an account? Sign up';
+            setTimeout(() => document.getElementById('authUsernameInput').focus(), 50);
         };
 
         window.closeAuthModal = function() {
@@ -1660,26 +1701,34 @@
         };
 
         window.submitAuthModal = async function() {
-            const pw = document.getElementById('authPasswordInput').value;
+            const user = document.getElementById('authUsernameInput').value.trim();
+            const pw   = document.getElementById('authPasswordInput').value;
             const errEl = document.getElementById('authModalError');
-            const btn = document.getElementById('authSubmitBtn');
-            if (!pw) { errEl.textContent = 'Please enter a password.'; errEl.style.display = 'block'; return; }
+            const btn   = document.getElementById('authSubmitBtn');
+
+            if (!user) { errEl.textContent = 'Please enter a username.'; errEl.style.display = 'block'; return; }
+            if (!pw)   { errEl.textContent = 'Please enter a password.'; errEl.style.display = 'block'; return; }
+
             btn.disabled = true;
-            btn.textContent = 'Checking...';
+            btn.textContent = authMode === 'signup' ? 'Creating...' : 'Signing in...';
             errEl.style.display = 'none';
+
+            const endpoint = authMode === 'signup' ? '/api/signup' : '/api/login';
+
             try {
-                const res = await fetch('/api/login', {
+                const res = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password: pw })
+                    body: JSON.stringify({ username: user, password: pw })
                 });
                 const data = await res.json();
                 if (res.ok && data.token) {
                     setToken(data.token);
+                    setUsername(data.username || user);
                     closeAuthModal();
                     applyAuthUI(true);
                 } else {
-                    errEl.textContent = data.error || 'Login failed.';
+                    errEl.textContent = data.error || 'Something went wrong.';
                     errEl.style.display = 'block';
                 }
             } catch (_) {
@@ -1687,11 +1736,11 @@
                 errEl.style.display = 'block';
             } finally {
                 btn.disabled = false;
-                btn.textContent = 'Unlock';
+                btn.textContent = authMode === 'signup' ? 'Create Account' : 'Sign In';
             }
         };
 
-        async function logoutAttorney() {
+        async function logoutUser() {
             const token = getToken();
             if (token) {
                 try { await fetch('/api/logout', { method: 'POST', headers: authHeaders() }); } catch (_) {}

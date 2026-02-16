@@ -15,32 +15,74 @@ const execAsync = util.promisify(exec);
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 const crypto = require('crypto');
 
-// ============================================================
-// CENTRAL CONFIGURATION — loaded from firm-config.json
-// Edit firm-config.json to change attorney/firm details.
-// ============================================================
-const firmConfig = require('./firm-config.json');
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const PROFILES_DIR = path.join(__dirname, 'profiles');
 
 // Cache for CSV data to avoid reading files on every request
 let jurisdictionRulesCache = null;
 let courtInfoCache = null;
 
 // ============================================================
-// ATTORNEY AUTH — simple single-user session
-// Password is set via ATTORNEY_PASSWORD in .env
-// Tokens are stored in memory (cleared on server restart)
+// PROFILE-BASED AUTH
+// Profiles stored as JSON files in /profiles/{username}.json
+// Tokens map to { username, profile } in memory
 // ============================================================
-const activeSessions = new Set();
-const PRIVATE_TEMPLATES = firmConfig.privateTemplates || ['POS_Def_Package.docx'];
+const activeSessions = new Map(); // token → { username, profile }
 
-function isAuthenticated(req) {
+// Ensure profiles directory exists on startup
+(async () => {
+    try { await fs.mkdir(PROFILES_DIR, { recursive: true }); } catch (_) {}
+})();
+
+// Helper: hash a password with scrypt
+function hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    return `${salt}:${hash}`;
+}
+
+// Helper: verify a password against a stored hash
+function verifyPassword(password, stored) {
+    const [salt, hash] = stored.split(':');
+    const test = crypto.scryptSync(password, salt, 64).toString('hex');
+    return test === hash;
+}
+
+// Helper: read a profile from disk
+async function readProfile(username) {
+    const filePath = path.join(PROFILES_DIR, `${username}.json`);
+    const raw = await fs.readFile(filePath, 'utf-8');
+    return JSON.parse(raw);
+}
+
+// Helper: write a profile to disk
+async function writeProfile(username, profile) {
+    const filePath = path.join(PROFILES_DIR, `${username}.json`);
+    await fs.writeFile(filePath, JSON.stringify(profile, null, 2));
+}
+
+// Returns the session object { username, profile } or null
+function getSession(req) {
     const authHeader = req.headers['authorization'] || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    return token && activeSessions.has(token);
+    if (token && activeSessions.has(token)) return activeSessions.get(token);
+    return null;
+}
+
+// Backwards-compatible: returns true/false
+function isAuthenticated(req) {
+    return !!getSession(req);
+}
+
+// Get private templates for the current user's profile (or default)
+function getPrivateTemplates(req) {
+    const session = getSession(req);
+    if (session && session.profile && session.profile.privateTemplates) {
+        return session.profile.privateTemplates;
+    }
+    return ['POS_Def_Package.docx'];
 }
 
 /**
@@ -339,20 +381,61 @@ const extractRouter = require('./routes/extract');
 app.use('/api', extractRouter);
 
 // ============================================================
-// AUTH ENDPOINTS
+// AUTH ENDPOINTS — profile-based
 // ============================================================
-app.post('/api/login', (req, res) => {
-    const { password } = req.body;
-    const expected = process.env.ATTORNEY_PASSWORD;
-    if (!expected) {
-        return res.status(503).json({ error: 'Attorney mode is not configured on this server.' });
+app.post('/api/signup', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password are required.' });
     }
-    if (!password || password !== expected) {
-        return res.status(401).json({ error: 'Invalid password.' });
+    // Sanitize username: alphanumeric, dashes, underscores only
+    const clean = username.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    if (clean.length < 2 || clean.length > 30) {
+        return res.status(400).json({ error: 'Username must be 2-30 characters (letters, numbers, dashes).' });
     }
+    if (password.length < 4) {
+        return res.status(400).json({ error: 'Password must be at least 4 characters.' });
+    }
+    // Check if profile already exists
+    try {
+        await fs.access(path.join(PROFILES_DIR, `${clean}.json`));
+        return res.status(409).json({ error: 'Username already taken.' });
+    } catch (_) { /* doesn't exist — good */ }
+
+    const profile = {
+        username: clean,
+        passwordHash: hashPassword(password),
+        createdAt: new Date().toISOString(),
+        firm: { name: '', address: '', city: '', state: '', zip: '', phone: '', fax: '' },
+        attorneys: [{ role: 'partner', name: '', sbn: '', email: '' }],
+        signature: { file: '' },
+        privateTemplates: []
+    };
+    await writeProfile(clean, profile);
+
+    // Auto-login after signup
     const token = crypto.randomBytes(32).toString('hex');
-    activeSessions.add(token);
-    res.json({ token });
+    activeSessions.set(token, { username: clean, profile });
+    res.json({ token, username: clean });
+});
+
+app.post('/api/login', async (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password are required.' });
+    }
+    const clean = username.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    try {
+        const profile = await readProfile(clean);
+        if (!verifyPassword(password, profile.passwordHash)) {
+            return res.status(401).json({ error: 'Invalid username or password.' });
+        }
+        const token = crypto.randomBytes(32).toString('hex');
+        activeSessions.set(token, { username: clean, profile });
+        res.json({ token, username: clean });
+    } catch (_) {
+        return res.status(401).json({ error: 'Invalid username or password.' });
+    }
 });
 
 app.post('/api/logout', (req, res) => {
@@ -363,24 +446,40 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ============================================================
-// FIRM CONFIG ENDPOINT — returns firm-config.json contents
-// Only returns sensitive data (signature, private templates)
-// to authenticated sessions.
+// PROFILE ENDPOINTS
 // ============================================================
-app.get('/api/firm-config', (req, res) => {
-    const safeConfig = {
-        firm: firmConfig.firm,
-        attorneys: firmConfig.attorneys
-    };
-    if (isAuthenticated(req)) {
-        safeConfig.signature = firmConfig.signature;
-        safeConfig.privateTemplates = firmConfig.privateTemplates;
-    }
-    res.json(safeConfig);
+app.get('/api/profile', (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: 'Not logged in.' });
+    // Return profile without passwordHash
+    const { passwordHash, ...safe } = session.profile;
+    res.json(safe);
+});
+
+app.put('/api/profile', async (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: 'Not logged in.' });
+    const updates = req.body;
+    // Merge updates into profile (don't allow overwriting username or passwordHash)
+    const profile = { ...session.profile };
+    if (updates.firm) profile.firm = { ...profile.firm, ...updates.firm };
+    if (updates.attorneys) profile.attorneys = updates.attorneys;
+    if (updates.signature) profile.signature = { ...profile.signature, ...updates.signature };
+    if (updates.privateTemplates) profile.privateTemplates = updates.privateTemplates;
+    // Save to disk and update session
+    await writeProfile(session.username, profile);
+    session.profile = profile;
+    const { passwordHash, ...safe } = profile;
+    res.json(safe);
 });
 
 app.get('/api/auth-status', (req, res) => {
-    res.json({ authenticated: isAuthenticated(req) });
+    const session = getSession(req);
+    if (session) {
+        res.json({ authenticated: true, username: session.username });
+    } else {
+        res.json({ authenticated: false });
+    }
 });
 
 // Store the current filled PDF in memory for preview and download
@@ -1017,15 +1116,16 @@ app.get('/api/court-lookup', async (req, res) => {
 });
 
 // Get list of available PDF and DOCX templates
-// Private templates (e.g. POS_Def_Package.docx) are only visible when authenticated
+// Private templates are only visible when authenticated
 app.get('/api/templates', async (req, res) => {
     try {
         const auth = isAuthenticated(req);
+        const privates = getPrivateTemplates(req);
         const files = await fs.readdir(path.join(__dirname, 'templates'));
         const templateFiles = files.filter(file => {
             const ext = file.toLowerCase();
             if (!ext.endsWith('.pdf') && !ext.endsWith('.docx')) return false;
-            if (!auth && PRIVATE_TEMPLATES.includes(file)) return false;
+            if (!auth && privates.includes(file)) return false;
             return true;
         });
         res.json({ templates: templateFiles, authenticated: auth });
@@ -1043,7 +1143,7 @@ app.get('/api/fetch-template/:filename', (req, res) => {
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
-    if (PRIVATE_TEMPLATES.includes(filename) && !isAuthenticated(req)) {
+    if (getPrivateTemplates(req).includes(filename) && !isAuthenticated(req)) {
         return res.status(403).json({ error: 'Authentication required to access this template.' });
     }
     const filePath = path.join(__dirname, 'templates', filename);
@@ -1868,11 +1968,14 @@ app.post('/api/fill-pdf', async (req, res) => {
         console.log('--- STARTING SIGNATURE LOGIC ---');
 
         let signatureImage = null;
-        if (isAuthenticated(req)) {
-            // 1. Check for the Image
-            const signaturePath = path.join(__dirname, 'signatures', firmConfig.signature.file);
-            console.log(`Checking for signature at: ${signaturePath}`);
+        const session = getSession(req);
+        if (session) {
+            // 1. Check for the Image — use profile's signature file
+            const sigFile = (session.profile.signature && session.profile.signature.file) || '';
+            const signaturePath = sigFile ? path.join(__dirname, 'signatures', sigFile) : '';
+            console.log(`Checking for signature at: ${signaturePath || '(none configured)'}`);
             try {
+                if (!sigFile) throw new Error('No signature file configured in profile');
                 await fs.access(signaturePath);
                 console.log('SUCCESS: Signature file found.');
                 const sigBytes = await fs.readFile(signaturePath);
@@ -2068,7 +2171,7 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         return res.status(400).json({ error: 'Template name is required' });
     }
 
-    const dummyData = firmConfig.autoFillTestData || {
+    const dummyData = {
         "[ATTY_NAME]": "Auto Test Attorney",
         "[DEFENDANT_NAME]": "Auto Test Debtor",
         "[CASE_NUMBER]": "AUTO-TEST-123",
