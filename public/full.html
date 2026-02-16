@@ -53,12 +53,26 @@
                     </div>
                 </a>
                 <div class="header-actions">
-                    <button id="authBtn" onclick="openAuthModal()" title="Attorney login" style="background:none;border:none;cursor:pointer;padding:4px 6px;border-radius:6px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;font-size:12px;">
-                        <svg id="authIcon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-                        </svg>
-                        <span id="authLabel">Login</span>
-                    </button>
+                    <div style="position:relative;">
+                        <button id="authBtn" onclick="openAuthModal()" title="Sign in or create a profile" style="background:none;border:none;cursor:pointer;padding:4px 6px;border-radius:6px;color:var(--text-secondary);display:flex;align-items:center;gap:4px;font-size:12px;">
+                            <svg id="authIcon" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                            </svg>
+                            <span id="authLabel">Login</span>
+                        </button>
+                        <!-- Dropdown shown when logged in -->
+                        <div id="authDropdown" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border-color,#333);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.4);min-width:160px;z-index:1000;overflow:hidden;">
+                            <button onclick="openProfileSettings()" style="display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;background:none;border:none;color:var(--text-primary,#e2e8f0);cursor:pointer;font-size:13px;text-align:left;" onmouseover="this.style.background='var(--bg-tertiary,#2a2a3e)'" onmouseout="this.style.background='none'">
+                                <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+                                Profile Settings
+                            </button>
+                            <div style="height:1px;background:var(--border-color,#333);margin:0 10px;"></div>
+                            <button onclick="logoutUser()" style="display:flex;align-items:center;gap:8px;width:100%;padding:10px 14px;background:none;border:none;color:#f87171;cursor:pointer;font-size:13px;text-align:left;" onmouseover="this.style.background='var(--bg-tertiary,#2a2a3e)'" onmouseout="this.style.background='none'">
+                                <svg width="13" height="13" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+                                Sign Out
+                            </button>
+                        </div>
+                    </div>
                     <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
                         <svg class="sun-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
@@ -1642,20 +1656,25 @@
             const btn = document.getElementById('authBtn');
             const icon = document.getElementById('authIcon');
             const label = document.getElementById('authLabel');
+            const dropdown = document.getElementById('authDropdown');
             if (!btn) return;
             if (isAuth) {
                 const name = getUsername();
                 label.textContent = name || 'Profile';
                 icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>';
                 btn.style.color = '#6366f1';
-                btn.title = 'Signed in as ' + name + ' — click to sign out';
-                btn.onclick = logoutUser;
+                btn.title = 'Signed in as ' + name;
+                btn.onclick = function(e) {
+                    e.stopPropagation();
+                    dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+                };
             } else {
-                label.textContent = 'Sign In';
+                label.textContent = 'Login';
                 icon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>';
                 btn.style.color = '';
                 btn.title = 'Sign in or create a profile';
                 btn.onclick = openAuthModal;
+                if (dropdown) dropdown.style.display = 'none';
             }
             if (typeof loadTemplates === 'function') loadTemplates();
         }
@@ -1740,18 +1759,198 @@
             }
         };
 
-        async function logoutUser() {
+        window.logoutUser = async function() {
             const token = getToken();
             if (token) {
                 try { await fetch('/api/logout', { method: 'POST', headers: authHeaders() }); } catch (_) {}
             }
             clearToken();
+            document.getElementById('authDropdown').style.display = 'none';
             applyAuthUI(false);
-        }
+        };
+
+        // Close dropdown if clicking outside
+        document.addEventListener('click', function(e) {
+            const dropdown = document.getElementById('authDropdown');
+            const btn = document.getElementById('authBtn');
+            if (dropdown && !dropdown.contains(e.target) && !btn.contains(e.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
 
         // Run on page load
         checkAndApplyAuthState();
     })();
+    </script>
+
+    <!-- ============================================================
+         PROFILE SETTINGS MODAL
+         ============================================================ -->
+    <div id="profileModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);align-items:center;justify-content:center;" onclick="if(event.target===this)closeProfileSettings()">
+        <div style="background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border-color,#333);border-radius:12px;padding:28px 32px;width:480px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,0.5);">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <h3 style="margin:0;font-size:15px;font-weight:600;color:var(--text-primary,#e2e8f0);">Profile Settings</h3>
+                <button onclick="closeProfileSettings()" style="background:none;border:none;color:var(--text-secondary,#94a3b8);cursor:pointer;font-size:18px;line-height:1;">×</button>
+            </div>
+
+            <!-- Firm Info -->
+            <div style="margin-bottom:20px;">
+                <div style="font-size:11px;font-weight:600;color:#6366f1;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">Law Firm</div>
+                <input id="ps-firm-name" type="text" placeholder="Firm Name" style="width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;margin-bottom:7px;" />
+                <input id="ps-firm-address" type="text" placeholder="Street Address" style="width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;margin-bottom:7px;" />
+                <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:7px;margin-bottom:7px;">
+                    <input id="ps-firm-city"  type="text" placeholder="City"  style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                    <input id="ps-firm-state" type="text" placeholder="State" style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                    <input id="ps-firm-zip"   type="text" placeholder="ZIP"   style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;">
+                    <input id="ps-firm-phone" type="text" placeholder="Phone" style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                    <input id="ps-firm-fax"   type="text" placeholder="Fax"   style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                </div>
+            </div>
+
+            <!-- Attorney 1 -->
+            <div style="margin-bottom:20px;">
+                <div style="font-size:11px;font-weight:600;color:#6366f1;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">Attorney (Partner)</div>
+                <input id="ps-atty1-name"  type="text" placeholder="Full Name (no Esq.)" style="width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;margin-bottom:7px;" />
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;">
+                    <input id="ps-atty1-sbn"   type="text" placeholder="State Bar Number" style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                    <input id="ps-atty1-email" type="email" placeholder="Email" style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                </div>
+            </div>
+
+            <!-- Attorney 2 -->
+            <div style="margin-bottom:20px;">
+                <div style="font-size:11px;font-weight:600;color:#6366f1;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">Attorney (Associate) <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-secondary,#94a3b8);font-size:11px;">— optional</span></div>
+                <input id="ps-atty2-name"  type="text" placeholder="Full Name (no Esq.)" style="width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;margin-bottom:7px;" />
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;">
+                    <input id="ps-atty2-sbn"   type="text" placeholder="State Bar Number" style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                    <input id="ps-atty2-email" type="email" placeholder="Email" style="padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+                </div>
+            </div>
+
+            <!-- Signature & Private Templates -->
+            <div style="margin-bottom:20px;">
+                <div style="font-size:11px;font-weight:600;color:#6366f1;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px;">Signature & Private Templates</div>
+                <input id="ps-sig-file" type="text" placeholder="Signature filename (e.g. SDG.jpg)" style="width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;margin-bottom:7px;" />
+                <p style="margin:0 0 7px;font-size:11px;color:var(--text-secondary,#94a3b8);">File must be in the <code style="background:var(--bg-primary,#13131f);padding:1px 4px;border-radius:3px;">Signatures/</code> folder on the server.</p>
+                <input id="ps-private-templates" type="text" placeholder="Private templates (comma-separated, e.g. POS_Def_Package.docx)" style="width:100%;box-sizing:border-box;padding:8px 11px;border-radius:7px;border:1px solid var(--border-color,#444);background:var(--bg-primary,#13131f);color:var(--text-primary,#e2e8f0);font-size:13px;outline:none;" />
+            </div>
+
+            <div id="profileSaveStatus" style="font-size:12px;margin-bottom:10px;display:none;"></div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button onclick="closeProfileSettings()" style="padding:8px 16px;border-radius:8px;border:1px solid var(--border-color,#444);background:none;color:var(--text-secondary,#94a3b8);cursor:pointer;font-size:13px;">Cancel</button>
+                <button id="profileSaveBtn" onclick="saveProfileSettings()" style="padding:8px 18px;border-radius:8px;border:none;background:#6366f1;color:#fff;cursor:pointer;font-size:13px;font-weight:500;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // ============================================================
+    // PROFILE SETTINGS
+    // ============================================================
+    window.openProfileSettings = async function() {
+        document.getElementById('authDropdown').style.display = 'none';
+        document.getElementById('profileSaveStatus').style.display = 'none';
+        document.getElementById('profileModal').style.display = 'flex';
+
+        // Load current profile data
+        try {
+            const res = await fetch('/api/profile', { headers: window.getAuthHeaders() });
+            if (!res.ok) return;
+            const p = await res.json();
+            const f = p.firm || {};
+            const a1 = (p.attorneys && p.attorneys[0]) || {};
+            const a2 = (p.attorneys && p.attorneys[1]) || {};
+
+            document.getElementById('ps-firm-name').value    = f.name    || '';
+            document.getElementById('ps-firm-address').value = f.address || '';
+            document.getElementById('ps-firm-city').value    = f.city    || '';
+            document.getElementById('ps-firm-state').value   = f.state   || '';
+            document.getElementById('ps-firm-zip').value     = f.zip     || '';
+            document.getElementById('ps-firm-phone').value   = f.phone   || '';
+            document.getElementById('ps-firm-fax').value     = f.fax     || '';
+
+            document.getElementById('ps-atty1-name').value  = a1.name  || '';
+            document.getElementById('ps-atty1-sbn').value   = a1.sbn   || '';
+            document.getElementById('ps-atty1-email').value = a1.email || '';
+
+            document.getElementById('ps-atty2-name').value  = a2.name  || '';
+            document.getElementById('ps-atty2-sbn').value   = a2.sbn   || '';
+            document.getElementById('ps-atty2-email').value = a2.email || '';
+
+            document.getElementById('ps-sig-file').value = (p.signature && p.signature.file) || '';
+            document.getElementById('ps-private-templates').value = (p.privateTemplates || []).join(', ');
+        } catch (_) {}
+    };
+
+    window.closeProfileSettings = function() {
+        document.getElementById('profileModal').style.display = 'none';
+    };
+
+    window.saveProfileSettings = async function() {
+        const btn = document.getElementById('profileSaveBtn');
+        const status = document.getElementById('profileSaveStatus');
+        btn.disabled = true;
+        btn.textContent = 'Saving...';
+        status.style.display = 'none';
+
+        const attorneys = [];
+        const a1name = document.getElementById('ps-atty1-name').value.trim();
+        if (a1name || document.getElementById('ps-atty1-sbn').value.trim()) {
+            attorneys.push({ role: 'partner', name: a1name, sbn: document.getElementById('ps-atty1-sbn').value.trim(), email: document.getElementById('ps-atty1-email').value.trim() });
+        }
+        const a2name = document.getElementById('ps-atty2-name').value.trim();
+        if (a2name || document.getElementById('ps-atty2-sbn').value.trim()) {
+            attorneys.push({ role: 'associate', name: a2name, sbn: document.getElementById('ps-atty2-sbn').value.trim(), email: document.getElementById('ps-atty2-email').value.trim() });
+        }
+
+        const privateTemplates = document.getElementById('ps-private-templates').value
+            .split(',').map(s => s.trim()).filter(Boolean);
+
+        const payload = {
+            firm: {
+                name:    document.getElementById('ps-firm-name').value.trim(),
+                address: document.getElementById('ps-firm-address').value.trim(),
+                city:    document.getElementById('ps-firm-city').value.trim(),
+                state:   document.getElementById('ps-firm-state').value.trim(),
+                zip:     document.getElementById('ps-firm-zip').value.trim(),
+                phone:   document.getElementById('ps-firm-phone').value.trim(),
+                fax:     document.getElementById('ps-firm-fax').value.trim()
+            },
+            attorneys,
+            signature: { file: document.getElementById('ps-sig-file').value.trim() },
+            privateTemplates
+        };
+
+        try {
+            const res = await fetch('/api/profile', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json', ...window.getAuthHeaders() },
+                body: JSON.stringify(payload)
+            });
+            if (res.ok) {
+                status.textContent = 'Saved!';
+                status.style.color = '#4ade80';
+                status.style.display = 'block';
+                // Reload templates in case private list changed
+                if (typeof loadTemplates === 'function') loadTemplates();
+                setTimeout(() => closeProfileSettings(), 800);
+            } else {
+                const d = await res.json();
+                status.textContent = d.error || 'Save failed.';
+                status.style.color = '#f87171';
+                status.style.display = 'block';
+            }
+        } catch (_) {
+            status.textContent = 'Network error.';
+            status.style.color = '#f87171';
+            status.style.display = 'block';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save';
+        }
+    };
     </script>
 </body>
 </html>

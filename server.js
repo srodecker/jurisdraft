@@ -85,6 +85,37 @@ function getPrivateTemplates(req) {
     return ['POS_Def_Package.docx'];
 }
 
+// Inject profile attorney/firm data into a data map.
+// Profile values override extracted values for firm/attorney fields —
+// the user's own firm info is authoritative, not extracted text.
+function injectProfileData(data, session) {
+    if (!session || !session.profile) return data;
+    const p = session.profile;
+    const result = { ...data };
+    if (p.firm) {
+        if (p.firm.name)    result['[FIRM_NAME]']    = p.firm.name;
+        if (p.firm.address) result['[FIRM_ADDRESS]'] = p.firm.address;
+        if (p.firm.city)    result['[FIRM_CITY]']    = p.firm.city;
+        if (p.firm.state)   result['[FIRM_STATE]']   = p.firm.state;
+        if (p.firm.zip)     result['[FIRM_ZIP]']     = p.firm.zip;
+        if (p.firm.phone)   result['[FIRM_PHONE]']   = p.firm.phone;
+        if (p.firm.fax)     result['[FIRM_FAX]']     = p.firm.fax;
+    }
+    if (p.attorneys && p.attorneys.length > 0) {
+        const a1 = p.attorneys[0];
+        if (a1.name)  result['[ATTY_NAME]']   = a1.name;
+        if (a1.sbn)   result['[ATTY_SBN]']    = a1.sbn;
+        if (a1.email) result['[ATTY_EMAIL]']   = a1.email;
+    }
+    if (p.attorneys && p.attorneys.length > 1) {
+        const a2 = p.attorneys[1];
+        if (a2.name)  result['[ATTY_NAME2]']  = a2.name;
+        if (a2.sbn)   result['[ATTY_SBN2]']   = a2.sbn;
+        if (a2.email) result['[ATTY_EMAIL2]']  = a2.email;
+    }
+    return result;
+}
+
 /**
  * Parse CSV content into an array of objects, handling quoted fields
  * @param {string} csvContent - The CSV file content
@@ -1242,15 +1273,18 @@ app.post('/api/preview-filled-docx', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
+        // Inject profile attorney/firm data (logged-in user's own firm info)
+        data = injectProfileData(data, getSession(req));
+
         // Normalize keys: support both "[VAR]" and "VAR" formats
         const normalizedData = normalizeDocxData(data);
 
         const filePath = path.join(__dirname, 'templates', templateName);
         const content = await fs.readFile(filePath);
-        
+
         // Load the docx file
         let zip = new PizZip(content);
-        
+
         // Repair XML to fix Word's tag splitting issues (same as /api/fill-docx)
         zip = repairDocxZip(zip);
         
@@ -1675,6 +1709,9 @@ app.post('/api/fill-docx', async (req, res) => {
         }
 
         // === INSERTED LOGIC START ===
+        // 0. Inject profile attorney/firm data (logged-in user's own firm info)
+        data = injectProfileData(data, getSession(req));
+
         // 1. Sanitize all values
         data = sanitizeAllValues(data);
 
@@ -1798,6 +1835,9 @@ app.post('/api/fill-pdf', async (req, res) => {
             }
         });
         // ============================================================
+
+        // Inject profile attorney/firm data (logged-in user's own firm info)
+        data = injectProfileData(data, getSession(req));
 
         // Sanitize all values (replace curly quotes with standard quotes)
         data = sanitizeAllValues(data);
