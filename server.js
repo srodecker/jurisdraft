@@ -13,6 +13,7 @@ const os = require('os');
 const execAsync = util.promisify(exec);
 
 const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,6 +22,20 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 // Cache for CSV data to avoid reading files on every request
 let jurisdictionRulesCache = null;
 let courtInfoCache = null;
+
+// ============================================================
+// ATTORNEY AUTH — simple single-user session
+// Password is set via ATTORNEY_PASSWORD in .env
+// Tokens are stored in memory (cleared on server restart)
+// ============================================================
+const activeSessions = new Set();
+const PRIVATE_TEMPLATES = ['POS_Def_Package.docx'];
+
+function isAuthenticated(req) {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    return token && activeSessions.has(token);
+}
 
 /**
  * Parse CSV content into an array of objects, handling quoted fields
@@ -316,6 +331,34 @@ app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 // Mount external routers
 const extractRouter = require('./routes/extract');
 app.use('/api', extractRouter);
+
+// ============================================================
+// AUTH ENDPOINTS
+// ============================================================
+app.post('/api/login', (req, res) => {
+    const { password } = req.body;
+    const expected = process.env.ATTORNEY_PASSWORD;
+    if (!expected) {
+        return res.status(503).json({ error: 'Attorney mode is not configured on this server.' });
+    }
+    if (!password || password !== expected) {
+        return res.status(401).json({ error: 'Invalid password.' });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    activeSessions.add(token);
+    res.json({ token });
+});
+
+app.post('/api/logout', (req, res) => {
+    const authHeader = req.headers['authorization'] || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (token) activeSessions.delete(token);
+    res.json({ ok: true });
+});
+
+app.get('/api/auth-status', (req, res) => {
+    res.json({ authenticated: isAuthenticated(req) });
+});
 
 // Store the current filled PDF in memory for preview and download
 // NOTE: This is a simple in-memory storage suitable for single-user development/testing.
@@ -951,14 +994,18 @@ app.get('/api/court-lookup', async (req, res) => {
 });
 
 // Get list of available PDF and DOCX templates
+// Private templates (e.g. POS_Def_Package.docx) are only visible when authenticated
 app.get('/api/templates', async (req, res) => {
     try {
+        const auth = isAuthenticated(req);
         const files = await fs.readdir(path.join(__dirname, 'templates'));
         const templateFiles = files.filter(file => {
             const ext = file.toLowerCase();
-            return ext.endsWith('.pdf') || ext.endsWith('.docx');
+            if (!ext.endsWith('.pdf') && !ext.endsWith('.docx')) return false;
+            if (!auth && PRIVATE_TEMPLATES.includes(file)) return false;
+            return true;
         });
-        res.json({ templates: templateFiles });
+        res.json({ templates: templateFiles, authenticated: auth });
     } catch (error) {
         console.error('Error reading templates:', error);
         res.status(500).json({ error: 'Failed to read templates' });
@@ -966,20 +1013,24 @@ app.get('/api/templates', async (req, res) => {
 });
 
 // Serve raw template files (for docx preview and PDF inline viewing)
+// Private templates require authentication
 app.get('/api/fetch-template/:filename', (req, res) => {
     const filename = req.params.filename;
     // Security: prevent path traversal
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
+    if (PRIVATE_TEMPLATES.includes(filename) && !isAuthenticated(req)) {
+        return res.status(403).json({ error: 'Authentication required to access this template.' });
+    }
     const filePath = path.join(__dirname, 'templates', filename);
-    
+
     // For PDFs, explicitly set headers to force inline display (prevent download prompt)
     if (filename.toLowerCase().endsWith('.pdf')) {
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
     }
-    
+
     res.sendFile(filePath);
 });
 
@@ -1789,23 +1840,26 @@ app.post('/api/fill-pdf', async (req, res) => {
         }
 
         // ============================================================
-        // SIGNATURE DEBUGGING BLOCK
+        // SIGNATURE BLOCK — only runs for authenticated attorney sessions
         // ============================================================
         console.log('--- STARTING SIGNATURE LOGIC ---');
-        
-        // 1. Check for the Image
-        const signaturePath = path.join(__dirname, 'signatures', 'SDG.jpg');
-        console.log(`Checking for signature at: ${signaturePath}`);
-        
+
         let signatureImage = null;
-        try {
-            await fs.access(signaturePath);
-            console.log('SUCCESS: Signature file found.');
-            const sigBytes = await fs.readFile(signaturePath);
-            signatureImage = await pdfDoc.embedJpg(sigBytes);
-            console.log('SUCCESS: Signature image embedded.');
-        } catch (e) {
-            console.error(`FAILURE: Signature file NOT found or could not be loaded. Error: ${e.message}`);
+        if (isAuthenticated(req)) {
+            // 1. Check for the Image
+            const signaturePath = path.join(__dirname, 'signatures', 'SDG.jpg');
+            console.log(`Checking for signature at: ${signaturePath}`);
+            try {
+                await fs.access(signaturePath);
+                console.log('SUCCESS: Signature file found.');
+                const sigBytes = await fs.readFile(signaturePath);
+                signatureImage = await pdfDoc.embedJpg(sigBytes);
+                console.log('SUCCESS: Signature image embedded.');
+            } catch (e) {
+                console.error(`FAILURE: Signature file NOT found or could not be loaded. Error: ${e.message}`);
+            }
+        } else {
+            console.log('Signature skipped — unauthenticated request.');
         }
 
         // 2. Check for the Field
