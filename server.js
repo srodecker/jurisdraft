@@ -86,32 +86,34 @@ function getPrivateTemplates(req) {
 }
 
 // Inject profile attorney/firm data into a data map.
-// Profile values override extracted values for firm/attorney fields —
-// the user's own firm info is authoritative, not extracted text.
+// Only fills fields that are MISSING or EMPTY from extraction —
+// extraction always wins; profile is just the fallback for blanks.
 function injectProfileData(data, session) {
     if (!session || !session.profile) return data;
     const p = session.profile;
     const result = { ...data };
+    const empty = (v) => !v || String(v).trim() === '';
+
     if (p.firm) {
-        if (p.firm.name)    result['[FIRM_NAME]']    = p.firm.name;
-        if (p.firm.address) result['[FIRM_ADDRESS]'] = p.firm.address;
-        if (p.firm.city)    result['[FIRM_CITY]']    = p.firm.city;
-        if (p.firm.state)   result['[FIRM_STATE]']   = p.firm.state;
-        if (p.firm.zip)     result['[FIRM_ZIP]']     = p.firm.zip;
-        if (p.firm.phone)   result['[FIRM_PHONE]']   = p.firm.phone;
-        if (p.firm.fax)     result['[FIRM_FAX]']     = p.firm.fax;
+        if (p.firm.name    && empty(result['[FIRM_NAME]']))    result['[FIRM_NAME]']    = p.firm.name;
+        if (p.firm.address && empty(result['[FIRM_ADDRESS]'])) result['[FIRM_ADDRESS]'] = p.firm.address;
+        if (p.firm.city    && empty(result['[FIRM_CITY]']))    result['[FIRM_CITY]']    = p.firm.city;
+        if (p.firm.state   && empty(result['[FIRM_STATE]']))   result['[FIRM_STATE]']   = p.firm.state;
+        if (p.firm.zip     && empty(result['[FIRM_ZIP]']))     result['[FIRM_ZIP]']     = p.firm.zip;
+        if (p.firm.phone   && empty(result['[FIRM_PHONE]']))   result['[FIRM_PHONE]']   = p.firm.phone;
+        if (p.firm.fax     && empty(result['[FIRM_FAX]']))     result['[FIRM_FAX]']     = p.firm.fax;
     }
     if (p.attorneys && p.attorneys.length > 0) {
         const a1 = p.attorneys[0];
-        if (a1.name)  result['[ATTY_NAME]']   = a1.name;
-        if (a1.sbn)   result['[ATTY_SBN]']    = a1.sbn;
-        if (a1.email) result['[ATTY_EMAIL]']   = a1.email;
+        if (a1.name  && empty(result['[ATTY_NAME]']))  result['[ATTY_NAME]']  = a1.name;
+        if (a1.sbn   && empty(result['[ATTY_SBN]']))   result['[ATTY_SBN]']   = a1.sbn;
+        if (a1.email && empty(result['[ATTY_EMAIL]'])) result['[ATTY_EMAIL]'] = a1.email;
     }
     if (p.attorneys && p.attorneys.length > 1) {
         const a2 = p.attorneys[1];
-        if (a2.name)  result['[ATTY_NAME2]']  = a2.name;
-        if (a2.sbn)   result['[ATTY_SBN2]']   = a2.sbn;
-        if (a2.email) result['[ATTY_EMAIL2]']  = a2.email;
+        if (a2.name  && empty(result['[ATTY_NAME2]']))  result['[ATTY_NAME2]']  = a2.name;
+        if (a2.sbn   && empty(result['[ATTY_SBN2]']))   result['[ATTY_SBN2]']   = a2.sbn;
+        if (a2.email && empty(result['[ATTY_EMAIL2]'])) result['[ATTY_EMAIL2]'] = a2.email;
     }
     return result;
 }
