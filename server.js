@@ -82,7 +82,7 @@ function getPrivateTemplates(req) {
     if (session && session.profile && session.profile.privateTemplates) {
         return session.profile.privateTemplates;
     }
-    return ['POS_Def_Package.docx'];
+    return [];
 }
 
 // Inject profile attorney/firm data into a data map.
