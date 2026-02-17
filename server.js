@@ -1169,15 +1169,20 @@ app.get('/api/court-lookup', async (req, res) => {
 
 // Get list of available PDF and DOCX templates
 // Private templates are only visible when authenticated
+// Users can have hidden templates they don't want to see
 app.get('/api/templates', async (req, res) => {
     try {
         const auth = isAuthenticated(req);
+        const session = getSession(req);
         const allPrivates = await getAllPrivateTemplates();
         const files = await fs.readdir(path.join(__dirname, 'templates'));
         const templateFiles = files.filter(file => {
             const ext = file.toLowerCase();
             if (!ext.endsWith('.pdf') && !ext.endsWith('.docx')) return false;
+            // Hide private templates from unauthenticated users
             if (!auth && allPrivates.includes(file)) return false;
+            // Hide user's own hidden templates
+            if (session && session.profile && session.profile.hiddenTemplates && session.profile.hiddenTemplates.includes(file)) return false;
             return true;
         });
         res.json({ templates: templateFiles, authenticated: auth });
