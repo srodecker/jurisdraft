@@ -152,11 +152,19 @@
 
             <!-- JSON Input -->
             <div class="sidebar-section" style="flex: 1;">
-                <h2 class="sidebar-header">
+                <h2 class="sidebar-header" style="display: flex; align-items: center;">
                     <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="display: inline-block; vertical-align: -2px; margin-right: 6px;">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
                     </svg>
                     Case Data
+                    <span style="margin-left: auto; display: flex; gap: 4px;">
+                        <button id="expandCaseDataBtn" title="Expand" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);padding:2px;line-height:1;">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5"/></svg>
+                        </button>
+                        <button id="fullscreenCaseDataBtn" title="Full Screen" style="background:none;border:none;cursor:pointer;color:var(--text-secondary);padding:2px;line-height:1;">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 3h6m0 0v6m0-6l-7 7M9 21H3m0 0v-6m0 6l7-7"/></svg>
+                        </button>
+                    </span>
                 </h2>
                 <div class="flex justify-end mb-2">
                     <button id="toggleRawJsonBtn" class="text-xs text-blue-400 underline" style="background:none;border:none;color:var(--accent-color);font-size:11px;cursor:pointer;text-decoration:underline;padding:0;">Switch to Raw JSON</button>
@@ -374,10 +382,40 @@
         }
         /* ===== Easy Form Styles ===== */
         .easy-form-scroll {
-            max-height: 60vh;
+            max-height: 25vh;
             overflow-y: auto;
             padding-right: 5px;
             margin-bottom: 10px;
+            transition: max-height 0.3s ease;
+        }
+        .easy-form-scroll.expanded {
+            max-height: 60vh;
+        }
+        .easy-form-fullscreen-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            z-index: 9999;
+            background: var(--bg-primary, #13131f);
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        .easy-form-fullscreen-overlay .easy-form-fs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            flex-shrink: 0;
+        }
+        .easy-form-fullscreen-overlay .easy-form-fs-header h2 {
+            margin: 0;
+            font-size: 18px;
+            color: var(--text-primary, #e2e8f0);
+        }
+        .easy-form-fullscreen-overlay .easy-form-fs-body {
+            flex: 1;
+            overflow-y: auto;
         }
         .easy-form-scroll::-webkit-scrollbar {
             width: 5px;
@@ -691,6 +729,11 @@
 
                     files = [];
                     renderFiles();
+
+                    // Auto-generate if a template is already selected
+                    if (templateSelect.value) {
+                        setTimeout(() => fillPDF(), 500);
+                    }
                     return;
                 }
 
@@ -848,6 +891,11 @@
                 autoFillBtn.disabled = true; // No auto-fill for DOCX yet
                 
                 showStatus(`Document loaded: ${templateName} (${currentDocxVariables.length} variables found)`, 'success');
+
+                // Auto-generate if case data already exists
+                if (jsonInput.value && jsonInput.value.trim() !== '' && jsonInput.value.trim() !== '{}') {
+                    setTimeout(() => fillPDF(), 300);
+                }
             } catch (error) {
                 console.error('Error loading DOCX:', error);
                 docxContainer.innerHTML = `<div class="pdf-placeholder" style="height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;">
@@ -876,6 +924,11 @@
             pdfViewer.innerHTML = `<iframe src="${previewUrl}" class="no-transition"></iframe>`;
             
             showStatus(`Template loaded: ${templateName}`, 'info');
+
+            // Auto-generate if case data already exists
+            if (jsonInput.value && jsonInput.value.trim() !== '' && jsonInput.value.trim() !== '{}') {
+                setTimeout(() => fillPDF(), 300);
+            }
         }
     });
 
@@ -1286,6 +1339,45 @@
 
     // ===== EASY FORM MODE =====
     const easyFormContainer = document.getElementById('easyFormContainer');
+
+    // Case Data expand/fullscreen controls
+    const expandCaseDataBtn = document.getElementById('expandCaseDataBtn');
+    const fullscreenCaseDataBtn = document.getElementById('fullscreenCaseDataBtn');
+
+    expandCaseDataBtn.addEventListener('click', () => {
+        easyFormContainer.classList.toggle('expanded');
+        expandCaseDataBtn.title = easyFormContainer.classList.contains('expanded') ? 'Collapse' : 'Expand';
+    });
+
+    fullscreenCaseDataBtn.addEventListener('click', () => {
+        const overlay = document.createElement('div');
+        overlay.className = 'easy-form-fullscreen-overlay';
+        overlay.innerHTML = `
+            <div class="easy-form-fs-header">
+                <h2>Case Data</h2>
+                <button id="closeFsCaseData" class="btn btn-secondary" style="padding:6px 14px;font-size:13px;">Close</button>
+            </div>
+            <div class="easy-form-fs-body"></div>
+        `;
+        const body = overlay.querySelector('.easy-form-fs-body');
+        const caseDataSection = easyFormContainer.parentElement;
+        const children = Array.from(caseDataSection.children);
+        children.forEach(el => {
+            if (el.id === 'easyFormContainer' || el.id === 'jsonInput') {
+                body.appendChild(el);
+                el.style.maxHeight = 'none';
+            }
+        });
+        document.body.appendChild(overlay);
+        overlay.querySelector('#closeFsCaseData').addEventListener('click', () => {
+            const siblingRef = caseDataSection.querySelector('.tip-box') || caseDataSection.querySelector('#checkCourtBtn');
+            body.querySelectorAll('#easyFormContainer, #jsonInput').forEach(el => {
+                caseDataSection.insertBefore(el, siblingRef);
+                el.style.maxHeight = '';
+            });
+            overlay.remove();
+        });
+    });
     const toggleRawJsonBtn = document.getElementById('toggleRawJsonBtn');
     const tipBox = document.getElementById('tipBox');
     let isRawJsonMode = false;
