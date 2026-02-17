@@ -50,11 +50,25 @@ function verifyPassword(password, stored) {
     return test === hash;
 }
 
-// Helper: read a profile from disk
+// Helper: read a profile from disk, or from environment variable if not found
 async function readProfile(username) {
     const filePath = path.join(PROFILES_DIR, `${username}.json`);
-    const raw = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(raw);
+    try {
+        const raw = await fs.readFile(filePath, 'utf-8');
+        return JSON.parse(raw);
+    } catch (err) {
+        // Fall back to environment variable (for Vercel serverless compatibility)
+        const envVarName = `PROFILE_${username.toUpperCase()}`;
+        const envProfileJson = process.env[envVarName];
+        if (envProfileJson) {
+            try {
+                return JSON.parse(envProfileJson);
+            } catch (parseErr) {
+                throw new Error(`Failed to parse ${envVarName}: ${parseErr.message}`);
+            }
+        }
+        throw err; // Re-throw if no env var either
+    }
 }
 
 // Helper: write a profile to disk
