@@ -77,6 +77,25 @@ function isAuthenticated(req) {
 }
 
 // Get private templates for the current user's profile (or default)
+// Get all private templates across all user profiles
+async function getAllPrivateTemplates() {
+    try {
+        const files = await fs.readdir(PROFILES_DIR);
+        const allPrivates = new Set();
+        
+        for (const file of files) {
+            if (!file.endsWith('.json')) continue;
+            const profile = JSON.parse(await fs.readFile(path.join(PROFILES_DIR, file), 'utf-8'));
+            if (profile.privateTemplates && Array.isArray(profile.privateTemplates)) {
+                profile.privateTemplates.forEach(t => allPrivates.add(t));
+            }
+        }
+        return Array.from(allPrivates);
+    } catch (_) {
+        return [];
+    }
+}
+
 function getPrivateTemplates(req) {
     const session = getSession(req);
     if (session && session.profile && session.profile.privateTemplates) {
@@ -1153,12 +1172,12 @@ app.get('/api/court-lookup', async (req, res) => {
 app.get('/api/templates', async (req, res) => {
     try {
         const auth = isAuthenticated(req);
-        const privates = getPrivateTemplates(req);
+        const allPrivates = await getAllPrivateTemplates();
         const files = await fs.readdir(path.join(__dirname, 'templates'));
         const templateFiles = files.filter(file => {
             const ext = file.toLowerCase();
             if (!ext.endsWith('.pdf') && !ext.endsWith('.docx')) return false;
-            if (!auth && privates.includes(file)) return false;
+            if (!auth && allPrivates.includes(file)) return false;
             return true;
         });
         res.json({ templates: templateFiles, authenticated: auth });
@@ -1170,13 +1189,14 @@ app.get('/api/templates', async (req, res) => {
 
 // Serve raw template files (for docx preview and PDF inline viewing)
 // Private templates require authentication
-app.get('/api/fetch-template/:filename', (req, res) => {
+app.get('/api/fetch-template/:filename', async (req, res) => {
     const filename = req.params.filename;
     // Security: prevent path traversal
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
-    if (getPrivateTemplates(req).includes(filename) && !isAuthenticated(req)) {
+    const allPrivates = await getAllPrivateTemplates();
+    if (allPrivates.includes(filename) && !isAuthenticated(req)) {
         return res.status(403).json({ error: 'Authentication required to access this template.' });
     }
     const filePath = path.join(__dirname, 'templates', filename);
