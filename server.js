@@ -1215,8 +1215,11 @@ app.get('/api/fetch-template/:filename', async (req, res) => {
         return res.status(400).json({ error: 'Invalid filename' });
     }
     const allPrivates = await getAllPrivateTemplates();
-    if (allPrivates.includes(filename) && !isAuthenticated(req)) {
-        return res.status(403).json({ error: 'Authentication required to access this template.' });
+    if (allPrivates.includes(filename)) {
+        const userPrivates = getPrivateTemplates(req);
+        if (!userPrivates.includes(filename)) {
+            return res.status(403).json({ error: 'Authentication required to access this template.' });
+        }
     }
     const filePath = path.join(__dirname, 'templates', filename);
 
