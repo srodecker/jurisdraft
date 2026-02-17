@@ -31,9 +31,35 @@ let courtInfoCache = null;
 // ============================================================
 const activeSessions = new Map(); // token → { username, profile }
 
-// Ensure profiles directory exists on startup
+// Ensure profiles directory exists and initialize srodecker if needed
 (async () => {
-    try { await fs.mkdir(PROFILES_DIR, { recursive: true }); } catch (_) {}
+    try { 
+        await fs.mkdir(PROFILES_DIR, { recursive: true });
+        
+        // Initialize srodecker profile from env variable if it doesn't exist
+        const srodeckerPath = path.join(PROFILES_DIR, 'srodecker.json');
+        try {
+            await fs.access(srodeckerPath);
+            // File exists, no need to initialize
+        } catch (_) {
+            // File doesn't exist, try to create from env var
+            if (process.env.SRODECKER_PASSWORD_HASH) {
+                const profile = {
+                    username: 'srodecker',
+                    passwordHash: process.env.SRODECKER_PASSWORD_HASH,
+                    createdAt: new Date().toISOString(),
+                    firm: { name: '', address: '', city: '', state: '', zip: '', phone: '', fax: '' },
+                    attorneys: [{ role: 'partner', name: '', sbn: '', email: '' }],
+                    signature: { file: '' },
+                    privateTemplates: ['CIV-100 (R4D).pdf', 'CIV-110 (Dismissal).pdf', 'POS_Def_Package.docx']
+                };
+                await writeProfile('srodecker', profile);
+                console.log('✓ Initialized srodecker profile from SRODECKER_PASSWORD_HASH');
+            }
+        }
+    } catch (err) {
+        console.error('Error during profile initialization:', err);
+    }
 })();
 
 // Helper: hash a password with scrypt
