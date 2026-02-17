@@ -1,0 +1,26 @@
+{
+  "username": "johndoe",
+  "passwordHash": "7b3367cb7e64647bb320b0ffc33b0a7d:7770eb4117f17d8efac1cddd4ead1352f355fd51eff9a769fcf03a3110b670f23c1114ea6d560d0daca729409c27efdf44525630558c97ce10c5c5cab366a47d",
+  "createdAt": "2026-02-16T18:17:00.209Z",
+  "firm": {
+    "name": "",
+    "address": "",
+    "city": "",
+    "state": "",
+    "zip": "",
+    "phone": "",
+    "fax": ""
+  },
+  "attorneys": [
+    {
+      "role": "partner",
+      "name": "",
+      "sbn": "",
+      "email": ""
+    }
+  ],
+  "signature": {
+    "file": ""
+  },
+  "privateTemplates": []
+}

@@ -8,8 +8,5 @@ tmp/
 # Attorney private files — never commit these
 Signatures/
 
-# User profiles — contain personal data, never commit
-profiles/
-
 # Old single-user config (migrated to profile system)
 firm-config.json

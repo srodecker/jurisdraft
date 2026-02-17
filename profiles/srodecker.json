@@ -1,0 +1,27 @@
+{
+  "username": "srodecker",
+  "passwordHash": "f4a11aedd044bc9131f3b8203e25ec12:166e6fc5d28bb935fc6257c4f7988bde249820f2023d112ad17fed48bb3ede0d838ac693d1c17f0b07234eeb8254ac0980f014c4365d2b5028067da5a7afc23f",
+  "createdAt": "2026-02-16T00:00:00.000Z",
+  "firm": {
+    "name": "",
+    "address": "",
+    "city": "",
+    "state": "",
+    "zip": "",
+    "phone": "",
+    "fax": ""
+  },
+  "attorneys": [],
+  "signature": {
+    "file": "SDG.jpg"
+  },
+  "privateTemplates": [
+    "POS_Def_Package.docx",
+    "CIV-110 (Dismissal).pdf",
+    "CIV-100 (R4D).pdf"
+  ],
+  "hiddenTemplates": [
+    "CIV-100.pdf",
+    "CIV-110.pdf"
+  ]
+}
