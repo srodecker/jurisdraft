@@ -1841,14 +1841,17 @@ app.post('/api/fill-pdf', async (req, res) => {
         // Inject profile attorney/firm data (logged-in user's own firm info)
         data = injectProfileData(data, getSession(req));
 
-        // Sanitize all values (replace curly quotes with standard quotes)
+        // Sanitize all values (replace curly quotes / Cyrillic lookalikes with ASCII)
         data = sanitizeAllValues(data);
 
         // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
+        // NOTE: processDynamicVariables introduces NEW fields (court data, composed strings)
+        // that weren't present when sanitizeAllValues ran above, so sanitize again after.
         data = await processDynamicVariables(data);
+        data = sanitizeAllValues(data);
 
         const templatePath = path.join(__dirname, 'templates', templateName);
-        
+
         // Check if file exists
         try {
             await fs.access(templatePath);
@@ -2226,11 +2229,12 @@ app.post('/api/auto-fill-pdf', async (req, res) => {
         "[EMAIL]": "auto@test.com"
     };
 
-    // Sanitize all values (replace curly quotes with standard quotes)
+    // Sanitize all values (replace curly quotes / Cyrillic lookalikes with ASCII)
     const sanitizedData = sanitizeAllValues(dummyData);
 
     // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
-    const processedData = await processDynamicVariables(sanitizedData);
+    // Sanitize again after to catch any new fields introduced by processDynamicVariables.
+    const processedData = sanitizeAllValues(await processDynamicVariables(sanitizedData));
     const jsonData = JSON.stringify(processedData);
 
     try {
