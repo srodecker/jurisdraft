@@ -850,6 +850,12 @@
             try {
                 // Step 1: Scan for variables
                 console.log('Scanning DOCX for variables:', templateName);
+                const authHdrs = window.getAuthHeaders ? window.getAuthHeaders() : {};
+                const scanPromise = fetch('/api/scan-docx/' + encodeURIComponent(templateName), { headers: authHdrs });
+
+                // Step 2: Fetch the raw DOCX file for preview
+                console.log('Fetching DOCX for preview:', templateName);
+                const docxResponse = await fetch('/api/fetch-template/' + encodeURIComponent(templateName), { headers: authHdrs });
                 const scanPromise = fetch('/api/scan-docx/' + encodeURIComponent(templateName), { headers: window.getAuthHeaders ? window.getAuthHeaders() : {} });
 
                 // Step 2: Fetch the raw DOCX file for preview
@@ -1019,6 +1025,7 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    ...(window.getAuthHeaders ? window.getAuthHeaders() : {}),
                 },
                 body: JSON.stringify({
                     templateName,
