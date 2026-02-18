@@ -807,11 +807,12 @@
             try {
                 // Step 1: Scan for variables
                 console.log('Scanning DOCX for variables:', templateName);
-                const scanPromise = fetch('/api/scan-docx/' + encodeURIComponent(templateName));
-                
+                const authHdrs = window.getAuthHeaders ? window.getAuthHeaders() : {};
+                const scanPromise = fetch('/api/scan-docx/' + encodeURIComponent(templateName), { headers: authHdrs });
+
                 // Step 2: Fetch the raw DOCX file for preview
                 console.log('Fetching DOCX for preview:', templateName);
-                const docxResponse = await fetch('/api/fetch-template/' + encodeURIComponent(templateName));
+                const docxResponse = await fetch('/api/fetch-template/' + encodeURIComponent(templateName), { headers: authHdrs });
                 if (!docxResponse.ok) {
                     throw new Error('Failed to fetch document');
                 }
@@ -966,6 +967,7 @@
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    ...(window.getAuthHeaders ? window.getAuthHeaders() : {}),
                 },
                 body: JSON.stringify({
                     templateName,
