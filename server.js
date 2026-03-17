@@ -110,13 +110,6 @@ async function getAllPrivateTemplates() {
     }
 }
 
-function getPrivateTemplates(req) {
-    const session = getSession(req);
-    if (session && session.profile && session.profile.privateTemplates) {
-        return session.profile.privateTemplates;
-    }
-    return [];
-}
 
 // Inject profile attorney/firm data into a data map.
 // Only fills fields that are MISSING or EMPTY from extraction —
@@ -1216,8 +1209,7 @@ app.get('/api/fetch-template/:filename', async (req, res) => {
     }
     const allPrivates = await getAllPrivateTemplates();
     if (allPrivates.includes(filename)) {
-        const userPrivates = getPrivateTemplates(req);
-        if (!userPrivates.includes(filename)) {
+        if (!getSession(req)) {
             return res.status(403).json({ error: 'Authentication required to access this template.' });
         }
     }
