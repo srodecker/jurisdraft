@@ -420,6 +420,12 @@ app.get('/full', (req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'full.html'), { dotfiles: 'allow' });
 });
 
+// Kinecta workflow tracker
+app.get('/workflow', (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.sendFile(path.join(PUBLIC_DIR, 'workflow.html'), { dotfiles: 'allow' });
+});
+
 // Extraction workspace route (legacy - redirects to /full)
 app.get('/extract', (req, res) => {
     console.log('=== EXTRACT WORKSPACE REQUEST ===');
@@ -445,6 +451,9 @@ app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 // Mount external routers
 const extractRouter = require('./routes/extract');
 app.use('/api', extractRouter);
+
+const mattersRouter = require('./routes/matters');
+app.use(mattersRouter);
 
 // ============================================================
 // AUTH ENDPOINTS — profile-based
