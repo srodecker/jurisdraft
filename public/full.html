@@ -932,12 +932,8 @@
             const previewUrl = URL.createObjectURL(pdfBlob);
             pdfViewer.innerHTML = `<iframe src="${previewUrl}" class="no-transition"></iframe>`;
             
-            showStatus(`Template loaded: ${templateName}`, 'info');
-
-            // Auto-generate if case data already exists
-            if (jsonInput.value && jsonInput.value.trim() !== '' && jsonInput.value.trim() !== '{}') {
-                setTimeout(() => fillPDF(), 300);
-            }
+            // Auto-generate with whatever JSON data is available
+            setTimeout(() => fillPDF(), 300);
         }
     });
 
