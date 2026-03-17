@@ -920,7 +920,16 @@
             docxContainer.style.display = 'none';
             
             // Quick Preview: Show the empty PDF template immediately
-            const previewUrl = '/api/fetch-template/' + encodeURIComponent(templateName);
+            // Fetch with auth headers (iframe src can't send Authorization header)
+            const pdfResponse = await fetch('/api/fetch-template/' + encodeURIComponent(templateName), {
+                headers: window.getAuthHeaders ? window.getAuthHeaders() : {}
+            });
+            if (!pdfResponse.ok) {
+                showStatus('Failed to load template: ' + ((await pdfResponse.json().catch(() => ({}))).error || pdfResponse.statusText), 'error');
+                return;
+            }
+            const pdfBlob = await pdfResponse.blob();
+            const previewUrl = URL.createObjectURL(pdfBlob);
             pdfViewer.innerHTML = `<iframe src="${previewUrl}" class="no-transition"></iframe>`;
             
             showStatus(`Template loaded: ${templateName}`, 'info');
