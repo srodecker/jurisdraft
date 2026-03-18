@@ -319,6 +319,9 @@ function createMatterObject(data) {
         demandAmount: data.demandAmount || '',
         judgmentAmount: data.judgmentAmount || '',
         judgmentDate: data.judgmentDate || '',
+        statusText: data.statusText || '',
+        serviceType: data.serviceType || '',
+        defendantResponse: data.defendantResponse || '',
         attorney: WORKFLOW_CONFIG.attorney.name,
         attorneyEmail: WORKFLOW_CONFIG.attorney.email,
         secretary: WORKFLOW_CONFIG.attorney.secretary,
@@ -815,6 +818,9 @@ Status: ${matter.status}
 Current Stage: ${stageName} (${completedTasks}/${totalTasks} tasks complete)
 Court: ${matter.courtName || 'Not determined'}
 Debtor Address: ${[matter.debtorAddress, matter.debtorCity, matter.debtorState, matter.debtorZip].filter(Boolean).join(', ') || 'Not set'}
+Status/Last Action: ${matter.statusText || 'Not set'}
+Service Type: ${matter.serviceType || 'Not set'}
+Defendant Response: ${matter.defendantResponse || 'Not set'}
 
 KEY DATES:
 ${dateEntries || 'No dates recorded'}
@@ -1028,19 +1034,24 @@ const COLUMN_MAP = {
     // Debtor name
     'name': 'debtorName', 'debtor': 'debtorName', 'debtor name': 'debtorName', 'borrower': 'debtorName',
     'defendant': 'debtorName', 'defendant name': 'debtorName', 'full name': 'debtorName',
-    // Matter ID
+    // Matter ID / Client File
     'matter id': 'clientMatter', 'matter': 'clientMatter', 'client matter': 'clientMatter',
     'matter number': 'clientMatter', 'file number': 'clientMatter', 'file #': 'clientMatter',
+    'client file no.': 'clientMatter', 'client file no': 'clientMatter', 'client file': 'clientMatter',
+    // Account / Loan Info
+    'account / loan info': 'accountNumber', 'account/loan info': 'accountNumber',
+    'account': 'accountNumber', 'account #': 'accountNumber', 'account number': 'accountNumber', 'acct': 'accountNumber',
+    'loan info': 'accountNumber',
     // Case number
     'case number': 'caseNumber', 'case #': 'caseNumber', 'case no': 'caseNumber', 'case no.': 'caseNumber',
     // State
     'state': 'debtorState', 'state filed': 'debtorState', 'state filed in': 'debtorState',
     // Loan type
     'loan type': 'loanType', 'type of loan': 'loanType', 'loan': 'loanType', 'product': 'loanType', 'type': 'loanType',
-    // Amount
-    'amount': 'demandAmount', 'amount owed': 'demandAmount', 'demand': 'demandAmount',
-    'demand amount': 'demandAmount', 'balance': 'demandAmount', 'principal': 'demandAmount',
-    'total owed': 'demandAmount', 'total': 'demandAmount',
+    // Amount (handles "CC $18,375.52" style prefixes via cleanAmount)
+    'amount': 'demandAmount', 'amount owed': 'demandAmount', 'amount $ owed': 'demandAmount',
+    'demand': 'demandAmount', 'demand amount': 'demandAmount', 'balance': 'demandAmount',
+    'principal': 'demandAmount', 'total owed': 'demandAmount', 'total': 'demandAmount',
     // Judgment
     'judgment amount': 'judgmentAmount', 'judgment': 'judgmentAmount',
     // Address
@@ -1048,18 +1059,24 @@ const COLUMN_MAP = {
     'city': 'debtorCity', 'zip': 'debtorZip', 'zip code': 'debtorZip',
     // Court
     'court': 'courtName', 'court name': 'courtName', 'county': 'courtCounty',
-    // Account
-    'account': 'accountNumber', 'account #': 'accountNumber', 'account number': 'accountNumber', 'acct': 'accountNumber',
     // Notes
     'notes': 'notes', 'comments': 'notes', 'memo': 'notes', 'description': 'notes',
-    // Status
-    'status': 'status',
+    // Status / Last Action
+    'status': 'statusText', 'status / last action': 'statusText', 'status/last action': 'statusText',
+    'last action': 'statusText',
+    // Service type
+    'service type': 'serviceType',
+    // Defendant response
+    'defendant response?': 'defendantResponse', 'defendant response': 'defendantResponse',
     // Dates
     'dvn sent': 'dates.dvnSent', 'dvn date': 'dates.dvnSent',
+    'dvl postage date': 'dates.dvnSent', 'dvl date': 'dates.dvnSent',
     'response due': 'dates.responseDue', 'response date': 'dates.responseDue',
+    'dvl response due': 'dates.responseDue',
     'complaint filed': 'dates.complaintFiled', 'filed date': 'dates.complaintFiled', 'filed': 'dates.complaintFiled',
     'served': 'dates.served', 'service date': 'dates.served', 'date served': 'dates.served',
-    'answer due': 'dates.answerDue',
+    'served date': 'dates.served',
+    'answer due': 'dates.answerDue', 'answer deadline': 'dates.answerDue',
 };
 
 function normalizeHeader(h) {
@@ -1068,8 +1085,18 @@ function normalizeHeader(h) {
 
 function cleanAmount(val) {
     if (!val) return '';
-    const s = val.toString().replace(/[$,\s]/g, '');
-    const n = parseFloat(s);
+    let s = val.toString();
+    // Strip any text prefix before the dollar amount (e.g. "CC $18,375.52" → "18375.52")
+    // Also handle #VALUE! or other Excel errors
+    if (s.includes('#VALUE') || s.includes('#REF') || s.includes('#N/A')) return '';
+    // Find the first dollar sign or digit sequence that looks like an amount
+    const amountMatch = s.match(/\$?\s*([\d,]+\.?\d*)/);
+    if (amountMatch) {
+        const cleaned = amountMatch[1].replace(/,/g, '');
+        const n = parseFloat(cleaned);
+        return isNaN(n) ? '' : n.toString();
+    }
+    const n = parseFloat(s.replace(/[$,\s]/g, ''));
     return isNaN(n) ? '' : n.toString();
 }
 
@@ -1115,10 +1142,17 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
 
                 if (field.startsWith('dates.')) {
                     const dateKey = field.replace('dates.', '');
-                    // Try to parse date
-                    const d = new Date(val);
-                    if (!isNaN(d.getTime())) {
-                        dates[dateKey] = d.toISOString().slice(0, 10);
+                    // Try to parse date — handle Excel serial numbers too
+                    let parsed = null;
+                    if (/^\d{5}$/.test(val)) {
+                        // Excel serial date number
+                        const excelEpoch = new Date(1899, 11, 30);
+                        parsed = new Date(excelEpoch.getTime() + parseInt(val) * 86400000);
+                    } else {
+                        parsed = new Date(val);
+                    }
+                    if (parsed && !isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+                        dates[dateKey] = parsed.toISOString().slice(0, 10);
                     }
                 } else if (field === 'demandAmount' || field === 'judgmentAmount') {
                     data[field] = cleanAmount(val);
@@ -1387,6 +1421,154 @@ Important:
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
+});
+
+// ============================================================
+// GLOBAL CHAT (cross-matter AI assistant)
+// ============================================================
+
+// In-memory global chat history (resets on server restart — fine for this use case)
+let globalChatHistory = [];
+
+function buildAllMattersContext(matters) {
+    if (matters.length === 0) return 'No matters loaded yet.';
+
+    return matters.map(m => {
+        const stageName = getStageLabel(m.currentStage);
+        const totalTasks = Object.keys(m.tasks).length;
+        const completedTasks = Object.values(m.tasks).filter(t => t.completed).length;
+
+        // Pending tasks (first 3)
+        const pendingTasks = [];
+        for (const stage of WORKFLOW_STAGES) {
+            for (const task of stage.tasks) {
+                if (m.tasks[task.id] && !m.tasks[task.id].completed) {
+                    const assignee = TEAM_MEMBERS.find(tm => tm.id === m.tasks[task.id].assignedTo);
+                    pendingTasks.push(`${task.label} (${assignee ? assignee.name : 'Unassigned'})`);
+                }
+            }
+            if (pendingTasks.length >= 3) break;
+        }
+
+        const dateEntries = Object.entries(m.dates || {})
+            .filter(([, v]) => v)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(', ');
+
+        const recentEvents = (m.events || [])
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+            .slice(0, 3)
+            .map(e => `${e.title} (${new Date(e.date).toLocaleDateString()})`)
+            .join('; ');
+
+        return `--- ${m.debtorName || 'Unknown'} ---
+Case#: ${m.caseNumber || 'Pending'} | Stage: ${stageName} (${completedTasks}/${totalTasks}) | Amount: ${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : 'N/A'}
+Loan: ${m.loanType || '?'} | Court: ${m.courtName || 'TBD'} | Status: ${m.status}${m.statusText ? ' - ' + m.statusText : ''}
+Account: ${m.accountNumber || '?'} | Service: ${m.serviceType || '?'} | Def. Response: ${m.defendantResponse || '?'}
+Dates: ${dateEntries || 'None'}
+Next tasks: ${pendingTasks.slice(0, 3).join(' → ') || 'All complete'}
+Recent: ${recentEvents || 'No events'}
+Notes: ${m.notes || 'None'}`;
+    }).join('\n\n');
+}
+
+router.post('/api/chat/global', async (req, res) => {
+    try {
+        const userMessage = req.body.message;
+        if (!userMessage) return res.status(400).json({ error: 'Message is required' });
+
+        const userEntry = {
+            role: 'user',
+            content: userMessage,
+            timestamp: new Date().toISOString()
+        };
+        globalChatHistory.push(userEntry);
+
+        const matters = await listMatters();
+        const allContext = buildAllMattersContext(matters);
+
+        const apiKey = process.env.GOOGLE_API_KEY;
+        let assistantContent;
+
+        if (apiKey) {
+            const systemPrompt = `You are a legal case management assistant for Wright Legal Group, managing debt collection cases for Kinecta Federal Credit Union.
+
+You have access to ALL ${matters.length} active cases. Here is the full case database:
+
+${allContext}
+
+TEAM MEMBERS:
+${TEAM_MEMBERS.map(m => `- ${m.name} (${m.role})`).join('\n')}
+
+WORKFLOW STAGES:
+${WORKFLOW_STAGES.map(s => `${s.number}. ${s.name}`).join('\n')}
+
+Your role:
+- Answer questions about ANY case or across ALL cases
+- Compare cases, find patterns, summarize status
+- Tell the user what's going on with a specific debtor by name
+- Identify which cases need attention (deadlines, pending tasks, stalled)
+- Suggest next steps for specific cases
+- Help with date calculations and California collection law
+- When asked about a specific person/debtor, search through all cases to find them (use partial name matching)
+- Provide workload summaries by team member when asked
+- Be concise and direct. Use bullet points for lists.
+- When referencing cases, always mention the debtor name and case number if available.`;
+
+            const recentChat = globalChatHistory.slice(-20);
+            const chatMessages = recentChat.map(m => ({
+                role: m.role === 'user' ? 'user' : 'model',
+                parts: [{ text: m.content }]
+            }));
+
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key=${apiKey}`;
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        systemInstruction: { parts: [{ text: systemPrompt }] },
+                        contents: chatMessages
+                    })
+                });
+                const result = await response.json();
+                assistantContent = result.candidates?.[0]?.content?.parts?.[0]?.text || 'I was unable to generate a response. Please try again.';
+            } catch (apiErr) {
+                console.error('Global chat API error:', apiErr);
+                assistantContent = `I'm unable to connect to the AI service right now. You have ${matters.length} active matters loaded.`;
+            }
+        } else {
+            assistantContent = `AI chat is not configured (no GOOGLE_API_KEY). You have ${matters.length} matters in the system.\n\nSet GOOGLE_API_KEY to enable AI-powered chat.`;
+        }
+
+        const assistantEntry = {
+            role: 'assistant',
+            content: assistantContent,
+            timestamp: new Date().toISOString()
+        };
+        globalChatHistory.push(assistantEntry);
+
+        // Keep history manageable
+        if (globalChatHistory.length > 100) {
+            globalChatHistory = globalChatHistory.slice(-100);
+        }
+
+        res.json({ message: assistantEntry, matterCount: matters.length });
+    } catch (err) {
+        console.error('Global chat error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get global chat history
+router.get('/api/chat/global/history', (req, res) => {
+    res.json(globalChatHistory);
+});
+
+// Clear global chat history
+router.delete('/api/chat/global/history', (req, res) => {
+    globalChatHistory = [];
+    res.json({ success: true });
 });
 
 module.exports = router;
