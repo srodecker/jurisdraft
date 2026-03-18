@@ -1050,6 +1050,7 @@ const COLUMN_MAP = {
     'loan type': 'loanType', 'type of loan': 'loanType', 'loan': 'loanType', 'product': 'loanType', 'type': 'loanType',
     // Amount (handles "CC $18,375.52" style prefixes via cleanAmount)
     'amount': 'demandAmount', 'amount owed': 'demandAmount', 'amount $ owed': 'demandAmount',
+    'amount $$ owed': 'demandAmount', 'amount owed': 'demandAmount',
     'demand': 'demandAmount', 'demand amount': 'demandAmount', 'balance': 'demandAmount',
     'principal': 'demandAmount', 'total owed': 'demandAmount', 'total': 'demandAmount',
     // Judgment
@@ -1083,6 +1084,53 @@ function normalizeHeader(h) {
     return (h || '').toString().trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
 }
 
+// More aggressive normalization — strips everything except letters, digits, and spaces
+function fuzzyNormalizeHeader(h) {
+    return (h || '').toString().trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Build a fuzzy version of the COLUMN_MAP for fallback matching
+const FUZZY_COLUMN_MAP = {};
+for (const [key, val] of Object.entries(COLUMN_MAP)) {
+    const fuzzyKey = key.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    if (!FUZZY_COLUMN_MAP[fuzzyKey]) FUZZY_COLUMN_MAP[fuzzyKey] = val;
+}
+
+function matchHeader(rawHeader) {
+    // Try exact normalized match first
+    const norm = normalizeHeader(rawHeader);
+    if (COLUMN_MAP[norm]) return COLUMN_MAP[norm];
+
+    // Try fuzzy match (strip all special chars)
+    const fuzzy = fuzzyNormalizeHeader(rawHeader);
+    if (FUZZY_COLUMN_MAP[fuzzy]) return FUZZY_COLUMN_MAP[fuzzy];
+
+    // Try substring/keyword matching as last resort
+    const lower = rawHeader.toLowerCase();
+    if (lower.includes('borrower') || lower.includes('debtor') || lower.includes('defendant')) return 'debtorName';
+    if (lower.includes('file no') || lower.includes('file #') || lower.includes('matter')) return 'clientMatter';
+    if (lower.includes('account') || lower.includes('loan info')) return 'accountNumber';
+    if (lower.includes('amount') && lower.includes('owed')) return 'demandAmount';
+    if (lower.includes('amount') && !lower.includes('judgment')) return 'demandAmount';
+    if (lower.includes('judgment') && lower.includes('amount')) return 'judgmentAmount';
+    if (lower.includes('case') && (lower.includes('#') || lower.includes('no') || lower.includes('number'))) return 'caseNumber';
+    if (lower.includes('dvl') && lower.includes('postage')) return 'dates.dvnSent';
+    if (lower.includes('dvl') && lower.includes('response')) return 'dates.responseDue';
+    if (lower.includes('dvn') && lower.includes('sent')) return 'dates.dvnSent';
+    if (lower.includes('complaint') && lower.includes('filed')) return 'dates.complaintFiled';
+    if (lower.includes('served') && lower.includes('date')) return 'dates.served';
+    if (lower.includes('service') && lower.includes('type')) return 'serviceType';
+    if (lower.includes('answer') && (lower.includes('deadline') || lower.includes('due'))) return 'dates.answerDue';
+    if (lower.includes('defendant') && lower.includes('response')) return 'defendantResponse';
+    if (lower.includes('status') || lower.includes('last action')) return 'statusText';
+    if (lower.includes('loan') && lower.includes('type')) return 'loanType';
+    if (lower.includes('court') && !lower.includes('county')) return 'courtName';
+    if (lower.includes('county')) return 'courtCounty';
+    if (lower.includes('note')) return 'notes';
+
+    return null;
+}
+
 function cleanAmount(val) {
     if (!val) return '';
     let s = val.toString();
@@ -1100,6 +1148,109 @@ function cleanAmount(val) {
     return isNaN(n) ? '' : n.toString();
 }
 
+// ============================================================
+// SMART SHEET PARSER — auto-detects header row
+// ============================================================
+
+// Known header keywords that indicate a real data header row
+const HEADER_SIGNATURES = ['borrower', 'debtor', 'defendant', 'client file', 'account', 'amount', 'status'];
+
+function findHeaderRow(sheet) {
+    // Read sheet as array of arrays to scan for the header row
+    const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+    for (let i = 0; i < Math.min(allRows.length, 20); i++) {
+        const row = allRows[i];
+        if (!row || row.length < 3) continue;
+
+        // Check if this row looks like a header: count how many cells match known header keywords
+        let matchCount = 0;
+        for (const cell of row) {
+            const cellStr = (cell || '').toString().toLowerCase().trim();
+            if (!cellStr) continue;
+            for (const sig of HEADER_SIGNATURES) {
+                if (cellStr.includes(sig)) { matchCount++; break; }
+            }
+        }
+        // If 3+ cells match header keywords, this is our header row
+        if (matchCount >= 3) {
+            return { headerRowIndex: i, allRows };
+        }
+    }
+    // Fallback: use first row
+    return { headerRowIndex: 0, allRows };
+}
+
+function parseSheetWithAutoHeaders(sheet) {
+    const { headerRowIndex, allRows } = findHeaderRow(sheet);
+
+    // Build headers from the detected row
+    const headerRow = allRows[headerRowIndex];
+    const headers = headerRow.map((h, idx) => {
+        const s = (h || '').toString().trim();
+        return s || `Column_${idx}`;
+    });
+
+    // Build data rows from everything after the header
+    const dataRows = [];
+    for (let i = headerRowIndex + 1; i < allRows.length; i++) {
+        const row = allRows[i];
+        if (!row || row.length === 0) continue;
+        // Skip completely empty rows
+        const hasData = row.some(cell => (cell || '').toString().trim() !== '');
+        if (!hasData) continue;
+
+        const obj = {};
+        for (let j = 0; j < headers.length; j++) {
+            obj[headers[j]] = j < row.length ? row[j] : '';
+        }
+        dataRows.push(obj);
+    }
+
+    return { headers, dataRows, headerRowIndex };
+}
+
+function parseImportRow(row, mapping) {
+    const data = {};
+    const dates = {};
+
+    for (const [col, field] of Object.entries(mapping)) {
+        const val = (row[col] || '').toString().trim();
+        if (!val) continue;
+
+        if (field.startsWith('dates.')) {
+            const dateKey = field.replace('dates.', '');
+            // Extract date from text like "Can file as of 10/24/2025" or plain "9/16/2025"
+            let dateStr = val;
+            // Try to find a date pattern within the text
+            const dateMatch = val.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+            if (dateMatch) dateStr = dateMatch[1];
+
+            let parsed = null;
+            if (/^\d{5}$/.test(dateStr)) {
+                // Excel serial date number
+                const excelEpoch = new Date(1899, 11, 30);
+                parsed = new Date(excelEpoch.getTime() + parseInt(dateStr) * 86400000);
+            } else {
+                parsed = new Date(dateStr);
+            }
+            if (parsed && !isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+                dates[dateKey] = parsed.toISOString().slice(0, 10);
+            }
+            // Also store the full text in notes if it contains extra info beyond the date
+            if (val.length > 15 && dateMatch) {
+                data._extraNotes = (data._extraNotes || '') + `${col}: ${val}\n`;
+            }
+        } else if (field === 'demandAmount' || field === 'judgmentAmount') {
+            data[field] = cleanAmount(val);
+        } else {
+            data[field] = val;
+        }
+    }
+
+    return { data, dates };
+}
+
 // Import from Excel/CSV file
 router.post('/api/matters/import', upload.single('file'), async (req, res) => {
     try {
@@ -1113,58 +1264,41 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
         }
 
         const sheetName = workbook.SheetNames[0];
-        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+        const { headers, dataRows, headerRowIndex } = parseSheetWithAutoHeaders(workbook.Sheets[sheetName]);
 
-        if (rows.length === 0) {
-            return res.status(400).json({ error: 'Spreadsheet is empty' });
+        if (dataRows.length === 0) {
+            return res.status(400).json({ error: 'No data rows found after header detection.' });
         }
 
         // Map columns
-        const headers = Object.keys(rows[0]);
         const mapping = {};
+        const unmapped = [];
         for (const h of headers) {
-            const norm = normalizeHeader(h);
-            if (COLUMN_MAP[norm]) {
-                mapping[h] = COLUMN_MAP[norm];
+            const match = matchHeader(h);
+            if (match) {
+                mapping[h] = match;
+            } else {
+                unmapped.push(h);
             }
         }
 
         const created = [];
         const skipped = [];
 
-        for (const row of rows) {
-            const data = {};
-            const dates = {};
-
-            for (const [col, field] of Object.entries(mapping)) {
-                const val = (row[col] || '').toString().trim();
-                if (!val) continue;
-
-                if (field.startsWith('dates.')) {
-                    const dateKey = field.replace('dates.', '');
-                    // Try to parse date — handle Excel serial numbers too
-                    let parsed = null;
-                    if (/^\d{5}$/.test(val)) {
-                        // Excel serial date number
-                        const excelEpoch = new Date(1899, 11, 30);
-                        parsed = new Date(excelEpoch.getTime() + parseInt(val) * 86400000);
-                    } else {
-                        parsed = new Date(val);
-                    }
-                    if (parsed && !isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
-                        dates[dateKey] = parsed.toISOString().slice(0, 10);
-                    }
-                } else if (field === 'demandAmount' || field === 'judgmentAmount') {
-                    data[field] = cleanAmount(val);
-                } else {
-                    data[field] = val;
-                }
-            }
+        for (let i = 0; i < dataRows.length; i++) {
+            const row = dataRows[i];
+            const { data, dates } = parseImportRow(row, mapping);
 
             // Skip rows without a name
             if (!data.debtorName) {
-                skipped.push({ row: rows.indexOf(row) + 2, reason: 'No debtor name found' });
+                skipped.push({ row: headerRowIndex + i + 2, reason: 'No debtor name found' });
                 continue;
+            }
+
+            // Append any extra date-context notes to the notes field
+            if (data._extraNotes) {
+                data.notes = ((data.notes || '') + '\n' + data._extraNotes).trim();
+                delete data._extraNotes;
             }
 
             const matter = createMatterObject(data);
@@ -1196,7 +1330,10 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
             skipped: skipped.length,
             created,
             skipped,
-            columnsMatched: Object.entries(mapping).map(([col, field]) => `${col} → ${field}`)
+            headerRowIndex: headerRowIndex + 1,
+            columnsMatched: Object.entries(mapping).map(([col, field]) => `${col} → ${field}`),
+            unmappedColumns: unmapped,
+            rawHeaders: headers
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -1216,37 +1353,43 @@ router.post('/api/matters/import/preview', upload.single('file'), async (req, re
         }
 
         const sheetName = workbook.SheetNames[0];
-        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+        const { headers, dataRows, headerRowIndex } = parseSheetWithAutoHeaders(workbook.Sheets[sheetName]);
 
-        if (rows.length === 0) {
-            return res.status(400).json({ error: 'Spreadsheet is empty' });
+        if (dataRows.length === 0) {
+            return res.status(400).json({ error: 'No data rows found.' });
         }
 
-        const headers = Object.keys(rows[0]);
         const mapping = {};
         const unmapped = [];
         for (const h of headers) {
-            const norm = normalizeHeader(h);
-            if (COLUMN_MAP[norm]) {
-                mapping[h] = COLUMN_MAP[norm];
+            const match = matchHeader(h);
+            if (match) {
+                mapping[h] = match;
             } else {
                 unmapped.push(h);
             }
         }
 
         // Return first 5 rows as preview
-        const preview = rows.slice(0, 5).map(row => {
+        const preview = dataRows.slice(0, 5).map(row => {
             const mapped = {};
             for (const [col, field] of Object.entries(mapping)) {
-                mapped[field] = (row[col] || '').toString().trim();
+                mapped[field] = (row[col] || '').toString().trim().substring(0, 80);
             }
             return mapped;
         });
 
+        const sampleRow = dataRows[0] ? Object.fromEntries(headers.map(h => [h, (dataRows[0][h] || '').toString().substring(0, 60)])) : {};
+
         res.json({
-            totalRows: rows.length,
+            totalRows: dataRows.length,
+            sheetName,
+            allSheets: workbook.SheetNames,
+            headerRowIndex: headerRowIndex + 1,
+            rawHeaders: headers,
             columnsMatched: mapping,
             unmappedColumns: unmapped,
+            sampleRow,
             preview
         });
     } catch (err) {
