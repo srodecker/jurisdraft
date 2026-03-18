@@ -1,0 +1,1130 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>JurisDraft - Kinecta Case Manager</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/design-system.css" />
+    <style>
+        html, body { height: 100%; margin: 0; overflow: hidden; }
+
+        /* App Shell */
+        .app-shell { display: flex; height: 100vh; }
+
+        /* Nav Rail */
+        .nav-rail { width: 240px; min-width: 240px; background: var(--bg-secondary); border-right: 1px solid var(--border-primary); display: flex; flex-direction: column; }
+        .nav-brand { padding: 16px; border-bottom: 1px solid var(--border-primary); display: flex; align-items: center; gap: 10px; }
+        .nav-brand-icon { width: 32px; height: 32px; background: var(--accent-primary); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .nav-brand h1 { font-size: 15px; font-weight: 700; margin: 0; }
+        .nav-brand p { font-size: 10px; color: var(--text-tertiary); margin: 0; }
+
+        .nav-group { padding: 8px; }
+        .nav-group-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-tertiary); padding: 8px 10px 4px; }
+        .nav-link { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; font-size: 13px; color: var(--text-secondary); cursor: pointer; text-decoration: none; transition: all 150ms; }
+        .nav-link:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+        .nav-link.active { background: var(--accent-primary-light); color: var(--accent-primary); font-weight: 500; }
+        .nav-link svg { width: 16px; height: 16px; flex-shrink: 0; }
+        .nav-count { margin-left: auto; font-size: 11px; font-weight: 600; background: var(--accent-primary); color: white; border-radius: 10px; padding: 0 6px; min-width: 18px; text-align: center; line-height: 18px; }
+
+        .nav-user { padding: 8px; }
+        .nav-user-select { width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 6px 8px; font-size: 12px; color: var(--text-primary); }
+
+        .nav-footer { margin-top: auto; padding: 8px; border-top: 1px solid var(--border-primary); }
+
+        /* Main Area */
+        .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+        /* Top Bar */
+        .top-bar { display: flex; align-items: center; justify-content: space-between; padding: 10px 24px; border-bottom: 1px solid var(--border-primary); background: var(--bg-secondary); flex-shrink: 0; }
+        .top-bar-left { display: flex; align-items: center; gap: 12px; }
+        .top-bar-right { display: flex; align-items: center; gap: 8px; }
+        .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+        .breadcrumb a { color: var(--text-secondary); text-decoration: none; cursor: pointer; }
+        .breadcrumb a:hover { color: var(--accent-primary); }
+        .breadcrumb .sep { color: var(--text-tertiary); }
+        .breadcrumb .current { color: var(--text-primary); font-weight: 500; }
+
+        .notif-btn { position: relative; background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 6px; cursor: pointer; color: var(--text-secondary); }
+        .notif-btn:hover { border-color: var(--accent-primary); color: var(--accent-primary); }
+        .notif-dot { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px; background: var(--accent-error); border-radius: 50%; display: none; }
+        .notif-dot.visible { display: block; }
+
+        /* Content Scroll */
+        .content-scroll { flex: 1; overflow-y: auto; padding: 24px; }
+
+        /* Stats Row */
+        .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 20px; }
+        .stat-card { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px 16px; }
+        .stat-val { font-size: 26px; font-weight: 700; }
+        .stat-lbl { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+        /* Table */
+        .tbl-wrap { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; overflow: hidden; }
+        .tbl-bar { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--border-primary); gap: 8px; }
+        .tbl-bar input { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 6px 10px; font-size: 12px; color: var(--text-primary); width: 200px; }
+        .tbl-bar input::placeholder { color: var(--text-tertiary); }
+        .tbl-bar select { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 5px 8px; font-size: 12px; color: var(--text-primary); }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 8px 14px; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); border-bottom: 1px solid var(--border-primary); background: var(--bg-tertiary); }
+        td { padding: 8px 14px; border-bottom: 1px solid var(--border-secondary); }
+        tr.clickable:hover td { background: rgba(59,130,246,0.03); cursor: pointer; }
+        tr:last-child td { border-bottom: none; }
+
+        /* Badges */
+        .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 500; }
+        .badge-active { background: var(--accent-primary-light); color: var(--accent-primary); }
+        .badge-closed { background: var(--bg-tertiary); color: var(--text-tertiary); }
+        .badge-stage { background: var(--accent-warning-light); color: #d97706; }
+        .badge-task { background: var(--accent-success-light); color: var(--accent-success); font-size: 10px; }
+
+        /* Buttons */
+        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 7px; font-size: 13px; font-weight: 500; border: none; cursor: pointer; transition: all 150ms; }
+        .btn-primary { background: var(--accent-primary); color: white; }
+        .btn-primary:hover { background: var(--accent-primary-hover); }
+        .btn-secondary { background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-primary); }
+        .btn-secondary:hover { border-color: var(--accent-primary); }
+        .btn-danger { background: var(--accent-error-light); color: var(--accent-error); }
+        .btn-danger:hover { background: var(--accent-error); color: white; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-ghost { background: none; border: none; color: var(--text-secondary); padding: 4px 8px; cursor: pointer; font-size: 12px; }
+        .btn-ghost:hover { color: var(--accent-primary); }
+
+        /* Detail View */
+        .detail-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+        .detail-title { font-size: 20px; font-weight: 700; margin: 0; }
+        .detail-meta { display: flex; gap: 16px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); flex-wrap: wrap; }
+        .detail-meta span { display: flex; align-items: center; gap: 4px; }
+
+        /* Tabs */
+        .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border-primary); margin-bottom: 20px; flex-shrink: 0; }
+        .tab { padding: 10px 18px; font-size: 13px; font-weight: 500; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; transition: all 150ms; }
+        .tab:hover { color: var(--text-primary); }
+        .tab.active { color: var(--accent-primary); border-bottom-color: var(--accent-primary); }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* Info Card */
+        .info-card { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+        .info-card h3 { font-size: 13px; font-weight: 600; margin: 0 0 10px; display: flex; align-items: center; gap: 6px; }
+        .info-row { display: flex; gap: 8px; font-size: 12px; margin-bottom: 5px; }
+        .info-lbl { color: var(--text-tertiary); min-width: 110px; flex-shrink: 0; }
+        .info-val { color: var(--text-primary); }
+        .info-val a { color: var(--accent-primary); text-decoration: none; }
+        .info-val a:hover { text-decoration: underline; }
+
+        /* Dates Grid */
+        .dates-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+        .date-fld { display: flex; flex-direction: column; gap: 3px; }
+        .date-fld label { font-size: 10px; font-weight: 500; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: 0.03em; }
+        .date-fld input { background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 5px; padding: 5px 7px; font-size: 12px; color: var(--text-primary); }
+
+        /* Stage Cards */
+        .stage-card { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+        .stage-card.current { border-color: var(--accent-primary); }
+        .stage-card.completed { opacity: 0.65; }
+        .stage-hdr { display: flex; align-items: center; gap: 10px; padding: 12px 14px; cursor: pointer; user-select: none; }
+        .stage-hdr:hover { background: rgba(59,130,246,0.03); }
+        .stage-num { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; }
+        .stage-num.pending { background: var(--bg-tertiary); color: var(--text-tertiary); }
+        .stage-num.current { background: var(--accent-primary); color: white; }
+        .stage-num.done { background: var(--accent-success); color: white; }
+        .stage-name { font-size: 13px; font-weight: 600; flex: 1; }
+        .stage-prog { font-size: 11px; color: var(--text-secondary); }
+        .stage-chev { color: var(--text-tertiary); transition: transform 150ms; }
+        .stage-card.open .stage-chev { transform: rotate(90deg); }
+        .stage-body { display: none; padding: 0 14px 14px; }
+        .stage-card.open .stage-body { display: block; }
+
+        /* Task List */
+        .task-list { list-style: none; padding: 0; margin: 0; }
+        .task-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-secondary); }
+        .task-item:last-child { border-bottom: none; }
+        .task-chk { width: 18px; height: 18px; border-radius: 4px; border: 2px solid var(--border-primary); background: none; cursor: pointer; flex-shrink: 0; margin-top: 1px; display: flex; align-items: center; justify-content: center; transition: all 150ms; }
+        .task-chk:hover { border-color: var(--accent-primary); }
+        .task-chk.checked { background: var(--accent-success); border-color: var(--accent-success); }
+        .task-chk.checked::after { content: ''; display: block; width: 5px; height: 9px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-1px, -1px); }
+        .task-lbl { font-size: 12px; line-height: 1.4; flex: 1; }
+        .task-lbl.done { text-decoration: line-through; color: var(--text-tertiary); }
+        .task-assignee { font-size: 10px; color: var(--text-tertiary); background: var(--bg-tertiary); padding: 2px 6px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; }
+        .task-assignee.review { background: var(--accent-warning-light); color: #d97706; }
+
+        /* Timeline */
+        .tl-list { position: relative; }
+        .tl-item { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border-secondary); }
+        .tl-item:last-child { border-bottom: none; }
+        .tl-icon { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 12px; }
+        .tl-icon.filing { background: var(--accent-primary-light); color: var(--accent-primary); }
+        .tl-icon.hearing { background: var(--accent-warning-light); color: #d97706; }
+        .tl-icon.service { background: var(--accent-success-light); color: var(--accent-success); }
+        .tl-icon.correspondence { background: rgba(168,85,247,0.1); color: #a855f7; }
+        .tl-icon.note { background: var(--bg-tertiary); color: var(--text-secondary); }
+        .tl-icon.task_completed { background: var(--accent-success-light); color: var(--accent-success); }
+        .tl-icon.status_change { background: var(--accent-primary-light); color: var(--accent-primary); }
+        .tl-icon.deadline { background: var(--accent-error-light); color: var(--accent-error); }
+        .tl-icon.minute_order { background: var(--accent-warning-light); color: #d97706; }
+        .tl-icon.court_order { background: var(--accent-warning-light); color: #d97706; }
+        .tl-icon.discovery { background: rgba(168,85,247,0.1); color: #a855f7; }
+        .tl-icon.payment { background: var(--accent-success-light); color: var(--accent-success); }
+        .tl-icon.client_contact { background: var(--accent-primary-light); color: var(--accent-primary); }
+        .tl-body { flex: 1; min-width: 0; }
+        .tl-title { font-size: 13px; font-weight: 500; }
+        .tl-desc { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+        .tl-date { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+        .tl-del { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 14px; padding: 0 4px; }
+        .tl-del:hover { color: var(--accent-error); }
+
+        /* Chat */
+        .chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 200px); }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 0 0 12px; }
+        .chat-msg { display: flex; gap: 10px; margin-bottom: 12px; }
+        .chat-avatar { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; flex-shrink: 0; }
+        .chat-avatar.user { background: var(--accent-primary); color: white; }
+        .chat-avatar.ai { background: var(--accent-success-light); color: var(--accent-success); }
+        .chat-bubble { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 10px 14px; font-size: 13px; line-height: 1.5; max-width: 80%; white-space: pre-wrap; word-wrap: break-word; }
+        .chat-bubble.user { background: var(--accent-primary-light); border-color: rgba(59,130,246,0.2); }
+        .chat-time { font-size: 10px; color: var(--text-tertiary); margin-top: 4px; }
+        .chat-input-row { display: flex; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border-primary); }
+        .chat-input { flex: 1; background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 8px; padding: 10px 14px; font-size: 13px; color: var(--text-primary); resize: none; min-height: 40px; max-height: 120px; font-family: var(--font-sans); }
+        .chat-input::placeholder { color: var(--text-tertiary); }
+        .chat-input:focus { outline: none; border-color: var(--accent-primary); }
+        .chat-send { background: var(--accent-primary); color: white; border: none; border-radius: 8px; padding: 10px 16px; cursor: pointer; font-size: 13px; font-weight: 500; }
+        .chat-send:hover { background: var(--accent-primary-hover); }
+        .chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
+        .typing-indicator { display: flex; gap: 4px; padding: 12px 14px; align-items: center; }
+        .typing-dot { width: 6px; height: 6px; background: var(--text-tertiary); border-radius: 50%; animation: typingBounce 1.4s infinite ease-in-out; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingBounce { 0%,80%,100% { transform: scale(0.6); opacity: 0.4; } 40% { transform: scale(1); opacity: 1; } }
+
+        /* Notifications Panel */
+        .notif-panel { position: fixed; top: 0; right: 0; width: 360px; height: 100vh; background: var(--bg-secondary); border-left: 1px solid var(--border-primary); z-index: 100; transform: translateX(100%); transition: transform 200ms; display: flex; flex-direction: column; }
+        .notif-panel.open { transform: translateX(0); }
+        .notif-panel-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border-primary); }
+        .notif-panel-head h3 { font-size: 15px; font-weight: 600; margin: 0; }
+        .notif-list { flex: 1; overflow-y: auto; }
+        .notif-item { padding: 12px 16px; border-bottom: 1px solid var(--border-secondary); cursor: pointer; font-size: 13px; }
+        .notif-item:hover { background: var(--bg-tertiary); }
+        .notif-item.unread { border-left: 3px solid var(--accent-primary); }
+        .notif-item .notif-msg { margin-bottom: 4px; }
+        .notif-item .notif-time { font-size: 11px; color: var(--text-tertiary); }
+        .notif-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.3); z-index: 99; display: none; }
+        .notif-overlay.open { display: block; }
+
+        /* Modal */
+        .modal-bg { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 200; }
+        .modal-bg.hidden { display: none; }
+        .modal { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 12px; width: 90%; max-width: 520px; max-height: 85vh; overflow-y: auto; }
+        .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border-primary); }
+        .modal-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
+        .modal-close { background: none; border: none; font-size: 18px; color: var(--text-tertiary); cursor: pointer; }
+        .modal-body { padding: 18px; }
+        .fg { margin-bottom: 12px; }
+        .fg label { display: block; font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-bottom: 3px; }
+        .fg input, .fg textarea, .fg select { width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 7px 10px; font-size: 13px; color: var(--text-primary); box-sizing: border-box; }
+        .fg textarea { resize: vertical; min-height: 50px; font-family: var(--font-sans); }
+        .fg-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--border-primary); }
+
+        /* Event Add Form */
+        .event-form { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+
+        /* My Tasks Panel */
+        .my-tasks { background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; padding: 14px; margin-bottom: 20px; }
+        .my-tasks h3 { font-size: 13px; font-weight: 600; margin: 0 0 10px; display: flex; align-items: center; gap: 6px; }
+        .my-task-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border-secondary); font-size: 12px; cursor: pointer; }
+        .my-task-item:last-child { border-bottom: none; }
+        .my-task-item:hover { color: var(--accent-primary); }
+        .my-task-matter { color: var(--text-tertiary); font-size: 11px; margin-left: auto; }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .nav-rail { display: none; }
+            .content-scroll { padding: 14px; }
+            .stats-row { grid-template-columns: 1fr 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <!-- Nav Rail -->
+        <nav class="nav-rail">
+            <div class="nav-brand">
+                <div class="nav-brand-icon">
+                    <svg width="18" height="18" viewBox="0 0 100 100" fill="none"><rect x="35" y="20" width="8" height="50" rx="4" fill="white"/><rect x="20" y="15" width="38" height="12" rx="6" fill="white"/><rect x="20" y="15" width="12" height="25" rx="6" fill="white"/><rect x="10" y="65" width="60" height="12" rx="6" fill="white"/><rect x="10" y="65" width="12" height="20" rx="6" fill="white"/></svg>
+                </div>
+                <div>
+                    <h1>JurisDraft</h1>
+                    <p>Kinecta Case Manager</p>
+                </div>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-group-title">Workspace</div>
+                <a href="/full" class="nav-link">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Document Generator
+                </a>
+                <a href="/kinecta" class="nav-link active">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+                    Case Manager
+                    <span id="navCount" class="nav-count">0</span>
+                </a>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-group-title">View As</div>
+                <div class="nav-user">
+                    <select id="currentUser" class="nav-user-select" onchange="switchUser(this.value)"></select>
+                </div>
+            </div>
+
+            <div class="nav-group" id="navTeam">
+                <div class="nav-group-title">Team</div>
+            </div>
+
+            <div class="nav-footer">
+                <a class="nav-link" onclick="exportCSV()" style="cursor:pointer;">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    Export CSV
+                </a>
+            </div>
+        </nav>
+
+        <!-- Main Area -->
+        <div class="main-area">
+            <!-- Top Bar -->
+            <div class="top-bar">
+                <div class="top-bar-left">
+                    <div class="breadcrumb" id="breadcrumb">
+                        <span class="current">All Matters</span>
+                    </div>
+                </div>
+                <div class="top-bar-right">
+                    <button class="notif-btn" onclick="toggleNotifPanel()">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                        <div id="notifDot" class="notif-dot"></div>
+                    </button>
+                    <button class="btn btn-primary btn-sm" onclick="openNewModal()">
+                        <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        New Matter
+                    </button>
+                </div>
+            </div>
+
+            <!-- Scrollable Content -->
+            <div class="content-scroll" id="contentScroll">
+                <!-- LIST VIEW -->
+                <div id="listView">
+                    <!-- My Tasks -->
+                    <div class="my-tasks" id="myTasksPanel" style="display:none;">
+                        <h3>
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                            <span id="myTasksTitle">My Next Tasks</span>
+                        </h3>
+                        <div id="myTasksList"></div>
+                    </div>
+
+                    <!-- Stats -->
+                    <div class="stats-row">
+                        <div class="stat-card"><div class="stat-val" style="color:var(--accent-primary);" id="sTotal">0</div><div class="stat-lbl">Total</div></div>
+                        <div class="stat-card"><div class="stat-val" style="color:var(--accent-warning);" id="sActive">0</div><div class="stat-lbl">Active</div></div>
+                        <div class="stat-card"><div class="stat-val" style="color:var(--accent-success);" id="sClosed">0</div><div class="stat-lbl">Closed</div></div>
+                        <div class="stat-card"><div class="stat-val" style="color:var(--accent-error);" id="sPending">0</div><div class="stat-lbl">Awaiting Answer</div></div>
+                    </div>
+
+                    <!-- Table -->
+                    <div class="tbl-wrap">
+                        <div class="tbl-bar">
+                            <input type="text" id="searchInput" placeholder="Search debtor, case #..." oninput="renderTable()">
+                            <div style="display:flex;gap:6px;">
+                                <select id="filterStage" onchange="renderTable()">
+                                    <option value="all">All Stages</option>
+                                </select>
+                                <select id="filterStatus" onchange="renderTable()">
+                                    <option value="all">All Status</option>
+                                    <option value="active">Active</option>
+                                    <option value="closed">Closed</option>
+                                </select>
+                            </div>
+                        </div>
+                        <table>
+                            <thead><tr>
+                                <th>Debtor</th>
+                                <th>Case #</th>
+                                <th>Amount</th>
+                                <th>Stage</th>
+                                <th>Next Task</th>
+                                <th>Status</th>
+                                <th>Updated</th>
+                            </tr></thead>
+                            <tbody id="tableBody">
+                                <tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:32px;">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- DETAIL VIEW -->
+                <div id="detailView" style="display:none;">
+                    <div class="detail-header">
+                        <div>
+                            <h2 class="detail-title" id="dTitle">-</h2>
+                            <div class="detail-meta">
+                                <span id="dCase">Case: -</span>
+                                <span id="dAmount">Amount: -</span>
+                                <span id="dAtty">Attorney: -</span>
+                                <span id="dCourt">Court: -</span>
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:6px;">
+                            <button class="btn btn-secondary btn-sm" onclick="openEditModal()">Edit</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteMatter()">Delete</button>
+                        </div>
+                    </div>
+
+                    <!-- Tabs -->
+                    <div class="tabs">
+                        <div class="tab active" onclick="switchTab('overview')">Overview</div>
+                        <div class="tab" onclick="switchTab('timeline')">Timeline</div>
+                        <div class="tab" onclick="switchTab('workflow')">Workflow</div>
+                        <div class="tab" onclick="switchTab('chat')">Chat</div>
+                    </div>
+
+                    <!-- Overview Tab -->
+                    <div id="tab-overview" class="tab-panel active">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                            <!-- Case Info -->
+                            <div class="info-card">
+                                <h3>Case Information</h3>
+                                <div id="caseInfoContent"></div>
+                            </div>
+                            <!-- Contacts -->
+                            <div class="info-card">
+                                <h3>Key Contacts</h3>
+                                <div id="contactsContent"></div>
+                            </div>
+                        </div>
+                        <!-- Dates -->
+                        <div class="info-card">
+                            <h3>Key Dates</h3>
+                            <div class="dates-grid" id="datesGrid"></div>
+                        </div>
+                        <!-- Next Up -->
+                        <div class="info-card">
+                            <h3>Next Up</h3>
+                            <div id="nextUpContent"></div>
+                        </div>
+                    </div>
+
+                    <!-- Timeline Tab -->
+                    <div id="tab-timeline" class="tab-panel">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+                            <h3 style="font-size:14px;font-weight:600;margin:0;">Activity Timeline</h3>
+                            <button class="btn btn-secondary btn-sm" onclick="toggleEventForm()">+ Add Event</button>
+                        </div>
+                        <!-- Add Event Form -->
+                        <div id="eventForm" class="event-form" style="display:none;">
+                            <div class="fg-row">
+                                <div class="fg"><label>Type</label><select id="evType"></select></div>
+                                <div class="fg"><label>Date</label><input type="date" id="evDate" /></div>
+                            </div>
+                            <div class="fg"><label>Title</label><input id="evTitle" placeholder="e.g. Complaint Filed" /></div>
+                            <div class="fg"><label>Description</label><textarea id="evDesc" placeholder="Details..." rows="2"></textarea></div>
+                            <div style="display:flex;gap:6px;justify-content:flex-end;">
+                                <button class="btn btn-secondary btn-sm" onclick="toggleEventForm()">Cancel</button>
+                                <button class="btn btn-primary btn-sm" onclick="addEvent()">Add Event</button>
+                            </div>
+                        </div>
+                        <div id="timelineList" class="tl-list"></div>
+                    </div>
+
+                    <!-- Workflow Tab -->
+                    <div id="tab-workflow" class="tab-panel">
+                        <div id="stageTimeline"></div>
+                    </div>
+
+                    <!-- Chat Tab -->
+                    <div id="tab-chat" class="tab-panel">
+                        <div class="chat-wrap">
+                            <div class="chat-messages" id="chatMessages">
+                                <div style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px;">
+                                    Ask anything about this case. The AI has full context of all case data, dates, tasks, and events.
+                                </div>
+                            </div>
+                            <div class="chat-input-row">
+                                <textarea class="chat-input" id="chatInput" placeholder="Ask about this case..." rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea>
+                                <button class="chat-send" id="chatSendBtn" onclick="sendChat()">Send</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Panel -->
+    <div id="notifOverlay" class="notif-overlay" onclick="toggleNotifPanel()"></div>
+    <div id="notifPanel" class="notif-panel">
+        <div class="notif-panel-head">
+            <h3>Notifications</h3>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <button class="btn-ghost" onclick="markAllRead()">Mark all read</button>
+                <button class="modal-close" onclick="toggleNotifPanel()">&times;</button>
+            </div>
+        </div>
+        <div class="notif-list" id="notifList">
+            <div style="text-align:center;padding:32px;color:var(--text-tertiary);font-size:13px;">No notifications</div>
+        </div>
+    </div>
+
+    <!-- New/Edit Matter Modal -->
+    <div id="matterModal" class="modal-bg hidden">
+        <div class="modal">
+            <div class="modal-head">
+                <h2 id="modalTitle">New Matter</h2>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="fg"><label>Debtor Full Name *</label><input id="fName" placeholder="e.g. John Smith" /></div>
+                <div class="fg"><label>Debtor Address</label><input id="fAddr" placeholder="Street address" /></div>
+                <div class="fg-row">
+                    <div class="fg"><label>City</label><input id="fCity" /></div>
+                    <div class="fg"><label>State</label><input id="fState" value="CA" /></div>
+                </div>
+                <div class="fg-row">
+                    <div class="fg"><label>ZIP</label><input id="fZip" /></div>
+                    <div class="fg"><label>Demand Amount ($)</label><input id="fAmount" type="text" placeholder="25000.00" /></div>
+                </div>
+                <div class="fg-row">
+                    <div class="fg"><label>Case Number</label><input id="fCaseNum" placeholder="After filing" /></div>
+                    <div class="fg"><label>Client Matter</label><input id="fClientMatter" value="264-20241649" /></div>
+                </div>
+                <div class="fg-row">
+                    <div class="fg"><label>Loan Type</label><input id="fLoanType" placeholder="e.g. Auto, HELOC" /></div>
+                    <div class="fg"><label>Account #</label><input id="fAcctNum" /></div>
+                </div>
+                <div class="fg-row">
+                    <div class="fg"><label>Court Name</label><input id="fCourt" /></div>
+                    <div class="fg"><label>County</label><input id="fCounty" /></div>
+                </div>
+                <div class="fg"><label>Notes</label><textarea id="fNotes" placeholder="Optional notes..."></textarea></div>
+            </div>
+            <div class="modal-foot">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" id="modalSaveBtn" onclick="saveMatter()">Create Matter</button>
+            </div>
+        </div>
+    </div>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+let allMatters = [];
+let currentMatter = null;
+let workflowStages = [];
+let workflowConfig = {};
+let teamMembers = [];
+let eventTypes = [];
+let editingId = null;
+let currentUserId = localStorage.getItem('kinecta_user') || 'shane';
+let chatSending = false;
+
+// ============================================================
+// INIT
+// ============================================================
+document.addEventListener('DOMContentLoaded', async () => {
+    document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+    try {
+        const r = await fetch('/api/workflow/config');
+        const d = await r.json();
+        workflowStages = d.stages;
+        workflowConfig = d.config;
+        teamMembers = d.team;
+        eventTypes = d.eventTypes;
+    } catch(e) { console.error('Failed to load config', e); }
+
+    // Populate user select
+    const sel = document.getElementById('currentUser');
+    sel.innerHTML = teamMembers.map(m => `<option value="${m.id}" ${m.id === currentUserId ? 'selected' : ''}>${m.name} (${m.role})</option>`).join('');
+
+    // Populate stage filter
+    const sf = document.getElementById('filterStage');
+    workflowStages.forEach(s => { sf.innerHTML += `<option value="${s.number}">${s.name}</option>`; });
+
+    // Populate event type select
+    const et = document.getElementById('evType');
+    et.innerHTML = eventTypes.map(t => `<option value="${t.id}">${t.label}</option>`).join('');
+
+    // Populate team in nav
+    const navTeam = document.getElementById('navTeam');
+    teamMembers.forEach(m => {
+        navTeam.innerHTML += `<div class="nav-link" style="cursor:default;"><svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg><div><div style="font-size:12px;">${esc(m.name)}</div><div style="font-size:10px;color:var(--text-tertiary);">${esc(m.role)}</div></div></div>`;
+    });
+
+    // Set default event date
+    document.getElementById('evDate').value = new Date().toISOString().slice(0, 10);
+
+    await loadMatters();
+    loadNotifications();
+});
+
+function switchUser(id) {
+    currentUserId = id;
+    localStorage.setItem('kinecta_user', id);
+    renderMyTasks();
+    loadNotifications();
+}
+
+// ============================================================
+// DATA LOADING
+// ============================================================
+async function loadMatters() {
+    try {
+        const r = await fetch('/api/matters?summary=true');
+        allMatters = await r.json();
+    } catch(e) { allMatters = []; }
+    renderStats();
+    renderTable();
+    renderMyTasks();
+    document.getElementById('navCount').textContent = allMatters.filter(m => m.status === 'active').length;
+}
+
+// ============================================================
+// LIST VIEW
+// ============================================================
+function renderStats() {
+    const active = allMatters.filter(m => m.status === 'active');
+    const closed = allMatters.filter(m => m.status === 'closed');
+    const pending = active.filter(m => m.currentStage === 4);
+    document.getElementById('sTotal').textContent = allMatters.length;
+    document.getElementById('sActive').textContent = active.length;
+    document.getElementById('sClosed').textContent = closed.length;
+    document.getElementById('sPending').textContent = pending.length;
+}
+
+function renderMyTasks() {
+    const panel = document.getElementById('myTasksPanel');
+    const list = document.getElementById('myTasksList');
+    const title = document.getElementById('myTasksTitle');
+    const member = teamMembers.find(m => m.id === currentUserId);
+    title.textContent = member ? `${member.name}'s Next Tasks` : 'My Next Tasks';
+
+    // Get next task per active matter for current user
+    const tasks = [];
+    for (const m of allMatters.filter(x => x.status === 'active')) {
+        if (m.nextTask && m.nextTask.assigneeId === currentUserId) {
+            tasks.push({ matterId: m.id, debtorName: m.debtorName, task: m.nextTask.label });
+        }
+    }
+
+    if (tasks.length === 0) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    list.innerHTML = tasks.map(t => `<div class="my-task-item" onclick="openMatter('${t.matterId}')">
+        <svg width="12" height="12" fill="none" stroke="var(--accent-primary)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        <span>${esc(t.task)}</span>
+        <span class="my-task-matter">${esc(t.debtorName)}</span>
+    </div>`).join('');
+}
+
+function renderTable() {
+    const tbody = document.getElementById('tableBody');
+    const search = (document.getElementById('searchInput').value || '').toLowerCase();
+    const stageF = document.getElementById('filterStage').value;
+    const statusF = document.getElementById('filterStatus').value;
+
+    let filtered = allMatters;
+    if (statusF !== 'all') filtered = filtered.filter(m => m.status === statusF);
+    if (stageF !== 'all') filtered = filtered.filter(m => m.currentStage === Number(stageF));
+    if (search) filtered = filtered.filter(m =>
+        (m.debtorName || '').toLowerCase().includes(search) ||
+        (m.caseNumber || '').toLowerCase().includes(search)
+    );
+
+    if (filtered.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:32px;">No matters found.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = filtered.map(m => {
+        const stage = workflowStages.find(s => s.number === m.currentStage) || { name: 'Stage ' + m.currentStage };
+        const updated = m.updatedAt ? new Date(m.updatedAt).toLocaleDateString() : '-';
+        const nextTask = m.nextTask ? `<span class="badge badge-task" title="${esc(m.nextTask.assignee)}">${esc(truncate(m.nextTask.label, 30))}</span>` : '<span style="color:var(--text-tertiary);font-size:11px;">-</span>';
+        return `<tr class="clickable" onclick="openMatter('${m.id}')">
+            <td style="font-weight:500;">${esc(m.debtorName || '-')}</td>
+            <td>${esc(m.caseNumber || '-')}</td>
+            <td>${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</td>
+            <td><span class="badge badge-stage">${esc(stage.name)}</span></td>
+            <td>${nextTask}</td>
+            <td><span class="badge ${m.status === 'active' ? 'badge-active' : 'badge-closed'}">${m.status}</span></td>
+            <td style="color:var(--text-secondary);font-size:12px;">${updated}</td>
+        </tr>`;
+    }).join('');
+}
+
+// ============================================================
+// DETAIL VIEW
+// ============================================================
+async function openMatter(id) {
+    try {
+        const r = await fetch('/api/matters/' + id);
+        currentMatter = await r.json();
+    } catch(e) { alert('Failed to load matter'); return; }
+
+    document.getElementById('listView').style.display = 'none';
+    document.getElementById('detailView').style.display = 'block';
+    document.getElementById('breadcrumb').innerHTML = `<a onclick="showList()">All Matters</a><span class="sep">/</span><span class="current">${esc(currentMatter.debtorName || 'Matter')}</span>`;
+
+    renderDetailHeader();
+    switchTab('overview');
+}
+
+function showList() {
+    document.getElementById('listView').style.display = 'block';
+    document.getElementById('detailView').style.display = 'none';
+    document.getElementById('breadcrumb').innerHTML = '<span class="current">All Matters</span>';
+    currentMatter = null;
+    loadMatters();
+}
+
+function renderDetailHeader() {
+    const m = currentMatter;
+    document.getElementById('dTitle').textContent = m.debtorName || 'Unnamed';
+    document.getElementById('dCase').textContent = 'Case: ' + (m.caseNumber || 'Pending');
+    document.getElementById('dAmount').textContent = 'Amount: ' + (m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-');
+    document.getElementById('dAtty').textContent = 'Attorney: ' + (m.attorney || '-');
+    document.getElementById('dCourt').textContent = 'Court: ' + (m.courtName || 'TBD');
+}
+
+// ============================================================
+// TABS
+// ============================================================
+function switchTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelector(`.tab-panel#tab-${name}`).classList.add('active');
+    document.querySelectorAll('.tab').forEach(t => {
+        if (t.textContent.toLowerCase() === name || (name === 'overview' && t.textContent === 'Overview') || (name === 'timeline' && t.textContent === 'Timeline') || (name === 'workflow' && t.textContent === 'Workflow') || (name === 'chat' && t.textContent === 'Chat')) t.classList.add('active');
+    });
+
+    if (name === 'overview') renderOverview();
+    else if (name === 'timeline') renderTimeline();
+    else if (name === 'workflow') renderStages();
+    else if (name === 'chat') renderChat();
+}
+
+// ============================================================
+// OVERVIEW TAB
+// ============================================================
+function renderOverview() {
+    const m = currentMatter;
+
+    // Case Info
+    document.getElementById('caseInfoContent').innerHTML = `
+        <div class="info-row"><span class="info-lbl">Debtor:</span><span class="info-val">${esc(m.debtorName)}</span></div>
+        <div class="info-row"><span class="info-lbl">Address:</span><span class="info-val">${esc([m.debtorAddress, m.debtorCity, m.debtorState, m.debtorZip].filter(Boolean).join(', ') || '-')}</span></div>
+        <div class="info-row"><span class="info-lbl">Client:</span><span class="info-val">${esc(m.creditorName)}</span></div>
+        <div class="info-row"><span class="info-lbl">Client Matter:</span><span class="info-val">${esc(m.clientMatter)}</span></div>
+        <div class="info-row"><span class="info-lbl">Loan Type:</span><span class="info-val">${esc(m.loanType || '-')}</span></div>
+        <div class="info-row"><span class="info-lbl">Account #:</span><span class="info-val">${esc(m.accountNumber || '-')}</span></div>
+        <div class="info-row"><span class="info-lbl">Case Number:</span><span class="info-val">${esc(m.caseNumber || 'Pending')}</span></div>
+        <div class="info-row"><span class="info-lbl">Court:</span><span class="info-val">${esc(m.courtName || 'TBD')}</span></div>
+        <div class="info-row"><span class="info-lbl">Demand:</span><span class="info-val">${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</span></div>
+        <div class="info-row"><span class="info-lbl">Judgment:</span><span class="info-val">${m.judgmentAmount ? '$' + Number(m.judgmentAmount).toLocaleString() : '-'}</span></div>
+        ${m.notes ? `<div class="info-row"><span class="info-lbl">Notes:</span><span class="info-val">${esc(m.notes)}</span></div>` : ''}
+    `;
+
+    // Contacts
+    const c = workflowConfig.contacts;
+    document.getElementById('contactsContent').innerHTML = `
+        <div class="info-row"><span class="info-lbl">Attorney:</span><span class="info-val">${esc(m.attorney)} — <a href="mailto:${m.attorneyEmail}">${m.attorneyEmail}</a></span></div>
+        <div class="info-row"><span class="info-lbl">Secretary:</span><span class="info-val">${esc(m.secretary)}</span></div>
+        <div class="info-row"><span class="info-lbl">Process Server:</span><span class="info-val">${esc(c.processServer.name)} — <a href="mailto:${c.processServer.email}">${c.processServer.email}</a></span></div>
+        <div class="info-row"><span class="info-lbl">Accounting:</span><span class="info-val">${esc(c.accounting.name)} — <a href="mailto:${c.accounting.email}">${c.accounting.email}</a></span></div>
+        <div class="info-row"><span class="info-lbl">Recording:</span><span class="info-val">${esc(c.recording.name)} — <a href="mailto:${c.recording.email}">${c.recording.email}</a></span></div>
+        <div class="info-row"><span class="info-lbl">Paralegal:</span><span class="info-val">${esc(c.paralegal.name)} — <a href="mailto:${c.paralegal.email}">${c.paralegal.email}</a></span></div>
+        <div class="info-row"><span class="info-lbl">Client Contact:</span><span class="info-val">${esc(c.clientContact.name)}</span></div>
+    `;
+
+    // Dates
+    renderDates();
+
+    // Next Up — first 3 pending tasks
+    const pending = [];
+    for (const stage of workflowStages) {
+        for (const task of stage.tasks) {
+            if (m.tasks[task.id] && !m.tasks[task.id].completed) {
+                const member = teamMembers.find(tm => tm.id === (m.tasks[task.id].assignedTo || task.assignee));
+                pending.push({ stage: stage.name, task: task.label, assignee: member ? member.name : '?', assigneeId: m.tasks[task.id].assignedTo || task.assignee });
+            }
+        }
+    }
+    const nextHtml = pending.slice(0, 3).map(t => `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-secondary);font-size:12px;">
+        <span style="color:var(--accent-primary);font-weight:500;">${esc(t.stage)}</span>
+        <span style="flex:1;">${esc(t.task)}</span>
+        <span class="task-assignee">${esc(t.assignee)}</span>
+    </div>`).join('');
+    document.getElementById('nextUpContent').innerHTML = nextHtml || '<span style="font-size:12px;color:var(--text-tertiary);">All tasks complete!</span>';
+}
+
+function renderDates() {
+    const m = currentMatter;
+    const labels = {
+        dvnSent:'DVN Sent', responseDue:'Response Due', complaintFiled:'Complaint Filed',
+        served:'Served', answerDue:'Answer Due', answerReceived:'Answer Received',
+        defaultEntered:'Default Entered', judgmentEntered:'Judgment Entered',
+        abstractFiled:'Abstract Filed', abstractRecorded:'Abstract Recorded',
+        writIssued:'Writ Issued', closed:'Closed'
+    };
+    document.getElementById('datesGrid').innerHTML = Object.entries(labels).map(([k, l]) => `
+        <div class="date-fld">
+            <label>${l}</label>
+            <input type="date" value="${m.dates[k] || ''}" onchange="updateDate('${k}', this.value)" />
+        </div>
+    `).join('');
+}
+
+async function updateDate(key, val) {
+    try {
+        const r = await fetch(`/api/matters/${currentMatter.id}/dates`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [key]: val || null })
+        });
+        currentMatter = await r.json();
+    } catch(e) { console.error(e); }
+}
+
+// ============================================================
+// TIMELINE TAB
+// ============================================================
+function renderTimeline() {
+    const events = (currentMatter.events || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (events.length === 0) {
+        document.getElementById('timelineList').innerHTML = '<div style="text-align:center;padding:32px;color:var(--text-tertiary);font-size:13px;">No events yet. Add one above.</div>';
+        return;
+    }
+    document.getElementById('timelineList').innerHTML = events.map(e => {
+        const icon = getEventIcon(e.type);
+        const dateStr = new Date(e.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const isAuto = e.addedBy === 'system' || e.type === 'task_completed';
+        return `<div class="tl-item">
+            <div class="tl-icon ${e.type}">${icon}</div>
+            <div class="tl-body">
+                <div class="tl-title">${esc(e.title)}</div>
+                ${e.description ? `<div class="tl-desc">${esc(e.description)}</div>` : ''}
+                <div class="tl-date">${dateStr}</div>
+            </div>
+            ${!isAuto ? `<button class="tl-del" onclick="deleteEvent('${e.id}')" title="Delete">&times;</button>` : ''}
+        </div>`;
+    }).join('');
+}
+
+function getEventIcon(type) {
+    const icons = {
+        filing: '&#128196;', hearing: '&#9878;', service: '&#9993;', correspondence: '&#9993;',
+        minute_order: '&#128220;', discovery: '&#128269;', payment: '&#128176;', deadline: '&#9200;',
+        note: '&#128221;', status_change: '&#9873;', task_completed: '&#10003;', client_contact: '&#128222;',
+        court_order: '&#9878;'
+    };
+    return icons[type] || '&#128196;';
+}
+
+function toggleEventForm() {
+    const f = document.getElementById('eventForm');
+    f.style.display = f.style.display === 'none' ? 'block' : 'none';
+}
+
+async function addEvent() {
+    const type = document.getElementById('evType').value;
+    const date = document.getElementById('evDate').value;
+    const title = document.getElementById('evTitle').value.trim();
+    const desc = document.getElementById('evDesc').value.trim();
+    if (!title) { alert('Title is required'); return; }
+
+    try {
+        const r = await fetch(`/api/matters/${currentMatter.id}/events`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type, date: date || new Date().toISOString(), title, description: desc, addedBy: currentUserId })
+        });
+        const d = await r.json();
+        currentMatter = d.matter;
+        document.getElementById('evTitle').value = '';
+        document.getElementById('evDesc').value = '';
+        toggleEventForm();
+        renderTimeline();
+    } catch(e) { alert('Failed to add event'); }
+}
+
+async function deleteEvent(eventId) {
+    if (!confirm('Delete this event?')) return;
+    try {
+        const r = await fetch(`/api/matters/${currentMatter.id}/events/${eventId}`, { method: 'DELETE' });
+        currentMatter = await r.json();
+        renderTimeline();
+    } catch(e) { alert('Failed to delete'); }
+}
+
+// ============================================================
+// WORKFLOW TAB
+// ============================================================
+function renderStages() {
+    const m = currentMatter;
+    document.getElementById('stageTimeline').innerHTML = workflowStages.map(stage => {
+        const tasks = stage.tasks;
+        const done = tasks.filter(t => m.tasks[t.id] && m.tasks[t.id].completed).length;
+        const total = tasks.length;
+        const allDone = done === total;
+        const isCurrent = stage.number === m.currentStage;
+        const numClass = allDone ? 'done' : isCurrent ? 'current' : 'pending';
+        const cardClass = `stage-card ${isCurrent ? 'current open' : ''} ${allDone ? 'completed' : ''}`;
+
+        return `<div class="${cardClass}" data-stage="${stage.number}">
+            <div class="stage-hdr" onclick="this.parentElement.classList.toggle('open')">
+                <div class="stage-num ${numClass}">${allDone ? '&#10003;' : stage.number}</div>
+                <div class="stage-name">${esc(stage.name)}</div>
+                <div class="stage-prog">${done}/${total}</div>
+                <svg class="stage-chev" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </div>
+            <div class="stage-body">
+                ${stage.description ? `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px;font-style:italic;">${esc(stage.description)}</div>` : ''}
+                <ul class="task-list">
+                    ${tasks.map(task => {
+                        const t = m.tasks[task.id] || { completed: false, assignedTo: task.assignee };
+                        const member = teamMembers.find(tm => tm.id === (t.assignedTo || task.assignee));
+                        const isReview = task.needsReview ? 'review' : '';
+                        return `<li class="task-item">
+                            <button class="task-chk ${t.completed ? 'checked' : ''}" onclick="toggleTask('${task.id}')"></button>
+                            <span class="task-lbl ${t.completed ? 'done' : ''}">${esc(task.label)}</span>
+                            <span class="task-assignee ${isReview}" title="Assigned to ${member ? member.name : '?'}">${member ? member.name.split(' ')[0] : '?'}</span>
+                        </li>`;
+                    }).join('')}
+                </ul>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function toggleTask(taskId) {
+    try {
+        const r = await fetch(`/api/matters/${currentMatter.id}/tasks/${taskId}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ completedBy: currentUserId })
+        });
+        currentMatter = await r.json();
+        renderStages();
+    } catch(e) { console.error(e); }
+}
+
+// ============================================================
+// CHAT TAB
+// ============================================================
+function renderChat() {
+    const msgs = currentMatter.chatHistory || [];
+    const container = document.getElementById('chatMessages');
+
+    if (msgs.length === 0) {
+        container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px;">
+            Ask anything about this case. The AI has full context of all case data, dates, tasks, and events.
+        </div>`;
+        return;
+    }
+
+    container.innerHTML = msgs.map(m => {
+        const isUser = m.role === 'user';
+        const time = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        return `<div class="chat-msg">
+            <div class="chat-avatar ${isUser ? 'user' : 'ai'}">${isUser ? 'You' : 'AI'}</div>
+            <div>
+                <div class="chat-bubble ${isUser ? 'user' : ''}">${esc(m.content)}</div>
+                <div class="chat-time">${time}</div>
+            </div>
+        </div>`;
+    }).join('');
+
+    container.scrollTop = container.scrollHeight;
+}
+
+async function sendChat() {
+    if (chatSending) return;
+    const input = document.getElementById('chatInput');
+    const msg = input.value.trim();
+    if (!msg) return;
+
+    chatSending = true;
+    document.getElementById('chatSendBtn').disabled = true;
+    input.value = '';
+
+    // Add user message to UI immediately
+    const container = document.getElementById('chatMessages');
+    if (container.querySelector('div[style]')) container.innerHTML = ''; // Clear placeholder
+    container.innerHTML += `<div class="chat-msg">
+        <div class="chat-avatar user">You</div>
+        <div><div class="chat-bubble user">${esc(msg)}</div><div class="chat-time">${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</div></div>
+    </div>`;
+    container.innerHTML += `<div id="typingIndicator" class="chat-msg"><div class="chat-avatar ai">AI</div><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div>`;
+    container.scrollTop = container.scrollHeight;
+
+    try {
+        const r = await fetch(`/api/matters/${currentMatter.id}/chat`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: msg })
+        });
+        const d = await r.json();
+        currentMatter = d.matter;
+        renderChat();
+    } catch(e) {
+        const ti = document.getElementById('typingIndicator');
+        if (ti) ti.remove();
+        container.innerHTML += `<div class="chat-msg"><div class="chat-avatar ai">AI</div><div><div class="chat-bubble">Sorry, I couldn't process that. Please try again.</div></div></div>`;
+    }
+
+    chatSending = false;
+    document.getElementById('chatSendBtn').disabled = false;
+}
+
+// ============================================================
+// NOTIFICATIONS
+// ============================================================
+async function loadNotifications() {
+    try {
+        const r = await fetch(`/api/notifications?for=${currentUserId}`);
+        const notifs = await r.json();
+        const unread = notifs.filter(n => !n.read);
+        const dot = document.getElementById('notifDot');
+        dot.classList.toggle('visible', unread.length > 0);
+
+        const list = document.getElementById('notifList');
+        if (notifs.length === 0) {
+            list.innerHTML = '<div style="text-align:center;padding:32px;color:var(--text-tertiary);font-size:13px;">No notifications</div>';
+            return;
+        }
+        list.innerHTML = notifs.slice(0, 50).map(n => {
+            const time = new Date(n.createdAt).toLocaleString();
+            return `<div class="notif-item ${n.read ? '' : 'unread'}" onclick="handleNotifClick('${n.id}', '${n.matterId || ''}')">
+                <div class="notif-msg">${esc(n.message)}</div>
+                <div class="notif-time">${time}</div>
+            </div>`;
+        }).join('');
+    } catch(e) { console.error(e); }
+}
+
+function toggleNotifPanel() {
+    document.getElementById('notifPanel').classList.toggle('open');
+    document.getElementById('notifOverlay').classList.toggle('open');
+}
+
+async function handleNotifClick(notifId, matterId) {
+    try {
+        await fetch(`/api/notifications/${notifId}/read`, { method: 'PATCH' });
+    } catch(e) {}
+    toggleNotifPanel();
+    if (matterId) openMatter(matterId);
+    loadNotifications();
+}
+
+async function markAllRead() {
+    try {
+        await fetch('/api/notifications/mark-all-read', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: currentUserId })
+        });
+        loadNotifications();
+    } catch(e) {}
+}
+
+// ============================================================
+// MODAL (Create / Edit)
+// ============================================================
+function openNewModal() {
+    editingId = null;
+    document.getElementById('modalTitle').textContent = 'New Kinecta Matter';
+    document.getElementById('modalSaveBtn').textContent = 'Create Matter';
+    ['fName','fAddr','fCity','fZip','fAmount','fCaseNum','fLoanType','fAcctNum','fCourt','fCounty','fNotes'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('fState').value = 'CA';
+    document.getElementById('fClientMatter').value = '264-20241649';
+    document.getElementById('matterModal').classList.remove('hidden');
+}
+
+function openEditModal() {
+    if (!currentMatter) return;
+    editingId = currentMatter.id;
+    document.getElementById('modalTitle').textContent = 'Edit Matter';
+    document.getElementById('modalSaveBtn').textContent = 'Save Changes';
+    document.getElementById('fName').value = currentMatter.debtorName || '';
+    document.getElementById('fAddr').value = currentMatter.debtorAddress || '';
+    document.getElementById('fCity').value = currentMatter.debtorCity || '';
+    document.getElementById('fState').value = currentMatter.debtorState || 'CA';
+    document.getElementById('fZip').value = currentMatter.debtorZip || '';
+    document.getElementById('fAmount').value = currentMatter.demandAmount || '';
+    document.getElementById('fCaseNum').value = currentMatter.caseNumber || '';
+    document.getElementById('fClientMatter').value = currentMatter.clientMatter || '';
+    document.getElementById('fLoanType').value = currentMatter.loanType || '';
+    document.getElementById('fAcctNum').value = currentMatter.accountNumber || '';
+    document.getElementById('fCourt').value = currentMatter.courtName || '';
+    document.getElementById('fCounty').value = currentMatter.courtCounty || '';
+    document.getElementById('fNotes').value = currentMatter.notes || '';
+    document.getElementById('matterModal').classList.remove('hidden');
+}
+
+function closeModal() { document.getElementById('matterModal').classList.add('hidden'); }
+
+async function saveMatter() {
+    const data = {
+        debtorName: document.getElementById('fName').value.trim(),
+        debtorAddress: document.getElementById('fAddr').value.trim(),
+        debtorCity: document.getElementById('fCity').value.trim(),
+        debtorState: document.getElementById('fState').value.trim(),
+        debtorZip: document.getElementById('fZip').value.trim(),
+        demandAmount: document.getElementById('fAmount').value.trim(),
+        caseNumber: document.getElementById('fCaseNum').value.trim(),
+        clientMatter: document.getElementById('fClientMatter').value.trim(),
+        loanType: document.getElementById('fLoanType').value.trim(),
+        accountNumber: document.getElementById('fAcctNum').value.trim(),
+        courtName: document.getElementById('fCourt').value.trim(),
+        courtCounty: document.getElementById('fCounty').value.trim(),
+        notes: document.getElementById('fNotes').value.trim()
+    };
+    if (!data.debtorName) { alert('Debtor name is required.'); return; }
+
+    try {
+        if (editingId) {
+            const r = await fetch('/api/matters/' + editingId, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+            });
+            currentMatter = await r.json();
+            renderDetailHeader();
+            switchTab('overview');
+        } else {
+            const r = await fetch('/api/matters', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+            });
+            const newMatter = await r.json();
+            await loadMatters();
+            openMatter(newMatter.id);
+        }
+        closeModal();
+    } catch(e) { alert('Failed to save: ' + e.message); }
+}
+
+async function deleteMatter() {
+    if (!currentMatter) return;
+    if (!confirm('Delete matter for "' + currentMatter.debtorName + '"? This cannot be undone.')) return;
+    try {
+        await fetch('/api/matters/' + currentMatter.id, { method: 'DELETE' });
+        showList();
+    } catch(e) { alert('Failed to delete'); }
+}
+
+// ============================================================
+// UTILS
+// ============================================================
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : s; }
+function exportCSV() { window.location.href = '/api/matters-export/csv'; }
+</script>
+</body>
+</html>

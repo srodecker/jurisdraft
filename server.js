@@ -420,10 +420,16 @@ app.get('/full', (req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'full.html'), { dotfiles: 'allow' });
 });
 
-// Kinecta workflow tracker
+// Kinecta workflow tracker (legacy)
 app.get('/workflow', (req, res) => {
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.sendFile(path.join(PUBLIC_DIR, 'workflow.html'), { dotfiles: 'allow' });
+});
+
+// Kinecta Case Manager
+app.get('/kinecta', (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.sendFile(path.join(PUBLIC_DIR, 'kinecta.html'), { dotfiles: 'allow' });
 });
 
 // Extraction workspace route (legacy - redirects to /full)
