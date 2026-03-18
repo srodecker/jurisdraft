@@ -395,15 +395,14 @@
                         <table>
                             <thead><tr>
                                 <th>Debtor</th>
-                                <th>Case #</th>
+                                <th>State</th>
                                 <th>Amount</th>
                                 <th>Stage</th>
+                                <th>Status / Last Action</th>
                                 <th>Next Task</th>
-                                <th>Status</th>
-                                <th>Updated</th>
                             </tr></thead>
                             <tbody id="tableBody">
-                                <tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:32px;">Loading...</td></tr>
+                                <tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:32px;">Loading...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -691,28 +690,49 @@ function renderTable() {
     if (stageF !== 'all') filtered = filtered.filter(m => m.currentStage === Number(stageF));
     if (search) filtered = filtered.filter(m =>
         (m.debtorName || '').toLowerCase().includes(search) ||
-        (m.caseNumber || '').toLowerCase().includes(search)
+        (m.caseNumber || '').toLowerCase().includes(search) ||
+        (m.statusText || '').toLowerCase().includes(search) ||
+        (m.accountNumber || '').toLowerCase().includes(search)
     );
 
     if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:32px;">No matters found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:32px;">No matters found.</td></tr>';
         return;
     }
 
     tbody.innerHTML = filtered.map(m => {
         const stage = workflowStages.find(s => s.number === m.currentStage) || { name: 'Stage ' + m.currentStage };
-        const updated = m.updatedAt ? new Date(m.updatedAt).toLocaleDateString() : '-';
         const nextTask = m.nextTask ? `<span class="badge badge-task" title="${esc(m.nextTask.assignee)}">${esc(truncate(m.nextTask.label, 30))}</span>` : '<span style="color:var(--text-tertiary);font-size:11px;">-</span>';
+        // Color-code status like the original spreadsheet
+        const statusColor = getStatusColor(m.statusText || '');
+        const statusDisplay = m.statusText ? truncate(m.statusText, 35) : m.status;
+        const progress = m.totalTasks > 0 ? Math.round(m.completedTasks / m.totalTasks * 100) : 0;
         return `<tr class="clickable" onclick="openMatter('${m.id}')">
-            <td style="font-weight:500;">${esc(m.debtorName || '-')}</td>
-            <td>${esc(m.caseNumber || '-')}</td>
+            <td>
+                <div style="font-weight:500;">${esc(m.debtorName || '-')}</div>
+                <div style="font-size:11px;color:var(--text-tertiary);">${esc(m.accountNumber || m.caseNumber || '')}</div>
+            </td>
+            <td style="font-size:12px;">${esc(m.debtorState || '-')}</td>
             <td>${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</td>
-            <td><span class="badge badge-stage">${esc(stage.name)}</span></td>
+            <td>
+                <span class="badge badge-stage">${esc(stage.name)}</span>
+                <div style="font-size:10px;color:var(--text-tertiary);margin-top:2px;">${progress}% done</div>
+            </td>
+            <td><span style="font-size:12px;color:${statusColor};font-weight:500;">${esc(statusDisplay)}</span></td>
             <td>${nextTask}</td>
-            <td><span class="badge ${m.status === 'active' ? 'badge-active' : 'badge-closed'}">${m.status}</span></td>
-            <td style="color:var(--text-secondary);font-size:12px;">${updated}</td>
         </tr>`;
     }).join('');
+}
+
+function getStatusColor(statusText) {
+    const s = statusText.toLowerCase();
+    if (s.includes('litigation active')) return 'var(--accent-warning)'; // Orange
+    if (s.includes('need to proceed')) return '#3b82f6'; // Blue
+    if (s.includes('default judgment') || s.includes('purple')) return '#a855f7'; // Purple
+    if (s.includes('waiting') || s.includes('pending')) return '#eab308'; // Yellow
+    if (s.includes('confirming')) return '#6b7280'; // Grey
+    if (s.includes('stip') || s.includes('close')) return 'var(--accent-success)'; // Green
+    return 'var(--text-secondary)';
 }
 
 // ============================================================

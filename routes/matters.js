@@ -421,8 +421,14 @@ router.get('/api/matters', async (req, res) => {
                     demandAmount: m.demandAmount,
                     currentStage: m.currentStage,
                     status: m.status,
+                    statusText: m.statusText || '',
                     loanType: m.loanType,
                     courtName: m.courtName,
+                    courtCounty: m.courtCounty || '',
+                    accountNumber: m.accountNumber || '',
+                    debtorState: m.debtorState || '',
+                    serviceType: m.serviceType || '',
+                    defendantResponse: m.defendantResponse || '',
                     updatedAt: m.updatedAt,
                     totalTasks,
                     completedTasks,
@@ -1224,21 +1230,24 @@ function parseSheetWithAutoHeaders(sheet) {
 function parseImportRow(row, mapping) {
     const data = {};
     const dates = {};
+    const rawValues = {}; // Keep raw cell values for everything
 
     for (const [col, field] of Object.entries(mapping)) {
-        const val = (row[col] || '').toString().trim();
+        const rawVal = row[col];
+        const val = (rawVal || '').toString().trim();
         if (!val) continue;
+
+        // Always store raw value for reference
+        rawValues[col] = val;
 
         if (field.startsWith('dates.')) {
             const dateKey = field.replace('dates.', '');
             // Extract date from text like "Can file as of 10/24/2025" or plain "9/16/2025"
-            let dateStr = val;
-            // Try to find a date pattern within the text
             const dateMatch = val.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
-            if (dateMatch) dateStr = dateMatch[1];
+            let dateStr = dateMatch ? dateMatch[1] : val;
 
             let parsed = null;
-            if (/^\d{5}$/.test(dateStr)) {
+            if (/^\d{5}$/.test(dateStr.trim())) {
                 // Excel serial date number
                 const excelEpoch = new Date(1899, 11, 30);
                 parsed = new Date(excelEpoch.getTime() + parseInt(dateStr) * 86400000);
@@ -1248,18 +1257,124 @@ function parseImportRow(row, mapping) {
             if (parsed && !isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
                 dates[dateKey] = parsed.toISOString().slice(0, 10);
             }
-            // Also store the full text in notes if it contains extra info beyond the date
-            if (val.length > 15 && dateMatch) {
-                data._extraNotes = (data._extraNotes || '') + `${col}: ${val}\n`;
-            }
         } else if (field === 'demandAmount' || field === 'judgmentAmount') {
             data[field] = cleanAmount(val);
+            // If cell has multiple amounts or text context, keep the full raw text
+            if (val.length > 15 || val.includes(';')) {
+                data._amountRaw = val;
+            }
         } else {
             data[field] = val;
         }
     }
 
+    // Build comprehensive notes from all the rich data
+    const notesParts = [];
+    if (data.notes) notesParts.push(data.notes);
+    if (data._amountRaw) notesParts.push(`Amount detail: ${data._amountRaw}`);
+
+    // Add any date-column text that had extra context
+    for (const [col, field] of Object.entries(mapping)) {
+        if (!field.startsWith('dates.')) continue;
+        const val = rawValues[col];
+        if (!val || val.length < 12) continue;
+        // If the date cell had text beyond just a date, include it
+        const stripped = val.replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, '').replace(/[^a-zA-Z]/g, '').trim();
+        if (stripped.length > 3) {
+            notesParts.push(`${col}: ${val}`);
+        }
+    }
+
+    if (notesParts.length > 0) {
+        data.notes = notesParts.join('\n');
+    }
+    delete data._amountRaw;
+
     return { data, dates };
+}
+
+// Infer workflow stage and mark tasks based on status text and dates
+function inferStageFromImport(matter, data, dates) {
+    const statusLower = (data.statusText || '').toLowerCase();
+    const notesLower = (data.notes || '').toLowerCase();
+    const combined = statusLower + ' ' + notesLower;
+
+    // Determine stage from status text keywords
+    let inferredStage = 1; // Default: DVN Letter
+
+    if (statusLower.includes('default judgment') || statusLower.includes('purple')) {
+        inferredStage = 7; // Post-Judgment (default judgment obtained)
+    } else if (statusLower.includes('litigation active') || statusLower.includes('orange')) {
+        inferredStage = 4; // Answer/Response Due (litigation is ongoing)
+    } else if (statusLower.includes('need to proceed with suit') || statusLower.includes('blue')) {
+        inferredStage = 2; // File Complaint
+    } else if (statusLower.includes('waiting for dvl') || statusLower.includes('yellow') || statusLower.includes('still pending')) {
+        inferredStage = 1; // DVN Letter (waiting for response)
+    } else if (statusLower.includes('confirming next') || statusLower.includes('grey')) {
+        inferredStage = 2; // Between DVN and filing
+    } else if (statusLower.includes('stip') || statusLower.includes('close')) {
+        inferredStage = 8; // Matter Closed
+        matter.status = 'closed';
+    }
+
+    // Refine stage based on which dates exist
+    if (dates.judgmentEntered || dates.defaultEntered) {
+        inferredStage = Math.max(inferredStage, 7);
+    }
+    if (dates.answerDue || dates.served) {
+        inferredStage = Math.max(inferredStage, 4);
+    }
+    if (dates.complaintFiled) {
+        inferredStage = Math.max(inferredStage, 3); // Service stage
+    }
+    if (dates.dvnSent) {
+        inferredStage = Math.max(inferredStage, 1);
+    }
+
+    // Refine further from notes
+    if (combined.includes('out for service') || combined.includes('need to serve')) {
+        inferredStage = Math.max(inferredStage, 3);
+    }
+    if (combined.includes('complaint filed')) {
+        inferredStage = Math.max(inferredStage, 3);
+    }
+    if (combined.includes('default') && (combined.includes('filing') || combined.includes('file'))) {
+        inferredStage = Math.max(inferredStage, 6);
+    }
+    if (combined.includes('bk hold') || combined.includes('bankruptcy')) {
+        // Litigation active but on hold
+        inferredStage = Math.max(inferredStage, 4);
+    }
+    if (combined.includes('referred to outside') || combined.includes('outside') && combined.includes('council')) {
+        inferredStage = Math.max(inferredStage, 2);
+    }
+
+    matter.currentStage = inferredStage;
+
+    // Auto-complete tasks for stages before the current one
+    // This makes the workflow progress bar accurate
+    for (const stage of WORKFLOW_STAGES) {
+        if (stage.number >= inferredStage) break;
+        for (const task of stage.tasks) {
+            if (matter.tasks[task.id]) {
+                matter.tasks[task.id].completed = true;
+                matter.tasks[task.id].completedAt = matter.createdAt;
+                matter.tasks[task.id].completedBy = 'import';
+            }
+        }
+    }
+
+    // If defendant responded, mark answer_response tasks
+    const defResponse = (data.defendantResponse || '').toLowerCase();
+    if (defResponse && defResponse !== 'no' && !defResponse.includes('no response')) {
+        if (defResponse.includes('bk') || defResponse.includes('bankruptcy')) {
+            // BK hold — don't advance further
+        } else if (defResponse.includes('yes') || defResponse.includes('answer')) {
+            // Answer was filed — we're in negotiation or beyond
+            inferredStage = Math.max(matter.currentStage, 5);
+            matter.currentStage = inferredStage;
+        }
+    }
 }
 
 // Import from Excel/CSV file
@@ -1306,12 +1421,6 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
                 continue;
             }
 
-            // Append any extra date-context notes to the notes field
-            if (data._extraNotes) {
-                data.notes = ((data.notes || '') + '\n' + data._extraNotes).trim();
-                delete data._extraNotes;
-            }
-
             const matter = createMatterObject(data);
             // Apply any parsed dates
             for (const [k, v] of Object.entries(dates)) {
@@ -1319,6 +1428,9 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
                     matter.dates[k] = v;
                 }
             }
+
+            // Infer stage, mark prior tasks complete, set status from spreadsheet data
+            inferStageFromImport(matter, data, dates);
 
             // Add import event
             matter.events.push({
