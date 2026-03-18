@@ -308,6 +308,11 @@
                         <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
                         <div id="notifDot" class="notif-dot"></div>
                     </button>
+                    <button class="btn btn-secondary btn-sm" onclick="document.getElementById('importFile').click()">
+                        <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                        Import Spreadsheet
+                    </button>
+                    <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(this)" />
                     <button class="btn btn-primary btn-sm" onclick="openNewModal()">
                         <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                         New Matter
@@ -381,6 +386,11 @@
                             </div>
                         </div>
                         <div style="display:flex;gap:6px;">
+                            <button class="btn btn-primary btn-sm" onclick="document.getElementById('docUpload').click()">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                                Upload &amp; Extract
+                            </button>
+                            <input type="file" id="docUpload" accept=".pdf,.jpg,.jpeg,.png,.tiff,.bmp" multiple style="display:none" onchange="handleDocUpload(this)" />
                             <button class="btn btn-secondary btn-sm" onclick="openEditModal()">Edit</button>
                             <button class="btn btn-danger btn-sm" onclick="deleteMatter()">Delete</button>
                         </div>
@@ -1125,6 +1135,93 @@ async function deleteMatter() {
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : s; }
 function exportCSV() { window.location.href = '/api/matters-export/csv'; }
+
+// ============================================================
+// SPREADSHEET IMPORT
+// ============================================================
+async function handleImportFile(input) {
+    const file = input.files[0];
+    if (!file) return;
+    input.value = ''; // Reset so same file can be re-selected
+
+    // First preview
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const prev = await fetch('/api/matters/import/preview', { method: 'POST', body: formData });
+        const preview = await prev.json();
+        if (preview.error) { alert('Error: ' + preview.error); return; }
+
+        const matched = Object.entries(preview.columnsMatched).map(([col, field]) => `  ${col} → ${field}`).join('\n');
+        const unmapped = preview.unmappedColumns.length ? `\n\nUnmapped columns (ignored):\n  ${preview.unmappedColumns.join(', ')}` : '';
+        const msg = `Found ${preview.totalRows} rows.\n\nColumn mapping:\n${matched}${unmapped}\n\nProceed with import?`;
+
+        if (!confirm(msg)) return;
+
+        // Do the actual import
+        const formData2 = new FormData();
+        formData2.append('file', file);
+        const r = await fetch('/api/matters/import', { method: 'POST', body: formData2 });
+        const result = await r.json();
+
+        if (result.error) { alert('Import error: ' + result.error); return; }
+        alert(`Successfully imported ${result.imported} matters.${result.skipped > 0 ? ` (${result.skipped} rows skipped — no debtor name)` : ''}`);
+        await loadMatters();
+    } catch(e) {
+        alert('Import failed: ' + e.message);
+    }
+}
+
+// ============================================================
+// DOCUMENT UPLOAD & EXTRACTION
+// ============================================================
+async function handleDocUpload(input) {
+    const files = input.files;
+    if (!files || files.length === 0) return;
+    if (!currentMatter) return;
+    input.value = '';
+
+    const fileNames = Array.from(files).map(f => f.name).join(', ');
+    if (!confirm(`Upload and extract data from:\n${fileNames}\n\nThis will analyze the document(s) and fill in any missing case data.`)) return;
+
+    const formData = new FormData();
+    for (const f of files) formData.append('files', f);
+
+    // Show loading state
+    const btn = document.querySelector('#docUpload').previousElementSibling;
+    const origText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span> Extracting...';
+    btn.disabled = true;
+
+    try {
+        const r = await fetch(`/api/matters/${currentMatter.id}/extract`, {
+            method: 'POST', body: formData
+        });
+        const result = await r.json();
+
+        if (result.error) {
+            alert('Extraction error: ' + result.error);
+            return;
+        }
+
+        currentMatter = result.matter;
+        renderDetailHeader();
+        switchTab('overview');
+
+        const fields = result.updatedFields;
+        if (fields.length > 0) {
+            alert(`Extraction complete! Updated ${fields.length} field(s):\n${fields.join(', ')}\n\nCheck the Overview and Timeline tabs.`);
+        } else {
+            alert('Extraction complete. No new data found (all fields were already filled). Check the Timeline tab for extracted events.');
+        }
+    } catch(e) {
+        alert('Extraction failed: ' + e.message);
+    } finally {
+        btn.innerHTML = origText;
+        btn.disabled = false;
+    }
+}
 </script>
 </body>
 </html>

@@ -2,8 +2,11 @@ const express = require('express');
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
+const multer = require('multer');
+const XLSX = require('xlsx');
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 const MATTERS_DIR = path.join(__dirname, '..', 'matters');
 const NOTIFICATIONS_FILE = path.join(__dirname, '..', 'data', 'notifications.json');
 
@@ -1015,5 +1018,375 @@ function calculateCurrentStage(matter) {
     }
     return 8;
 }
+
+// ============================================================
+// SPREADSHEET IMPORT (Excel / CSV)
+// ============================================================
+
+// Column name mapping — maps common spreadsheet headers to matter fields
+const COLUMN_MAP = {
+    // Debtor name
+    'name': 'debtorName', 'debtor': 'debtorName', 'debtor name': 'debtorName', 'borrower': 'debtorName',
+    'defendant': 'debtorName', 'defendant name': 'debtorName', 'full name': 'debtorName',
+    // Matter ID
+    'matter id': 'clientMatter', 'matter': 'clientMatter', 'client matter': 'clientMatter',
+    'matter number': 'clientMatter', 'file number': 'clientMatter', 'file #': 'clientMatter',
+    // Case number
+    'case number': 'caseNumber', 'case #': 'caseNumber', 'case no': 'caseNumber', 'case no.': 'caseNumber',
+    // State
+    'state': 'debtorState', 'state filed': 'debtorState', 'state filed in': 'debtorState',
+    // Loan type
+    'loan type': 'loanType', 'type of loan': 'loanType', 'loan': 'loanType', 'product': 'loanType', 'type': 'loanType',
+    // Amount
+    'amount': 'demandAmount', 'amount owed': 'demandAmount', 'demand': 'demandAmount',
+    'demand amount': 'demandAmount', 'balance': 'demandAmount', 'principal': 'demandAmount',
+    'total owed': 'demandAmount', 'total': 'demandAmount',
+    // Judgment
+    'judgment amount': 'judgmentAmount', 'judgment': 'judgmentAmount',
+    // Address
+    'address': 'debtorAddress', 'street': 'debtorAddress', 'street address': 'debtorAddress',
+    'city': 'debtorCity', 'zip': 'debtorZip', 'zip code': 'debtorZip',
+    // Court
+    'court': 'courtName', 'court name': 'courtName', 'county': 'courtCounty',
+    // Account
+    'account': 'accountNumber', 'account #': 'accountNumber', 'account number': 'accountNumber', 'acct': 'accountNumber',
+    // Notes
+    'notes': 'notes', 'comments': 'notes', 'memo': 'notes', 'description': 'notes',
+    // Status
+    'status': 'status',
+    // Dates
+    'dvn sent': 'dates.dvnSent', 'dvn date': 'dates.dvnSent',
+    'response due': 'dates.responseDue', 'response date': 'dates.responseDue',
+    'complaint filed': 'dates.complaintFiled', 'filed date': 'dates.complaintFiled', 'filed': 'dates.complaintFiled',
+    'served': 'dates.served', 'service date': 'dates.served', 'date served': 'dates.served',
+    'answer due': 'dates.answerDue',
+};
+
+function normalizeHeader(h) {
+    return (h || '').toString().trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
+}
+
+function cleanAmount(val) {
+    if (!val) return '';
+    const s = val.toString().replace(/[$,\s]/g, '');
+    const n = parseFloat(s);
+    return isNaN(n) ? '' : n.toString();
+}
+
+// Import from Excel/CSV file
+router.post('/api/matters/import', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+        let workbook;
+        try {
+            workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+        } catch (e) {
+            return res.status(400).json({ error: 'Could not parse file. Ensure it is a valid Excel (.xlsx) or CSV file.' });
+        }
+
+        const sheetName = workbook.SheetNames[0];
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+
+        if (rows.length === 0) {
+            return res.status(400).json({ error: 'Spreadsheet is empty' });
+        }
+
+        // Map columns
+        const headers = Object.keys(rows[0]);
+        const mapping = {};
+        for (const h of headers) {
+            const norm = normalizeHeader(h);
+            if (COLUMN_MAP[norm]) {
+                mapping[h] = COLUMN_MAP[norm];
+            }
+        }
+
+        const created = [];
+        const skipped = [];
+
+        for (const row of rows) {
+            const data = {};
+            const dates = {};
+
+            for (const [col, field] of Object.entries(mapping)) {
+                const val = (row[col] || '').toString().trim();
+                if (!val) continue;
+
+                if (field.startsWith('dates.')) {
+                    const dateKey = field.replace('dates.', '');
+                    // Try to parse date
+                    const d = new Date(val);
+                    if (!isNaN(d.getTime())) {
+                        dates[dateKey] = d.toISOString().slice(0, 10);
+                    }
+                } else if (field === 'demandAmount' || field === 'judgmentAmount') {
+                    data[field] = cleanAmount(val);
+                } else {
+                    data[field] = val;
+                }
+            }
+
+            // Skip rows without a name
+            if (!data.debtorName) {
+                skipped.push({ row: rows.indexOf(row) + 2, reason: 'No debtor name found' });
+                continue;
+            }
+
+            const matter = createMatterObject(data);
+            // Apply any parsed dates
+            for (const [k, v] of Object.entries(dates)) {
+                if (matter.dates.hasOwnProperty(k)) {
+                    matter.dates[k] = v;
+                }
+            }
+
+            // Add import event
+            matter.events.push({
+                id: crypto.randomUUID(),
+                type: 'status_change',
+                title: 'Imported from spreadsheet',
+                description: `Imported from ${req.file.originalname}`,
+                date: matter.createdAt,
+                addedBy: 'system',
+                createdAt: matter.createdAt
+            });
+
+            await writeMatter(matter.id, matter);
+            created.push({ id: matter.id, name: matter.debtorName });
+        }
+
+        res.json({
+            success: true,
+            imported: created.length,
+            skipped: skipped.length,
+            created,
+            skipped,
+            columnsMatched: Object.entries(mapping).map(([col, field]) => `${col} → ${field}`)
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Preview import — show column mapping without creating matters
+router.post('/api/matters/import/preview', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+        let workbook;
+        try {
+            workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+        } catch (e) {
+            return res.status(400).json({ error: 'Could not parse file.' });
+        }
+
+        const sheetName = workbook.SheetNames[0];
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+
+        if (rows.length === 0) {
+            return res.status(400).json({ error: 'Spreadsheet is empty' });
+        }
+
+        const headers = Object.keys(rows[0]);
+        const mapping = {};
+        const unmapped = [];
+        for (const h of headers) {
+            const norm = normalizeHeader(h);
+            if (COLUMN_MAP[norm]) {
+                mapping[h] = COLUMN_MAP[norm];
+            } else {
+                unmapped.push(h);
+            }
+        }
+
+        // Return first 5 rows as preview
+        const preview = rows.slice(0, 5).map(row => {
+            const mapped = {};
+            for (const [col, field] of Object.entries(mapping)) {
+                mapped[field] = (row[col] || '').toString().trim();
+            }
+            return mapped;
+        });
+
+        res.json({
+            totalRows: rows.length,
+            columnsMatched: mapping,
+            unmappedColumns: unmapped,
+            preview
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============================================================
+// DOCUMENT UPLOAD + AI EXTRACTION (per-matter)
+// ============================================================
+
+router.post('/api/matters/:id/extract', upload.array('files'), async (req, res) => {
+    try {
+        const matter = await readMatter(req.params.id);
+        const files = req.files || [];
+        if (files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+
+        const apiKey = process.env.GOOGLE_API_KEY;
+        if (!apiKey) {
+            return res.status(400).json({ error: 'No GOOGLE_API_KEY configured. Document extraction requires the Gemini API.' });
+        }
+
+        // Build extraction prompt specific to case management
+        const extractionPrompt = `You are a legal document analysis assistant. Extract all relevant information from the uploaded document(s) for a debt collection case.
+
+Current case context:
+- Debtor: ${matter.debtorName || 'Unknown'}
+- Case Number: ${matter.caseNumber || 'Not assigned'}
+- Client: ${matter.creditorName || 'Kinecta Federal Credit Union'}
+
+From the document(s), extract ANY of the following information that you can find. Return a JSON object with ONLY the fields you find — omit fields with no data:
+
+{
+  "debtorName": "full name of debtor/defendant/borrower",
+  "debtorAddress": "street address",
+  "debtorCity": "city",
+  "debtorState": "state",
+  "debtorZip": "zip code",
+  "caseNumber": "court case number",
+  "courtName": "name of court",
+  "courtCounty": "county",
+  "demandAmount": "amount owed (number only, no $ or commas)",
+  "judgmentAmount": "judgment amount if any",
+  "loanType": "type of loan",
+  "accountNumber": "account or loan number",
+  "creditorName": "creditor name",
+  "dates": {
+    "dvnSent": "YYYY-MM-DD",
+    "complaintFiled": "YYYY-MM-DD",
+    "served": "YYYY-MM-DD",
+    "answerDue": "YYYY-MM-DD",
+    "defaultEntered": "YYYY-MM-DD",
+    "judgmentEntered": "YYYY-MM-DD"
+  },
+  "events": [
+    { "type": "filing|hearing|service|correspondence|minute_order|court_order", "title": "brief title", "date": "YYYY-MM-DD", "description": "details" }
+  ],
+  "notes": "any other relevant information from the document"
+}
+
+Important:
+- For dates, use YYYY-MM-DD format
+- For amounts, return numbers only (no $ signs or commas)
+- Include ALL events/dates mentioned in the document
+- If this is a complaint, extract filing date and parties
+- If this is a proof of service, extract service date and type (personal/substituted)
+- If this is a court order or minute order, extract the date and ruling
+- Be thorough — extract everything useful`;
+
+        // Send files to Gemini
+        const parts = [{ text: extractionPrompt }];
+        for (const f of files) {
+            parts.push({
+                inline_data: {
+                    mime_type: f.mimetype,
+                    data: f.buffer.toString('base64')
+                }
+            });
+        }
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts }],
+                generationConfig: { temperature: 0.0, response_mime_type: 'application/json' }
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            return res.status(response.status).json({ error: 'Gemini API error', details: errText });
+        }
+
+        const result = await response.json();
+        let extracted = {};
+        try {
+            let text = result.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+            const match = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
+            if (match) text = match[1];
+            extracted = JSON.parse(text);
+        } catch (e) {
+            return res.status(500).json({ error: 'Failed to parse extraction result', raw: result });
+        }
+
+        // Apply extracted data to matter (only fill in empty fields)
+        let updatedFields = [];
+        const fieldMap = ['debtorName', 'debtorAddress', 'debtorCity', 'debtorState', 'debtorZip',
+            'caseNumber', 'courtName', 'courtCounty', 'demandAmount', 'judgmentAmount',
+            'loanType', 'accountNumber', 'creditorName'];
+
+        for (const field of fieldMap) {
+            if (extracted[field] && !matter[field]) {
+                matter[field] = extracted[field];
+                updatedFields.push(field);
+            }
+        }
+
+        // Apply dates (only fill empties)
+        if (extracted.dates) {
+            for (const [key, val] of Object.entries(extracted.dates)) {
+                if (val && matter.dates.hasOwnProperty(key) && !matter.dates[key]) {
+                    matter.dates[key] = val;
+                    updatedFields.push('dates.' + key);
+                }
+            }
+        }
+
+        // Add extracted events to timeline
+        if (extracted.events && Array.isArray(extracted.events)) {
+            for (const evt of extracted.events) {
+                matter.events.push({
+                    id: crypto.randomUUID(),
+                    type: evt.type || 'note',
+                    title: evt.title || 'Extracted from document',
+                    description: evt.description || '',
+                    date: evt.date || new Date().toISOString(),
+                    addedBy: 'extraction',
+                    createdAt: new Date().toISOString()
+                });
+            }
+        }
+
+        // Add notes
+        if (extracted.notes && !matter.notes) {
+            matter.notes = extracted.notes;
+            updatedFields.push('notes');
+        }
+
+        // Log the extraction as an event
+        const fileNames = files.map(f => f.originalname).join(', ');
+        matter.events.push({
+            id: crypto.randomUUID(),
+            type: 'note',
+            title: 'Document analyzed',
+            description: `Extracted data from: ${fileNames}. Updated fields: ${updatedFields.join(', ') || 'none (all fields already populated)'}`,
+            date: new Date().toISOString(),
+            addedBy: 'system',
+            createdAt: new Date().toISOString()
+        });
+
+        matter.updatedAt = new Date().toISOString();
+        await writeMatter(matter.id, matter);
+
+        res.json({
+            success: true,
+            extracted,
+            updatedFields,
+            matter
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 module.exports = router;
