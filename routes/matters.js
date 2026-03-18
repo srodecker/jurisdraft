@@ -7,12 +7,23 @@ const XLSX = require('xlsx');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
-const MATTERS_DIR = path.join(__dirname, '..', 'matters');
-const NOTIFICATIONS_FILE = path.join(__dirname, '..', 'data', 'notifications.json');
+
+// Use /tmp/ on serverless (Vercel) since filesystem is read-only
+// Locally, use the project directory
+const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
+const MATTERS_DIR = isServerless
+    ? path.join('/tmp', 'matters')
+    : path.join(__dirname, '..', 'matters');
+const NOTIFICATIONS_FILE = isServerless
+    ? path.join('/tmp', 'notifications.json')
+    : path.join(__dirname, '..', 'data', 'notifications.json');
 
 // Ensure directories exist
 (async () => {
     try { await fs.mkdir(MATTERS_DIR, { recursive: true }); } catch (_) {}
+    if (!isServerless) {
+        try { await fs.mkdir(path.join(__dirname, '..', 'data'), { recursive: true }); } catch (_) {}
+    }
 })();
 
 // ============================================================
