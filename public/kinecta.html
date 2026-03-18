@@ -1351,7 +1351,16 @@ async function handleImportFile(input) {
 
         const matched = Object.entries(preview.columnsMatched).map(([col, field]) => `  ${col} → ${field}`).join('\n');
         const unmapped = preview.unmappedColumns.length ? `\n\nUnmapped columns (ignored):\n  ${preview.unmappedColumns.join(', ')}` : '';
-        const msg = `Found ${preview.totalRows} rows.\n\nColumn mapping:\n${matched}${unmapped}\n\nProceed with import?`;
+        const sheetInfo = preview.allSheets ? `Sheet: "${preview.sheetName}"` + (preview.allSheets.length > 1 ? ` (${preview.allSheets.length} sheets found, using first)` : '') + '\n' : '';
+        const headerInfo = preview.rawHeaders ? `Headers found: ${preview.rawHeaders.join(', ')}\n\n` : '';
+        const matchedCount = Object.keys(preview.columnsMatched).length;
+
+        if (matchedCount === 0) {
+            alert(`Could not map any columns!\n\n${sheetInfo}${headerInfo}Make sure your spreadsheet has a header row with column names like "Borrower", "Amount $ Owed", etc.\n\nIf your headers are on a different row, try saving as CSV with just the data rows.`);
+            return;
+        }
+
+        const msg = `${sheetInfo}${headerInfo}Found ${preview.totalRows} rows, ${matchedCount} columns matched.\n\nColumn mapping:\n${matched}${unmapped}\n\nProceed with import?`;
 
         if (!confirm(msg)) return;
 

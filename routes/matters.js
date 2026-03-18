@@ -1083,6 +1083,53 @@ function normalizeHeader(h) {
     return (h || '').toString().trim().toLowerCase().replace(/[_\-]+/g, ' ').replace(/\s+/g, ' ');
 }
 
+// More aggressive normalization — strips everything except letters, digits, and spaces
+function fuzzyNormalizeHeader(h) {
+    return (h || '').toString().trim().toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// Build a fuzzy version of the COLUMN_MAP for fallback matching
+const FUZZY_COLUMN_MAP = {};
+for (const [key, val] of Object.entries(COLUMN_MAP)) {
+    const fuzzyKey = key.replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
+    if (!FUZZY_COLUMN_MAP[fuzzyKey]) FUZZY_COLUMN_MAP[fuzzyKey] = val;
+}
+
+function matchHeader(rawHeader) {
+    // Try exact normalized match first
+    const norm = normalizeHeader(rawHeader);
+    if (COLUMN_MAP[norm]) return COLUMN_MAP[norm];
+
+    // Try fuzzy match (strip all special chars)
+    const fuzzy = fuzzyNormalizeHeader(rawHeader);
+    if (FUZZY_COLUMN_MAP[fuzzy]) return FUZZY_COLUMN_MAP[fuzzy];
+
+    // Try substring/keyword matching as last resort
+    const lower = rawHeader.toLowerCase();
+    if (lower.includes('borrower') || lower.includes('debtor') || lower.includes('defendant')) return 'debtorName';
+    if (lower.includes('file no') || lower.includes('file #') || lower.includes('matter')) return 'clientMatter';
+    if (lower.includes('account') || lower.includes('loan info')) return 'accountNumber';
+    if (lower.includes('amount') && lower.includes('owed')) return 'demandAmount';
+    if (lower.includes('amount') && !lower.includes('judgment')) return 'demandAmount';
+    if (lower.includes('judgment') && lower.includes('amount')) return 'judgmentAmount';
+    if (lower.includes('case') && (lower.includes('#') || lower.includes('no') || lower.includes('number'))) return 'caseNumber';
+    if (lower.includes('dvl') && lower.includes('postage')) return 'dates.dvnSent';
+    if (lower.includes('dvl') && lower.includes('response')) return 'dates.responseDue';
+    if (lower.includes('dvn') && lower.includes('sent')) return 'dates.dvnSent';
+    if (lower.includes('complaint') && lower.includes('filed')) return 'dates.complaintFiled';
+    if (lower.includes('served') && lower.includes('date')) return 'dates.served';
+    if (lower.includes('service') && lower.includes('type')) return 'serviceType';
+    if (lower.includes('answer') && (lower.includes('deadline') || lower.includes('due'))) return 'dates.answerDue';
+    if (lower.includes('defendant') && lower.includes('response')) return 'defendantResponse';
+    if (lower.includes('status') || lower.includes('last action')) return 'statusText';
+    if (lower.includes('loan') && lower.includes('type')) return 'loanType';
+    if (lower.includes('court') && !lower.includes('county')) return 'courtName';
+    if (lower.includes('county')) return 'courtCounty';
+    if (lower.includes('note')) return 'notes';
+
+    return null;
+}
+
 function cleanAmount(val) {
     if (!val) return '';
     let s = val.toString();
@@ -1122,10 +1169,13 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
         // Map columns
         const headers = Object.keys(rows[0]);
         const mapping = {};
+        const unmapped = [];
         for (const h of headers) {
-            const norm = normalizeHeader(h);
-            if (COLUMN_MAP[norm]) {
-                mapping[h] = COLUMN_MAP[norm];
+            const match = matchHeader(h);
+            if (match) {
+                mapping[h] = match;
+            } else {
+                unmapped.push(h);
             }
         }
 
@@ -1196,7 +1246,9 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
             skipped: skipped.length,
             created,
             skipped,
-            columnsMatched: Object.entries(mapping).map(([col, field]) => `${col} → ${field}`)
+            columnsMatched: Object.entries(mapping).map(([col, field]) => `${col} → ${field}`),
+            unmappedColumns: unmapped,
+            rawHeaders: headers
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -1226,9 +1278,9 @@ router.post('/api/matters/import/preview', upload.single('file'), async (req, re
         const mapping = {};
         const unmapped = [];
         for (const h of headers) {
-            const norm = normalizeHeader(h);
-            if (COLUMN_MAP[norm]) {
-                mapping[h] = COLUMN_MAP[norm];
+            const match = matchHeader(h);
+            if (match) {
+                mapping[h] = match;
             } else {
                 unmapped.push(h);
             }
@@ -1243,10 +1295,17 @@ router.post('/api/matters/import/preview', upload.single('file'), async (req, re
             return mapped;
         });
 
+        // Also return first row raw values for debugging
+        const sampleRow = rows[0] ? Object.fromEntries(headers.map(h => [h, (rows[0][h] || '').toString().substring(0, 50)])) : {};
+
         res.json({
             totalRows: rows.length,
+            sheetName,
+            allSheets: workbook.SheetNames,
+            rawHeaders: headers,
             columnsMatched: mapping,
             unmappedColumns: unmapped,
+            sampleRow,
             preview
         });
     } catch (err) {
