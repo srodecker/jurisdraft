@@ -454,11 +454,29 @@ app.use(express.static('public', {
 }));
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
+// Auth middleware — rejects requests without a valid Bearer token
+function requireAuth(req, res, next) {
+    const session = getSession(req);
+    if (!session) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    req.session = session;
+    next();
+}
+
 // Mount external routers
 const extractRouter = require('./routes/extract');
 app.use('/api', extractRouter);
 
 const mattersRouter = require('./routes/matters');
+// Protect all matter/workflow/notification/chat/import endpoints
+app.use('/api/matters', requireAuth);
+app.use('/api/workflow', requireAuth);
+app.use('/api/notifications', requireAuth);
+app.use('/api/chat', requireAuth);
+app.use('/api/team', requireAuth);
+app.use('/api/dashboard', requireAuth);
+app.use('/api/matters-export', requireAuth);
 app.use(mattersRouter);
 
 // ============================================================

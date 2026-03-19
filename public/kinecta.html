@@ -295,6 +295,10 @@
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                     Export CSV
                 </a>
+                <a class="nav-link" onclick="logout()" style="cursor:pointer;margin-top:8px;color:var(--text-tertiary);">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width:16px;height:16px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
+                    Sign Out (<span id="navUsername"></span>)
+                </a>
             </div>
         </nav>
 
@@ -567,6 +571,33 @@
 
 <script>
 // ============================================================
+// AUTH — require login to use this page
+// ============================================================
+const TOKEN_KEY = 'jd_token';
+const USER_KEY  = 'jd_username';
+
+function getToken()  { return localStorage.getItem(TOKEN_KEY); }
+function getUsername() { return localStorage.getItem(USER_KEY) || ''; }
+
+function authHeaders() {
+    const t = getToken();
+    return t ? { 'Authorization': 'Bearer ' + t } : {};
+}
+
+// Authenticated fetch wrapper — adds Bearer token to every request
+async function authFetch(url, opts = {}) {
+    opts.headers = { ...authHeaders(), ...(opts.headers || {}) };
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+        // Token expired or invalid — redirect to login
+        localStorage.removeItem(TOKEN_KEY);
+        window.location.href = '/full#login';
+        throw new Error('Session expired');
+    }
+    return res;
+}
+
+// ============================================================
 // STATE
 // ============================================================
 let allMatters = [];
@@ -586,8 +617,28 @@ let currentView = 'chat'; // 'chat', 'cases', 'detail'
 // ============================================================
 document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+
+    // Auth gate — must be logged in
+    if (!getToken()) {
+        window.location.href = '/full#login';
+        return;
+    }
+    // Verify token is still valid
     try {
-        const r = await fetch('/api/workflow/config');
+        const authRes = await authFetch('/api/auth-status');
+        const authData = await authRes.json();
+        if (!authData.authenticated) {
+            localStorage.removeItem(TOKEN_KEY);
+            window.location.href = '/full#login';
+            return;
+        }
+    } catch(e) {
+        window.location.href = '/full#login';
+        return;
+    }
+
+    try {
+        const r = await authFetch('/api/workflow/config');
         const d = await r.json();
         workflowStages = d.stages;
         workflowConfig = d.config;
@@ -616,10 +667,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Set default event date
     document.getElementById('evDate').value = new Date().toISOString().slice(0, 10);
 
+    // Show username in nav
+    document.getElementById('navUsername').textContent = getUsername();
+
     await loadMatters();
     loadNotifications();
     loadGlobalChatHistory();
 });
+
+async function logout() {
+    try { await authFetch('/api/logout', { method: 'POST' }); } catch(_) {}
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    window.location.href = '/full#login';
+}
 
 function switchUser(id) {
     currentUserId = id;
@@ -633,7 +694,7 @@ function switchUser(id) {
 // ============================================================
 async function loadMatters() {
     try {
-        const r = await fetch('/api/matters?summary=true');
+        const r = await authFetch('/api/matters?summary=true');
         allMatters = await r.json();
     } catch(e) { allMatters = []; }
     renderStats();
@@ -763,7 +824,7 @@ function detectColorFromText(statusText) {
 // ============================================================
 async function openMatter(id) {
     try {
-        const r = await fetch('/api/matters/' + id);
+        const r = await authFetch('/api/matters/' + id);
         currentMatter = await r.json();
     } catch(e) { alert('Failed to load matter'); return; }
 
@@ -898,7 +959,7 @@ function renderDates() {
 
 async function updateDate(key, val) {
     try {
-        const r = await fetch(`/api/matters/${currentMatter.id}/dates`, {
+        const r = await authFetch(`/api/matters/${currentMatter.id}/dates`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ [key]: val || null })
         });
@@ -954,7 +1015,7 @@ async function addEvent() {
     if (!title) { alert('Title is required'); return; }
 
     try {
-        const r = await fetch(`/api/matters/${currentMatter.id}/events`, {
+        const r = await authFetch(`/api/matters/${currentMatter.id}/events`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ type, date: date || new Date().toISOString(), title, description: desc, addedBy: currentUserId })
         });
@@ -970,7 +1031,7 @@ async function addEvent() {
 async function deleteEvent(eventId) {
     if (!confirm('Delete this event?')) return;
     try {
-        const r = await fetch(`/api/matters/${currentMatter.id}/events/${eventId}`, { method: 'DELETE' });
+        const r = await authFetch(`/api/matters/${currentMatter.id}/events/${eventId}`, { method: 'DELETE' });
         currentMatter = await r.json();
         renderTimeline();
     } catch(e) { alert('Failed to delete'); }
@@ -1018,7 +1079,7 @@ function renderStages() {
 
 async function toggleTask(taskId) {
     try {
-        const r = await fetch(`/api/matters/${currentMatter.id}/tasks/${taskId}`, {
+        const r = await authFetch(`/api/matters/${currentMatter.id}/tasks/${taskId}`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ completedBy: currentUserId })
         });
@@ -1077,7 +1138,7 @@ async function sendChat() {
     container.scrollTop = container.scrollHeight;
 
     try {
-        const r = await fetch(`/api/matters/${currentMatter.id}/chat`, {
+        const r = await authFetch(`/api/matters/${currentMatter.id}/chat`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: msg })
         });
@@ -1099,7 +1160,7 @@ async function sendChat() {
 // ============================================================
 async function loadNotifications() {
     try {
-        const r = await fetch(`/api/notifications?for=${currentUserId}`);
+        const r = await authFetch(`/api/notifications?for=${currentUserId}`);
         const notifs = await r.json();
         const unread = notifs.filter(n => !n.read);
         const dot = document.getElementById('notifDot');
@@ -1127,7 +1188,7 @@ function toggleNotifPanel() {
 
 async function handleNotifClick(notifId, matterId) {
     try {
-        await fetch(`/api/notifications/${notifId}/read`, { method: 'PATCH' });
+        await authFetch(`/api/notifications/${notifId}/read`, { method: 'PATCH' });
     } catch(e) {}
     toggleNotifPanel();
     if (matterId) openMatter(matterId);
@@ -1136,7 +1197,7 @@ async function handleNotifClick(notifId, matterId) {
 
 async function markAllRead() {
     try {
-        await fetch('/api/notifications/mark-all-read', {
+        await authFetch('/api/notifications/mark-all-read', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId: currentUserId })
         });
@@ -1200,14 +1261,14 @@ async function saveMatter() {
 
     try {
         if (editingId) {
-            const r = await fetch('/api/matters/' + editingId, {
+            const r = await authFetch('/api/matters/' + editingId, {
                 method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
             });
             currentMatter = await r.json();
             renderDetailHeader();
             switchTab('overview');
         } else {
-            const r = await fetch('/api/matters', {
+            const r = await authFetch('/api/matters', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
             });
             const newMatter = await r.json();
@@ -1222,7 +1283,7 @@ async function deleteMatter() {
     if (!currentMatter) return;
     if (!confirm('Delete matter for "' + currentMatter.debtorName + '"? This cannot be undone.')) return;
     try {
-        await fetch('/api/matters/' + currentMatter.id, { method: 'DELETE' });
+        await authFetch('/api/matters/' + currentMatter.id, { method: 'DELETE' });
         showList();
     } catch(e) { alert('Failed to delete'); }
 }
@@ -1264,7 +1325,7 @@ function showCasesView() {
 // ============================================================
 async function loadGlobalChatHistory() {
     try {
-        const r = await fetch('/api/chat/global/history');
+        const r = await authFetch('/api/chat/global/history');
         const history = await r.json();
         if (history.length > 0) renderGlobalChat(history);
     } catch(e) {}
@@ -1341,13 +1402,13 @@ async function sendGlobalChat() {
     container.scrollTop = container.scrollHeight;
 
     try {
-        const r = await fetch('/api/chat/global', {
+        const r = await authFetch('/api/chat/global', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: msg })
         });
         const d = await r.json();
         // Reload full history to get properly rendered messages
-        const hr = await fetch('/api/chat/global/history');
+        const hr = await authFetch('/api/chat/global/history');
         const history = await hr.json();
         renderGlobalChat(history);
     } catch(e) {
@@ -1364,7 +1425,7 @@ async function sendGlobalChat() {
 async function clearGlobalChat() {
     if (!confirm('Clear chat history?')) return;
     try {
-        await fetch('/api/chat/global/history', { method: 'DELETE' });
+        await authFetch('/api/chat/global/history', { method: 'DELETE' });
         renderGlobalChat([]);
     } catch(e) {}
 }
@@ -1390,14 +1451,14 @@ async function handleImportFile(input) {
 
     try {
         // Run debug parse first
-        const dbg = await fetch('/api/matters/import/debug', { method: 'POST', body: debugForm });
+        const dbg = await authFetch('/api/matters/import/debug', { method: 'POST', body: debugForm });
         const debug = await dbg.json();
         console.log('IMPORT DEBUG:', JSON.stringify(debug, null, 2));
 
         // Then preview
         const formData = new FormData();
         formData.append('file', file);
-        const prev = await fetch('/api/matters/import/preview', { method: 'POST', body: formData });
+        const prev = await authFetch('/api/matters/import/preview', { method: 'POST', body: formData });
         const preview = await prev.json();
         if (preview.error) { alert('Error: ' + preview.error); return; }
 
@@ -1425,7 +1486,7 @@ async function handleImportFile(input) {
         // Do the actual import
         const formData2 = new FormData();
         formData2.append('file', file);
-        const r = await fetch('/api/matters/import', { method: 'POST', body: formData2 });
+        const r = await authFetch('/api/matters/import', { method: 'POST', body: formData2 });
         const result = await r.json();
 
         if (result.error) { alert('Import error: ' + result.error); return; }
@@ -1458,7 +1519,7 @@ async function handleDocUpload(input) {
     btn.disabled = true;
 
     try {
-        const r = await fetch(`/api/matters/${currentMatter.id}/extract`, {
+        const r = await authFetch(`/api/matters/${currentMatter.id}/extract`, {
             method: 'POST', body: formData
         });
         const result = await r.json();
