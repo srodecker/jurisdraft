@@ -658,7 +658,20 @@ async function authFetch(url, opts = {}) {
     opts.headers = { ...authHeaders(), ...(opts.headers || {}) };
     const res = await fetch(url, opts);
     if (res.status === 401) {
-        // Token expired or invalid — show login wall
+        console.warn('[KINECTA] 401 from', url, '— verifying session...');
+        // Double-check with auth-status before showing login wall
+        try {
+            const check = await fetch('/api/auth-status', { headers: authHeaders() });
+            const data = await check.json();
+            if (data.authenticated) {
+                // Session is actually valid — retry once
+                console.log('[KINECTA] Session valid, retrying', url);
+                const retry = await fetch(url, opts);
+                if (retry.status !== 401) return retry;
+            }
+        } catch(_) {}
+        // Truly expired
+        console.log('[KINECTA] Session truly expired, showing login wall');
         localStorage.removeItem(TOKEN_KEY);
         showLoginWall();
         throw new Error('Session expired');
@@ -688,7 +701,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
 
     // Auth gate — show login wall if not logged in
-    if (!getToken()) {
+    const storedToken = getToken();
+    console.log('[KINECTA] DOMContentLoaded | token exists:', !!storedToken, '| token prefix:', storedToken ? storedToken.slice(0, 20) : 'none');
+    if (!storedToken) {
+        console.log('[KINECTA] No token, showing login wall');
         showLoginWall();
         return;
     }
@@ -696,16 +712,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const authRes = await fetch('/api/auth-status', { headers: authHeaders() });
         const authData = await authRes.json();
+        console.log('[KINECTA] auth-status response:', JSON.stringify(authData));
         if (!authData.authenticated) {
+            console.log('[KINECTA] Not authenticated, clearing token');
             localStorage.removeItem(TOKEN_KEY);
             showLoginWall();
             return;
         }
     } catch(e) {
+        console.log('[KINECTA] auth-status error:', e.message);
         showLoginWall();
         return;
     }
 
+    console.log('[KINECTA] Auth OK, showing app');
     showApp();
     initApp();
 });

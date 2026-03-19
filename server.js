@@ -60,7 +60,9 @@ function verifyPassword(password, stored) {
 function createToken(username) {
     const payload = `${username}:${Date.now()}`;
     const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
-    return Buffer.from(`${payload}:${sig}`).toString('base64url');
+    const token = Buffer.from(`${payload}:${sig}`).toString('base64url');
+    console.log('[AUTH] Created token for user:', username, '| secret prefix:', TOKEN_SECRET.slice(0, 8));
+    return token;
 }
 
 // Helper: verify and decode a signed token; returns username or null
@@ -68,13 +70,23 @@ function verifyToken(token) {
     try {
         const decoded = Buffer.from(token, 'base64url').toString();
         const parts = decoded.split(':');
-        if (parts.length !== 3) return null;
+        if (parts.length !== 3) {
+            console.log('[AUTH] Token decode: wrong number of parts:', parts.length);
+            return null;
+        }
         const [username, ts, sig] = parts;
         const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(`${username}:${ts}`).digest('hex');
-        if (sig !== expected) return null;
-        if (Date.now() - Number(ts) > TOKEN_MAX_AGE) return null;
+        if (sig !== expected) {
+            console.log('[AUTH] Token HMAC mismatch for user:', username, '| secret prefix:', TOKEN_SECRET.slice(0, 8));
+            return null;
+        }
+        if (Date.now() - Number(ts) > TOKEN_MAX_AGE) {
+            console.log('[AUTH] Token expired for user:', username);
+            return null;
+        }
         return username;
-    } catch (_) {
+    } catch (err) {
+        console.log('[AUTH] Token verify error:', err.message);
         return null;
     }
 }
@@ -134,12 +146,6 @@ function getSession(req) {
     return _sessionCache.get(req) || null;
 }
 
-// Middleware: resolve session before route handlers
-app.use(async (req, res, next) => {
-    const session = await getSessionAsync(req);
-    if (session) _sessionCache.set(req, session);
-    next();
-});
 
 // Backwards-compatible: returns true/false
 function isAuthenticated(req) {
@@ -426,6 +432,21 @@ const apiLimiter = rateLimit({
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Reasonable limit for JSON payloads
 
+// Middleware: resolve session before route handlers
+app.use(async (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+        const authHeader = req.headers['authorization'] || '';
+        const hasToken = authHeader.startsWith('Bearer ');
+        const session = await getSessionAsync(req);
+        console.log(`[AUTH] ${req.method} ${req.path} | token=${hasToken} | session=${session ? session.username : 'null'}`);
+        if (session) _sessionCache.set(req, session);
+    } else {
+        const session = await getSessionAsync(req);
+        if (session) _sessionCache.set(req, session);
+    }
+    next();
+});
+
 // Resolve LibreOffice binary path for environments without global PATH setup
 async function resolveSofficePath() {
     const candidates = [
@@ -503,10 +524,17 @@ app.use(express.static('public', {
 }));
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
-// Auth middleware — rejects requests without a valid Bearer token
-function requireAuth(req, res, next) {
-    const session = getSession(req);
+// Auth middleware — rejects requests without a valid session
+// Uses getSessionAsync directly to avoid relying on WeakMap timing
+async function requireAuth(req, res, next) {
+    let session = getSession(req);
     if (!session) {
+        // Fallback: resolve session directly (handles race conditions)
+        session = await getSessionAsync(req);
+        if (session) _sessionCache.set(req, session);
+    }
+    if (!session) {
+        console.log('[AUTH] requireAuth DENIED:', req.method, req.path);
         return res.status(401).json({ error: 'Authentication required' });
     }
     req.session = session;
@@ -594,8 +622,9 @@ app.post('/api/logout', (req, res) => {
 // ============================================================
 // PROFILE ENDPOINTS
 // ============================================================
-app.get('/api/profile', (req, res) => {
-    const session = getSession(req);
+app.get('/api/profile', async (req, res) => {
+    let session = getSession(req);
+    if (!session) session = await getSessionAsync(req);
     if (!session) return res.status(401).json({ error: 'Not logged in.' });
     // Return profile without passwordHash
     const { passwordHash, ...safe } = session.profile;
@@ -603,7 +632,8 @@ app.get('/api/profile', (req, res) => {
 });
 
 app.put('/api/profile', async (req, res) => {
-    const session = getSession(req);
+    let session = getSession(req);
+    if (!session) session = await getSessionAsync(req);
     if (!session) return res.status(401).json({ error: 'Not logged in.' });
     const updates = req.body;
     // Merge updates into profile (don't allow overwriting username or passwordHash)
@@ -620,7 +650,8 @@ app.put('/api/profile', async (req, res) => {
 });
 
 app.get('/api/auth-status', async (req, res) => {
-    const session = getSession(req);
+    let session = getSession(req);
+    if (!session) session = await getSessionAsync(req);
     if (session) {
         res.json({ authenticated: true, username: session.username });
     } else {
