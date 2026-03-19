@@ -19,9 +19,10 @@ let supabase = null;
 if (useSupabase) {
     const { createClient } = require('@supabase/supabase-js');
     supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    console.log('[Kinecta] Using Supabase for persistent storage');
+    console.log('[Kinecta] Using Supabase for persistent storage | URL:', SUPABASE_URL);
 } else {
-    console.log('[Kinecta] No Supabase configured — using file storage (data may be ephemeral on serverless)');
+    console.log('[Kinecta] *** NO SUPABASE *** SUPABASE_URL=' + (SUPABASE_URL ? 'set' : 'MISSING') + ' SUPABASE_KEY=' + (SUPABASE_KEY ? 'set' : 'MISSING'));
+    console.log('[Kinecta] Falling back to file storage — DATA WILL BE LOST on Vercel!');
 }
 
 // File-based fallback paths
@@ -456,6 +457,29 @@ router.get('/api/workflow/config', (req, res) => {
         team: TEAM_MEMBERS,
         eventTypes: EVENT_TYPES
     });
+});
+
+// Storage diagnostic — check what backend is active
+router.get('/api/workflow/storage-status', async (req, res) => {
+    const status = {
+        backend: useSupabase ? 'supabase' : 'file',
+        supabaseUrl: SUPABASE_URL ? SUPABASE_URL.replace(/\/\/(.{4}).*(@)/, '//$1...$2') : null,
+        supabaseKeySet: !!SUPABASE_KEY,
+        isServerless,
+        mattersDir: useSupabase ? null : MATTERS_DIR,
+    };
+    if (useSupabase) {
+        try {
+            const { count, error } = await supabase.from('matters').select('*', { count: 'exact', head: true });
+            status.supabaseConnected = !error;
+            status.mattersCount = count;
+            status.supabaseError = error ? error.message : null;
+        } catch (e) {
+            status.supabaseConnected = false;
+            status.supabaseError = e.message;
+        }
+    }
+    res.json(status);
 });
 
 // Get team members
