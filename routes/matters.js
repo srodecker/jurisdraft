@@ -502,6 +502,7 @@ router.get('/api/matters', async (req, res) => {
                     currentStage: m.currentStage,
                     status: m.status,
                     statusText: m.statusText || '',
+                    colorCode: m.colorCode || '',
                     loanType: m.loanType,
                     courtName: m.courtName,
                     courtCounty: m.courtCounty || '',
@@ -1404,66 +1405,88 @@ function parseImportRow(row, mapping) {
     return { data, dates };
 }
 
-// Infer workflow stage and mark tasks based on status text and dates
+// ============================================================
+// KINECTA COLOR CODE MATRIX (from their spreadsheet)
+// ============================================================
+// Green   = Need to do DVL
+// Yellow  = Waiting for DVL to expire
+// Grey    = Confirming next steps
+// Blue    = Need to proceed with suit / service
+// Orange  = Litigation active
+// Purple  = Default Judgment (need to enforce)
+// Stip Judgment = usually close
+//
+// We detect the color/status from the raw "Status / Last Action" text
+// and map it to a stage + color label stored on the matter.
+
+function detectColorCode(statusText) {
+    const s = (statusText || '').toLowerCase();
+
+    // Stip / close (check first — "stip judgment" is a specific outcome)
+    if (s.includes('stip') || s.includes('close') || s.includes('settled'))
+        return 'stip';
+
+    // Purple — default judgment
+    if (s.includes('default judgment') || s.includes('default entry') || s.includes('purple'))
+        return 'purple';
+
+    // Orange — litigation active
+    if (s.includes('litigation active') || s.includes('lit active') || s.includes('orange')
+        || s.includes('bk hold') || s.includes('bankruptcy'))
+        return 'orange';
+
+    // Blue — need to proceed with suit / service
+    if (s.includes('need to proceed') || s.includes('proceed with suit') || s.includes('blue')
+        || s.includes('file suit') || s.includes('out for service') || s.includes('need to serve'))
+        return 'blue';
+
+    // Grey — confirming next steps
+    if (s.includes('confirming next') || s.includes('confirm next') || s.includes('grey') || s.includes('gray'))
+        return 'grey';
+
+    // Yellow — waiting for DVL to expire
+    if (s.includes('waiting for dvl') || s.includes('waiting on dvl') || s.includes('dvl pending')
+        || s.includes('yellow') || s.includes('still pending') || s.includes('dvl sent'))
+        return 'yellow';
+
+    // Green — need to do DVL
+    if (s.includes('need to do dvl') || s.includes('send dvl') || s.includes('green')
+        || s.includes('need dvl') || s.includes('new file') || s.includes('new matter'))
+        return 'green';
+
+    return null;
+}
+
+// Map color code → workflow stage
+const COLOR_TO_STAGE = {
+    green:  1,  // DVN Letter — need to send it
+    yellow: 1,  // DVN Letter — sent, waiting to expire
+    grey:   2,  // File Complaint — confirming next steps
+    blue:   2,  // File Complaint / Service — need to proceed
+    orange: 4,  // Answer/Response — litigation active
+    purple: 7,  // Post-Judgment — default judgment, need to enforce
+    stip:   8,  // Closed — stip judgment
+};
+
 function inferStageFromImport(matter, data, dates) {
-    const statusLower = (data.statusText || '').toLowerCase();
-    const notesLower = (data.notes || '').toLowerCase();
-    const combined = statusLower + ' ' + notesLower;
+    const colorCode = detectColorCode(data.statusText);
 
-    // Determine stage from status text keywords
-    let inferredStage = 1; // Default: DVN Letter
+    // Store the color code on the matter for display
+    if (colorCode) {
+        matter.colorCode = colorCode;
+    }
 
-    if (statusLower.includes('default judgment') || statusLower.includes('purple')) {
-        inferredStage = 7; // Post-Judgment (default judgment obtained)
-    } else if (statusLower.includes('litigation active') || statusLower.includes('orange')) {
-        inferredStage = 4; // Answer/Response Due (litigation is ongoing)
-    } else if (statusLower.includes('need to proceed with suit') || statusLower.includes('blue')) {
-        inferredStage = 2; // File Complaint
-    } else if (statusLower.includes('waiting for dvl') || statusLower.includes('yellow') || statusLower.includes('still pending')) {
-        inferredStage = 1; // DVN Letter (waiting for response)
-    } else if (statusLower.includes('confirming next') || statusLower.includes('grey')) {
-        inferredStage = 2; // Between DVN and filing
-    } else if (statusLower.includes('stip') || statusLower.includes('close')) {
-        inferredStage = 8; // Matter Closed
+    // Map to stage
+    let inferredStage = colorCode ? COLOR_TO_STAGE[colorCode] : 1;
+
+    // Stip = closed
+    if (colorCode === 'stip') {
         matter.status = 'closed';
-    }
-
-    // Refine stage based on which dates exist
-    if (dates.judgmentEntered || dates.defaultEntered) {
-        inferredStage = Math.max(inferredStage, 7);
-    }
-    if (dates.answerDue || dates.served) {
-        inferredStage = Math.max(inferredStage, 4);
-    }
-    if (dates.complaintFiled) {
-        inferredStage = Math.max(inferredStage, 3); // Service stage
-    }
-    if (dates.dvnSent) {
-        inferredStage = Math.max(inferredStage, 1);
-    }
-
-    // Refine further from notes
-    if (combined.includes('out for service') || combined.includes('need to serve')) {
-        inferredStage = Math.max(inferredStage, 3);
-    }
-    if (combined.includes('complaint filed')) {
-        inferredStage = Math.max(inferredStage, 3);
-    }
-    if (combined.includes('default') && (combined.includes('filing') || combined.includes('file'))) {
-        inferredStage = Math.max(inferredStage, 6);
-    }
-    if (combined.includes('bk hold') || combined.includes('bankruptcy')) {
-        // Litigation active but on hold
-        inferredStage = Math.max(inferredStage, 4);
-    }
-    if (combined.includes('referred to outside') || combined.includes('outside') && combined.includes('council')) {
-        inferredStage = Math.max(inferredStage, 2);
     }
 
     matter.currentStage = inferredStage;
 
     // Auto-complete tasks for stages before the current one
-    // This makes the workflow progress bar accurate
     for (const stage of WORKFLOW_STAGES) {
         if (stage.number >= inferredStage) break;
         for (const task of stage.tasks) {
@@ -1472,18 +1495,6 @@ function inferStageFromImport(matter, data, dates) {
                 matter.tasks[task.id].completedAt = matter.createdAt;
                 matter.tasks[task.id].completedBy = 'import';
             }
-        }
-    }
-
-    // If defendant responded, mark answer_response tasks
-    const defResponse = (data.defendantResponse || '').toLowerCase();
-    if (defResponse && defResponse !== 'no' && !defResponse.includes('no response')) {
-        if (defResponse.includes('bk') || defResponse.includes('bankruptcy')) {
-            // BK hold — don't advance further
-        } else if (defResponse.includes('yes') || defResponse.includes('answer')) {
-            // Answer was filed — we're in negotiation or beyond
-            inferredStage = Math.max(matter.currentStage, 5);
-            matter.currentStage = inferredStage;
         }
     }
 }

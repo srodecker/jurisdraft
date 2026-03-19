@@ -704,7 +704,7 @@ function renderTable() {
         const stage = workflowStages.find(s => s.number === m.currentStage) || { name: 'Stage ' + m.currentStage };
         const nextTask = m.nextTask ? `<span class="badge badge-task" title="${esc(m.nextTask.assignee)}">${esc(truncate(m.nextTask.label, 30))}</span>` : '<span style="color:var(--text-tertiary);font-size:11px;">-</span>';
         // Color-code status like the original spreadsheet
-        const statusColor = getStatusColor(m.statusText || '');
+        const statusColor = getStatusColor(m.statusText || '', m.colorCode);
         const statusDisplay = m.statusText ? truncate(m.statusText, 35) : m.status;
         const progress = m.totalTasks > 0 ? Math.round(m.completedTasks / m.totalTasks * 100) : 0;
         return `<tr class="clickable" onclick="openMatter('${m.id}')">
@@ -724,15 +724,38 @@ function renderTable() {
     }).join('');
 }
 
-function getStatusColor(statusText) {
-    const s = statusText.toLowerCase();
-    if (s.includes('litigation active')) return 'var(--accent-warning)'; // Orange
-    if (s.includes('need to proceed')) return '#3b82f6'; // Blue
-    if (s.includes('default judgment') || s.includes('purple')) return '#a855f7'; // Purple
-    if (s.includes('waiting') || s.includes('pending')) return '#eab308'; // Yellow
-    if (s.includes('confirming')) return '#6b7280'; // Grey
-    if (s.includes('stip') || s.includes('close')) return 'var(--accent-success)'; // Green
-    return 'var(--text-secondary)';
+// Kinecta color code matrix:
+// Green  = Need to do DVL
+// Yellow = Waiting for DVL to expire
+// Grey   = Confirming next steps
+// Blue   = Need to proceed with suit / service
+// Orange = Litigation active
+// Purple = Default Judgment (need to enforce)
+// Stip   = usually close
+function getStatusColor(statusText, colorCode) {
+    // Use stored colorCode if available, otherwise detect from text
+    const code = colorCode || detectColorFromText(statusText);
+    switch (code) {
+        case 'green':  return '#22c55e';
+        case 'yellow': return '#eab308';
+        case 'grey':   return '#6b7280';
+        case 'blue':   return '#3b82f6';
+        case 'orange': return '#f97316';
+        case 'purple': return '#a855f7';
+        case 'stip':   return '#6b7280';
+        default:       return 'var(--text-secondary)';
+    }
+}
+function detectColorFromText(statusText) {
+    const s = (statusText || '').toLowerCase();
+    if (s.includes('stip') || s.includes('close') || s.includes('settled')) return 'stip';
+    if (s.includes('default judgment') || s.includes('purple')) return 'purple';
+    if (s.includes('litigation active') || s.includes('orange') || s.includes('bk hold')) return 'orange';
+    if (s.includes('need to proceed') || s.includes('blue') || s.includes('file suit') || s.includes('out for service')) return 'blue';
+    if (s.includes('confirming next') || s.includes('grey') || s.includes('gray')) return 'grey';
+    if (s.includes('waiting for dvl') || s.includes('yellow') || s.includes('still pending') || s.includes('dvl sent')) return 'yellow';
+    if (s.includes('need to do dvl') || s.includes('send dvl') || s.includes('green') || s.includes('new file')) return 'green';
+    return null;
 }
 
 // ============================================================
@@ -817,7 +840,7 @@ function renderOverview() {
         ${m.courtCounty ? `<div class="info-row"><span class="info-lbl">County:</span><span class="info-val">${esc(m.courtCounty)}</span></div>` : ''}
         <div class="info-row"><span class="info-lbl">Demand:</span><span class="info-val">${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</span></div>
         <div class="info-row"><span class="info-lbl">Judgment:</span><span class="info-val">${m.judgmentAmount ? '$' + Number(m.judgmentAmount).toLocaleString() : '-'}</span></div>
-        ${m.statusText ? `<div class="info-row"><span class="info-lbl">Status:</span><span class="info-val" style="color:${getStatusColor(m.statusText)}">${esc(m.statusText)}</span></div>` : ''}
+        ${m.statusText ? `<div class="info-row"><span class="info-lbl">Status:</span><span class="info-val" style="color:${getStatusColor(m.statusText, currentMatter.colorCode)}">${esc(m.statusText)}</span></div>` : ''}
         ${m.serviceType ? `<div class="info-row"><span class="info-lbl">Service Type:</span><span class="info-val">${esc(m.serviceType)}</span></div>` : ''}
         ${m.defendantResponse ? `<div class="info-row"><span class="info-lbl">Def. Response:</span><span class="info-val">${esc(m.defendantResponse)}</span></div>` : ''}
         ${m.notes ? `<div class="info-row" style="align-items:flex-start"><span class="info-lbl">Notes:</span><span class="info-val" style="white-space:pre-wrap">${esc(m.notes)}</span></div>` : ''}
