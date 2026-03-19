@@ -1360,11 +1360,19 @@ async function handleImportFile(input) {
     if (!file) return;
     input.value = ''; // Reset so same file can be re-selected
 
-    // First preview
-    const formData = new FormData();
-    formData.append('file', file);
+    // First, run debug to see raw data
+    const debugForm = new FormData();
+    debugForm.append('file', file);
 
     try {
+        // Run debug parse first
+        const dbg = await fetch('/api/matters/import/debug', { method: 'POST', body: debugForm });
+        const debug = await dbg.json();
+        console.log('IMPORT DEBUG:', JSON.stringify(debug, null, 2));
+
+        // Then preview
+        const formData = new FormData();
+        formData.append('file', file);
         const prev = await fetch('/api/matters/import/preview', { method: 'POST', body: formData });
         const preview = await prev.json();
         if (preview.error) { alert('Error: ' + preview.error); return; }
@@ -1375,6 +1383,11 @@ async function handleImportFile(input) {
         const headerRowInfo = preview.headerRowIndex ? `Header row detected at row ${preview.headerRowIndex}\n` : '';
         const headerInfo = preview.rawHeaders ? `Headers: ${preview.rawHeaders.join(', ')}\n\n` : '';
         const matchedCount = Object.keys(preview.columnsMatched).length;
+
+        // Show sample row from debug
+        const sampleInfo = debug.debugRows && debug.debugRows[0]
+            ? `\nSample row 1 parsed as:\n  Name: "${debug.debugRows[0].parsedData.debtorName || '(empty)'}"\n  File#: "${debug.debugRows[0].parsedData.clientMatter || '(empty)'}"\n  Amount: "${debug.debugRows[0].parsedData.demandAmount || '(empty)'}"\n  Status: "${debug.debugRows[0].parsedData.statusText || '(empty)'}"\n  Name split: ${debug.debugRows[0].nameSplit ? debug.debugRows[0].nameSplit.name + ' / ' + debug.debugRows[0].nameSplit.fileNo : 'no split needed'}\n`
+            : '';
 
         if (matchedCount === 0) {
             alert(`Could not map any columns!\n\n${sheetInfo}${headerInfo}Make sure your spreadsheet has a header row with column names like "Borrower", "Amount $ Owed", etc.\n\nIf your headers are on a different row, try saving as CSV with just the data rows.`);

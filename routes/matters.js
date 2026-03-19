@@ -1250,17 +1250,24 @@ function matchHeader(rawHeader) {
 function cleanAmount(val) {
     if (!val) return '';
     let s = val.toString();
-    // Strip any text prefix before the dollar amount (e.g. "CC $18,375.52" → "18375.52")
-    // Also handle #VALUE! or other Excel errors
+    // Handle Excel errors
     if (s.includes('#VALUE') || s.includes('#REF') || s.includes('#N/A')) return '';
-    // Find the first dollar sign or digit sequence that looks like an amount
-    const amountMatch = s.match(/\$?\s*([\d,]+\.?\d*)/);
-    if (amountMatch) {
-        const cleaned = amountMatch[1].replace(/,/g, '');
+    // PREFER a dollar-sign-prefixed amount (e.g. "$10,834.92" or "CC $18,375.52")
+    const dollarMatch = s.match(/\$\s*([\d,]+\.?\d*)/);
+    if (dollarMatch) {
+        const cleaned = dollarMatch[1].replace(/,/g, '');
         const n = parseFloat(cleaned);
         return isNaN(n) ? '' : n.toString();
     }
-    const n = parseFloat(s.replace(/[$,\s]/g, ''));
+    // Fallback: find any number that looks like a dollar amount (has decimal or is > 100)
+    const numMatches = s.match(/[\d,]+\.\d{2}/g);
+    if (numMatches) {
+        const cleaned = numMatches[0].replace(/,/g, '');
+        const n = parseFloat(cleaned);
+        return isNaN(n) ? '' : n.toString();
+    }
+    // Last resort: strip non-numeric
+    const n = parseFloat(s.replace(/[^0-9.]/g, ''));
     return isNaN(n) ? '' : n.toString();
 }
 
@@ -1514,6 +1521,25 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
             const row = dataRows[i];
             const { data, dates } = parseImportRow(row, mapping);
 
+            // Post-process: split concatenated "Name264-XXXXXXX" into name + clientMatter
+            if (data.debtorName) {
+                const nameFileMatch = data.debtorName.match(/^(.+?)\s*(264-\d+.*)$/);
+                if (nameFileMatch) {
+                    data.debtorName = nameFileMatch[1].trim();
+                    if (!data.clientMatter) {
+                        data.clientMatter = nameFileMatch[2].trim();
+                    }
+                }
+                // Also handle "Name 264-XXXXXXX" with space
+                const nameFileMatch2 = data.debtorName.match(/^(.+?)\s+(264-\d+)$/);
+                if (nameFileMatch2) {
+                    data.debtorName = nameFileMatch2[1].trim();
+                    if (!data.clientMatter) {
+                        data.clientMatter = nameFileMatch2[2].trim();
+                    }
+                }
+            }
+
             // Skip rows without a name
             if (!data.debtorName) {
                 skipped.push({ row: headerRowIndex + i + 2, reason: 'No debtor name found' });
@@ -1613,6 +1639,69 @@ router.post('/api/matters/import/preview', upload.single('file'), async (req, re
             unmappedColumns: unmapped,
             sampleRow,
             preview
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Diagnostic: upload spreadsheet and see raw parsed data (no import)
+router.post('/api/matters/import/debug', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+        const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const { headers, dataRows, headerRowIndex } = parseSheetWithAutoHeaders(workbook.Sheets[sheetName]);
+
+        const mapping = {};
+        const unmapped = [];
+        for (const h of headers) {
+            const match = matchHeader(h);
+            if (match) mapping[h] = match;
+            else unmapped.push(h);
+        }
+
+        // Parse first 5 rows and show all transformations
+        const debugRows = dataRows.slice(0, 5).map((row, i) => {
+            const rawCells = {};
+            for (const h of headers) {
+                rawCells[h] = (row[h] || '').toString().substring(0, 80);
+            }
+            const { data, dates } = parseImportRow(row, mapping);
+
+            // Apply name split
+            let nameSplit = null;
+            if (data.debtorName) {
+                const m = data.debtorName.match(/^(.+?)\s*(264-\d+.*)$/);
+                if (m) nameSplit = { name: m[1], fileNo: m[2] };
+            }
+
+            return {
+                rowIndex: headerRowIndex + i + 2,
+                rawCells,
+                parsedData: data,
+                parsedDates: dates,
+                nameSplit,
+                wouldInferStage: (data.statusText || '').substring(0, 50)
+            };
+        });
+
+        // Also show raw array-of-arrays for first few rows to see cell boundaries
+        const rawAOA = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+        const rawRows = rawAOA.slice(Math.max(0, headerRowIndex - 1), headerRowIndex + 6).map((row, i) => ({
+            rowNum: Math.max(0, headerRowIndex - 1) + i + 1,
+            cells: row.map((c, j) => `[${j}]=${(c || '').toString().substring(0, 40)}`)
+        }));
+
+        res.json({
+            sheetName,
+            headerRowIndex: headerRowIndex + 1,
+            headerCount: headers.length,
+            headers,
+            mapping,
+            unmapped,
+            rawRowsAroundHeader: rawRows,
+            debugRows
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
