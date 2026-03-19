@@ -688,7 +688,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
 
     // Auth gate — show login wall if not logged in
-    if (!getToken()) {
+    const storedToken = getToken();
+    console.log('[KINECTA] DOMContentLoaded | token exists:', !!storedToken, '| token prefix:', storedToken ? storedToken.slice(0, 20) : 'none');
+    if (!storedToken) {
+        console.log('[KINECTA] No token, showing login wall');
         showLoginWall();
         return;
     }
@@ -696,16 +699,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
         const authRes = await fetch('/api/auth-status', { headers: authHeaders() });
         const authData = await authRes.json();
+        console.log('[KINECTA] auth-status response:', JSON.stringify(authData));
         if (!authData.authenticated) {
+            console.log('[KINECTA] Not authenticated, clearing token');
             localStorage.removeItem(TOKEN_KEY);
             showLoginWall();
             return;
         }
     } catch(e) {
+        console.log('[KINECTA] auth-status error:', e.message);
         showLoginWall();
         return;
     }
 
+    console.log('[KINECTA] Auth OK, showing app');
     showApp();
     initApp();
 });

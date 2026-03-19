@@ -60,7 +60,9 @@ function verifyPassword(password, stored) {
 function createToken(username) {
     const payload = `${username}:${Date.now()}`;
     const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
-    return Buffer.from(`${payload}:${sig}`).toString('base64url');
+    const token = Buffer.from(`${payload}:${sig}`).toString('base64url');
+    console.log('[AUTH] Created token for user:', username, '| secret prefix:', TOKEN_SECRET.slice(0, 8));
+    return token;
 }
 
 // Helper: verify and decode a signed token; returns username or null
@@ -68,13 +70,23 @@ function verifyToken(token) {
     try {
         const decoded = Buffer.from(token, 'base64url').toString();
         const parts = decoded.split(':');
-        if (parts.length !== 3) return null;
+        if (parts.length !== 3) {
+            console.log('[AUTH] Token decode: wrong number of parts:', parts.length);
+            return null;
+        }
         const [username, ts, sig] = parts;
         const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(`${username}:${ts}`).digest('hex');
-        if (sig !== expected) return null;
-        if (Date.now() - Number(ts) > TOKEN_MAX_AGE) return null;
+        if (sig !== expected) {
+            console.log('[AUTH] Token HMAC mismatch for user:', username, '| secret prefix:', TOKEN_SECRET.slice(0, 8));
+            return null;
+        }
+        if (Date.now() - Number(ts) > TOKEN_MAX_AGE) {
+            console.log('[AUTH] Token expired for user:', username);
+            return null;
+        }
         return username;
-    } catch (_) {
+    } catch (err) {
+        console.log('[AUTH] Token verify error:', err.message);
         return null;
     }
 }
@@ -136,8 +148,16 @@ function getSession(req) {
 
 // Middleware: resolve session before route handlers
 app.use(async (req, res, next) => {
-    const session = await getSessionAsync(req);
-    if (session) _sessionCache.set(req, session);
+    if (req.path.startsWith('/api/')) {
+        const authHeader = req.headers['authorization'] || '';
+        const hasToken = authHeader.startsWith('Bearer ');
+        const session = await getSessionAsync(req);
+        console.log(`[AUTH] ${req.method} ${req.path} | token=${hasToken} | session=${session ? session.username : 'null'}`);
+        if (session) _sessionCache.set(req, session);
+    } else {
+        const session = await getSessionAsync(req);
+        if (session) _sessionCache.set(req, session);
+    }
     next();
 });
 
