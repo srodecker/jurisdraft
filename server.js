@@ -146,20 +146,6 @@ function getSession(req) {
     return _sessionCache.get(req) || null;
 }
 
-// Middleware: resolve session before route handlers
-app.use(async (req, res, next) => {
-    if (req.path.startsWith('/api/')) {
-        const authHeader = req.headers['authorization'] || '';
-        const hasToken = authHeader.startsWith('Bearer ');
-        const session = await getSessionAsync(req);
-        console.log(`[AUTH] ${req.method} ${req.path} | token=${hasToken} | session=${session ? session.username : 'null'}`);
-        if (session) _sessionCache.set(req, session);
-    } else {
-        const session = await getSessionAsync(req);
-        if (session) _sessionCache.set(req, session);
-    }
-    next();
-});
 
 // Backwards-compatible: returns true/false
 function isAuthenticated(req) {
@@ -453,6 +439,21 @@ const apiLimiter = rateLimit({
 app.use(cors());
 app.use(express.json({ limit: '10mb' })); // Reasonable limit for JSON payloads
 
+// Middleware: resolve session before route handlers
+app.use(async (req, res, next) => {
+    if (req.path.startsWith('/api/')) {
+        const authHeader = req.headers['authorization'] || '';
+        const hasToken = authHeader.startsWith('Bearer ');
+        const session = await getSessionAsync(req);
+        console.log(`[AUTH] ${req.method} ${req.path} | token=${hasToken} | session=${session ? session.username : 'null'}`);
+        if (session) _sessionCache.set(req, session);
+    } else {
+        const session = await getSessionAsync(req);
+        if (session) _sessionCache.set(req, session);
+    }
+    next();
+});
+
 // Resolve LibreOffice binary path for environments without global PATH setup
 async function resolveSofficePath() {
     const candidates = [
@@ -530,10 +531,17 @@ app.use(express.static('public', {
 }));
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
-// Auth middleware — rejects requests without a valid Bearer token
-function requireAuth(req, res, next) {
-    const session = getSession(req);
+// Auth middleware — rejects requests without a valid session
+// Uses getSessionAsync directly to avoid relying on WeakMap timing
+async function requireAuth(req, res, next) {
+    let session = getSession(req);
     if (!session) {
+        // Fallback: resolve session directly (handles race conditions)
+        session = await getSessionAsync(req);
+        if (session) _sessionCache.set(req, session);
+    }
+    if (!session) {
+        console.log('[AUTH] requireAuth DENIED:', req.method, req.path);
         return res.status(401).json({ error: 'Authentication required' });
     }
     req.session = session;
@@ -621,8 +629,9 @@ app.post('/api/logout', (req, res) => {
 // ============================================================
 // PROFILE ENDPOINTS
 // ============================================================
-app.get('/api/profile', (req, res) => {
-    const session = getSession(req);
+app.get('/api/profile', async (req, res) => {
+    let session = getSession(req);
+    if (!session) session = await getSessionAsync(req);
     if (!session) return res.status(401).json({ error: 'Not logged in.' });
     // Return profile without passwordHash
     const { passwordHash, ...safe } = session.profile;
@@ -630,7 +639,8 @@ app.get('/api/profile', (req, res) => {
 });
 
 app.put('/api/profile', async (req, res) => {
-    const session = getSession(req);
+    let session = getSession(req);
+    if (!session) session = await getSessionAsync(req);
     if (!session) return res.status(401).json({ error: 'Not logged in.' });
     const updates = req.body;
     // Merge updates into profile (don't allow overwriting username or passwordHash)
@@ -647,7 +657,8 @@ app.put('/api/profile', async (req, res) => {
 });
 
 app.get('/api/auth-status', async (req, res) => {
-    const session = getSession(req);
+    let session = getSession(req);
+    if (!session) session = await getSessionAsync(req);
     if (session) {
         res.json({ authenticated: true, username: session.username });
     } else {

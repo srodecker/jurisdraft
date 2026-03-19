@@ -658,7 +658,20 @@ async function authFetch(url, opts = {}) {
     opts.headers = { ...authHeaders(), ...(opts.headers || {}) };
     const res = await fetch(url, opts);
     if (res.status === 401) {
-        // Token expired or invalid — show login wall
+        console.warn('[KINECTA] 401 from', url, '— verifying session...');
+        // Double-check with auth-status before showing login wall
+        try {
+            const check = await fetch('/api/auth-status', { headers: authHeaders() });
+            const data = await check.json();
+            if (data.authenticated) {
+                // Session is actually valid — retry once
+                console.log('[KINECTA] Session valid, retrying', url);
+                const retry = await fetch(url, opts);
+                if (retry.status !== 401) return retry;
+            }
+        } catch(_) {}
+        // Truly expired
+        console.log('[KINECTA] Session truly expired, showing login wall');
         localStorage.removeItem(TOKEN_KEY);
         showLoginWall();
         throw new Error('Session expired');
