@@ -27,9 +27,15 @@ let courtInfoCache = null;
 // ============================================================
 // PROFILE-BASED AUTH
 // Profiles stored as JSON files in /profiles/{username}.json
-// Tokens map to { username, profile } in memory
+// Tokens are HMAC-signed (no server-side session state needed)
 // ============================================================
-const activeSessions = new Map(); // token → { username, profile }
+// TOKEN_SECRET must be stable across restarts. Set TOKEN_SECRET env var in production.
+// Falls back to a deterministic secret derived from SUPABASE_SERVICE_KEY if available.
+const TOKEN_SECRET = process.env.TOKEN_SECRET
+    || (process.env.SUPABASE_SERVICE_KEY
+        ? crypto.createHash('sha256').update('jd-token-secret:' + process.env.SUPABASE_SERVICE_KEY).digest('hex')
+        : crypto.randomBytes(32).toString('hex'));
+const TOKEN_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Ensure profiles directory exists on startup
 (async () => {
@@ -48,6 +54,29 @@ function verifyPassword(password, stored) {
     const [salt, hash] = stored.split(':');
     const test = crypto.scryptSync(password, salt, 64).toString('hex');
     return test === hash;
+}
+
+// Helper: create a signed token containing username + timestamp
+function createToken(username) {
+    const payload = `${username}:${Date.now()}`;
+    const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
+    return Buffer.from(`${payload}:${sig}`).toString('base64url');
+}
+
+// Helper: verify and decode a signed token; returns username or null
+function verifyToken(token) {
+    try {
+        const decoded = Buffer.from(token, 'base64url').toString();
+        const parts = decoded.split(':');
+        if (parts.length !== 3) return null;
+        const [username, ts, sig] = parts;
+        const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(`${username}:${ts}`).digest('hex');
+        if (sig !== expected) return null;
+        if (Date.now() - Number(ts) > TOKEN_MAX_AGE) return null;
+        return username;
+    } catch (_) {
+        return null;
+    }
 }
 
 // Helper: read a profile from disk, or from environment variable if not found
@@ -78,20 +107,39 @@ async function writeProfile(username, profile) {
 }
 
 // Returns the session object { username, profile } or null
-function getSession(req) {
-    // Check Authorization header first
+// Extracts token from Authorization header or cookie, verifies HMAC signature,
+// then loads the profile from disk/env
+async function getSessionAsync(req) {
     const authHeader = req.headers['authorization'] || '';
     let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (token && activeSessions.has(token)) return activeSessions.get(token);
-    // Fall back to cookie
-    const cookies = req.headers.cookie || '';
-    const match = cookies.match(/(?:^|;\s*)jd_token=([^;]+)/);
-    if (match) {
-        token = match[1];
-        if (activeSessions.has(token)) return activeSessions.get(token);
+    if (!token) {
+        const cookies = req.headers.cookie || '';
+        const match = cookies.match(/(?:^|;\s*)jd_token=([^;]+)/);
+        if (match) token = match[1];
     }
-    return null;
+    if (!token) return null;
+    const username = verifyToken(token);
+    if (!username) return null;
+    try {
+        const profile = await readProfile(username);
+        return { username, profile };
+    } catch (_) {
+        return null;
+    }
 }
+
+// Sync wrapper for backwards compatibility — checks in-flight cache
+const _sessionCache = new WeakMap();
+function getSession(req) {
+    return _sessionCache.get(req) || null;
+}
+
+// Middleware: resolve session before route handlers
+app.use(async (req, res, next) => {
+    const session = await getSessionAsync(req);
+    if (session) _sessionCache.set(req, session);
+    next();
+});
 
 // Backwards-compatible: returns true/false
 function isAuthenticated(req) {
@@ -514,9 +562,8 @@ app.post('/api/signup', async (req, res) => {
     await writeProfile(clean, profile);
 
     // Auto-login after signup
-    const token = crypto.randomBytes(32).toString('hex');
-    activeSessions.set(token, { username: clean, profile });
-    res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    const token = createToken(clean);
+    res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_MAX_AGE });
     res.json({ token, username: clean });
 });
 
@@ -531,9 +578,8 @@ app.post('/api/login', async (req, res) => {
         if (!verifyPassword(password, profile.passwordHash)) {
             return res.status(401).json({ error: 'Invalid username or password.' });
         }
-        const token = crypto.randomBytes(32).toString('hex');
-        activeSessions.set(token, { username: clean, profile });
-        res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 * 1000 });
+        const token = createToken(clean);
+        res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_MAX_AGE });
         res.json({ token, username: clean });
     } catch (_) {
         return res.status(401).json({ error: 'Invalid username or password.' });
@@ -541,14 +587,6 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.post('/api/logout', (req, res) => {
-    const authHeader = req.headers['authorization'] || '';
-    let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-    if (!token) {
-        const cookies = req.headers.cookie || '';
-        const match = cookies.match(/(?:^|;\s*)jd_token=([^;]+)/);
-        if (match) token = match[1];
-    }
-    if (token) activeSessions.delete(token);
     res.clearCookie('jd_token', { path: '/' });
     res.json({ ok: true });
 });
@@ -581,7 +619,7 @@ app.put('/api/profile', async (req, res) => {
     res.json(safe);
 });
 
-app.get('/api/auth-status', (req, res) => {
+app.get('/api/auth-status', async (req, res) => {
     const session = getSession(req);
     if (session) {
         res.json({ authenticated: true, username: session.username });

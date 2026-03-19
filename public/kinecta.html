@@ -639,8 +639,8 @@ async function kinectaSignIn() {
         if (res.ok && data.token) {
             setToken(data.token);
             setUsername(data.username || user);
-            showApp();
-            initApp();
+            window.location.reload();
+            return;
         } else {
             errEl.textContent = data.error || 'Invalid credentials.';
             errEl.style.display = 'block';
