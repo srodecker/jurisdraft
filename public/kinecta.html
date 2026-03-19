@@ -395,15 +395,14 @@
                         <table>
                             <thead><tr>
                                 <th>Debtor</th>
-                                <th>Case #</th>
+                                <th>State</th>
                                 <th>Amount</th>
                                 <th>Stage</th>
+                                <th>Status / Last Action</th>
                                 <th>Next Task</th>
-                                <th>Status</th>
-                                <th>Updated</th>
                             </tr></thead>
                             <tbody id="tableBody">
-                                <tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:32px;">Loading...</td></tr>
+                                <tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:32px;">Loading...</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -691,28 +690,49 @@ function renderTable() {
     if (stageF !== 'all') filtered = filtered.filter(m => m.currentStage === Number(stageF));
     if (search) filtered = filtered.filter(m =>
         (m.debtorName || '').toLowerCase().includes(search) ||
-        (m.caseNumber || '').toLowerCase().includes(search)
+        (m.caseNumber || '').toLowerCase().includes(search) ||
+        (m.statusText || '').toLowerCase().includes(search) ||
+        (m.accountNumber || '').toLowerCase().includes(search)
     );
 
     if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:32px;">No matters found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:32px;">No matters found.</td></tr>';
         return;
     }
 
     tbody.innerHTML = filtered.map(m => {
         const stage = workflowStages.find(s => s.number === m.currentStage) || { name: 'Stage ' + m.currentStage };
-        const updated = m.updatedAt ? new Date(m.updatedAt).toLocaleDateString() : '-';
         const nextTask = m.nextTask ? `<span class="badge badge-task" title="${esc(m.nextTask.assignee)}">${esc(truncate(m.nextTask.label, 30))}</span>` : '<span style="color:var(--text-tertiary);font-size:11px;">-</span>';
+        // Color-code status like the original spreadsheet
+        const statusColor = getStatusColor(m.statusText || '');
+        const statusDisplay = m.statusText ? truncate(m.statusText, 35) : m.status;
+        const progress = m.totalTasks > 0 ? Math.round(m.completedTasks / m.totalTasks * 100) : 0;
         return `<tr class="clickable" onclick="openMatter('${m.id}')">
-            <td style="font-weight:500;">${esc(m.debtorName || '-')}</td>
-            <td>${esc(m.caseNumber || '-')}</td>
+            <td>
+                <div style="font-weight:500;">${esc(m.debtorName || '-')}</div>
+                <div style="font-size:11px;color:var(--text-tertiary);">${esc(m.clientMatter || m.accountNumber || m.caseNumber || '')}</div>
+            </td>
+            <td style="font-size:12px;">${esc(m.debtorState || '-')}${m.courtCounty ? '<div style="font-size:10px;color:var(--text-tertiary);">' + esc(m.courtCounty) + '</div>' : ''}</td>
             <td>${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</td>
-            <td><span class="badge badge-stage">${esc(stage.name)}</span></td>
+            <td>
+                <span class="badge badge-stage">${esc(stage.name)}</span>
+                <div style="font-size:10px;color:var(--text-tertiary);margin-top:2px;">${progress}% done</div>
+            </td>
+            <td><span style="font-size:12px;color:${statusColor};font-weight:500;">${esc(statusDisplay)}</span></td>
             <td>${nextTask}</td>
-            <td><span class="badge ${m.status === 'active' ? 'badge-active' : 'badge-closed'}">${m.status}</span></td>
-            <td style="color:var(--text-secondary);font-size:12px;">${updated}</td>
         </tr>`;
     }).join('');
+}
+
+function getStatusColor(statusText) {
+    const s = statusText.toLowerCase();
+    if (s.includes('litigation active')) return 'var(--accent-warning)'; // Orange
+    if (s.includes('need to proceed')) return '#3b82f6'; // Blue
+    if (s.includes('default judgment') || s.includes('purple')) return '#a855f7'; // Purple
+    if (s.includes('waiting') || s.includes('pending')) return '#eab308'; // Yellow
+    if (s.includes('confirming')) return '#6b7280'; // Grey
+    if (s.includes('stip') || s.includes('close')) return 'var(--accent-success)'; // Green
+    return 'var(--text-secondary)';
 }
 
 // ============================================================
@@ -794,12 +814,13 @@ function renderOverview() {
         <div class="info-row"><span class="info-lbl">Account #:</span><span class="info-val">${esc(m.accountNumber || '-')}</span></div>
         <div class="info-row"><span class="info-lbl">Case Number:</span><span class="info-val">${esc(m.caseNumber || 'Pending')}</span></div>
         <div class="info-row"><span class="info-lbl">Court:</span><span class="info-val">${esc(m.courtName || 'TBD')}</span></div>
+        ${m.courtCounty ? `<div class="info-row"><span class="info-lbl">County:</span><span class="info-val">${esc(m.courtCounty)}</span></div>` : ''}
         <div class="info-row"><span class="info-lbl">Demand:</span><span class="info-val">${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</span></div>
         <div class="info-row"><span class="info-lbl">Judgment:</span><span class="info-val">${m.judgmentAmount ? '$' + Number(m.judgmentAmount).toLocaleString() : '-'}</span></div>
-        ${m.statusText ? `<div class="info-row"><span class="info-lbl">Status:</span><span class="info-val">${esc(m.statusText)}</span></div>` : ''}
+        ${m.statusText ? `<div class="info-row"><span class="info-lbl">Status:</span><span class="info-val" style="color:${getStatusColor(m.statusText)}">${esc(m.statusText)}</span></div>` : ''}
         ${m.serviceType ? `<div class="info-row"><span class="info-lbl">Service Type:</span><span class="info-val">${esc(m.serviceType)}</span></div>` : ''}
         ${m.defendantResponse ? `<div class="info-row"><span class="info-lbl">Def. Response:</span><span class="info-val">${esc(m.defendantResponse)}</span></div>` : ''}
-        ${m.notes ? `<div class="info-row"><span class="info-lbl">Notes:</span><span class="info-val">${esc(m.notes)}</span></div>` : ''}
+        ${m.notes ? `<div class="info-row" style="align-items:flex-start"><span class="info-lbl">Notes:</span><span class="info-val" style="white-space:pre-wrap">${esc(m.notes)}</span></div>` : ''}
     `;
 
     // Contacts
@@ -1340,11 +1361,19 @@ async function handleImportFile(input) {
     if (!file) return;
     input.value = ''; // Reset so same file can be re-selected
 
-    // First preview
-    const formData = new FormData();
-    formData.append('file', file);
+    // First, run debug to see raw data
+    const debugForm = new FormData();
+    debugForm.append('file', file);
 
     try {
+        // Run debug parse first
+        const dbg = await fetch('/api/matters/import/debug', { method: 'POST', body: debugForm });
+        const debug = await dbg.json();
+        console.log('IMPORT DEBUG:', JSON.stringify(debug, null, 2));
+
+        // Then preview
+        const formData = new FormData();
+        formData.append('file', file);
         const prev = await fetch('/api/matters/import/preview', { method: 'POST', body: formData });
         const preview = await prev.json();
         if (preview.error) { alert('Error: ' + preview.error); return; }
@@ -1355,6 +1384,11 @@ async function handleImportFile(input) {
         const headerRowInfo = preview.headerRowIndex ? `Header row detected at row ${preview.headerRowIndex}\n` : '';
         const headerInfo = preview.rawHeaders ? `Headers: ${preview.rawHeaders.join(', ')}\n\n` : '';
         const matchedCount = Object.keys(preview.columnsMatched).length;
+
+        // Show sample row from debug
+        const sampleInfo = debug.debugRows && debug.debugRows[0]
+            ? `\nSample row 1 parsed as:\n  Name: "${debug.debugRows[0].parsedData.debtorName || '(empty)'}"\n  File#: "${debug.debugRows[0].parsedData.clientMatter || '(empty)'}"\n  Amount: "${debug.debugRows[0].parsedData.demandAmount || '(empty)'}"\n  Status: "${debug.debugRows[0].parsedData.statusText || '(empty)'}"\n  Name split: ${debug.debugRows[0].nameSplit ? debug.debugRows[0].nameSplit.name + ' / ' + debug.debugRows[0].nameSplit.fileNo : 'no split needed'}\n`
+            : '';
 
         if (matchedCount === 0) {
             alert(`Could not map any columns!\n\n${sheetInfo}${headerInfo}Make sure your spreadsheet has a header row with column names like "Borrower", "Amount $ Owed", etc.\n\nIf your headers are on a different row, try saving as CSV with just the data rows.`);

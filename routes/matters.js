@@ -8,8 +8,23 @@ const XLSX = require('xlsx');
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-// Use /tmp/ on serverless (Vercel) since filesystem is read-only
-// Locally, use the project directory
+// ============================================================
+// STORAGE LAYER — Supabase (persistent) or file-based (fallback)
+// ============================================================
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+const useSupabase = !!(SUPABASE_URL && SUPABASE_KEY);
+
+let supabase = null;
+if (useSupabase) {
+    const { createClient } = require('@supabase/supabase-js');
+    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    console.log('[Kinecta] Using Supabase for persistent storage');
+} else {
+    console.log('[Kinecta] No Supabase configured — using file storage (data may be ephemeral on serverless)');
+}
+
+// File-based fallback paths
 const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
 const MATTERS_DIR = isServerless
     ? path.join('/tmp', 'matters')
@@ -18,13 +33,15 @@ const NOTIFICATIONS_FILE = isServerless
     ? path.join('/tmp', 'notifications.json')
     : path.join(__dirname, '..', 'data', 'notifications.json');
 
-// Ensure directories exist
-(async () => {
-    try { await fs.mkdir(MATTERS_DIR, { recursive: true }); } catch (_) {}
-    if (!isServerless) {
-        try { await fs.mkdir(path.join(__dirname, '..', 'data'), { recursive: true }); } catch (_) {}
-    }
-})();
+// Ensure directories exist (file-based only)
+if (!useSupabase) {
+    (async () => {
+        try { await fs.mkdir(MATTERS_DIR, { recursive: true }); } catch (_) {}
+        if (!isServerless) {
+            try { await fs.mkdir(path.join(__dirname, '..', 'data'), { recursive: true }); } catch (_) {}
+        }
+    })();
+}
 
 // ============================================================
 // TEAM MEMBERS
@@ -236,21 +253,59 @@ const EVENT_TYPES = [
 ];
 
 // ============================================================
-// HELPERS
+// STORAGE HELPERS (Supabase or file-based)
 // ============================================================
 
 async function readMatter(id) {
+    if (useSupabase) {
+        const { data, error } = await supabase
+            .from('matters')
+            .select('data')
+            .eq('id', id)
+            .single();
+        if (error) throw new Error('Matter not found');
+        return data.data;
+    }
     const filePath = path.join(MATTERS_DIR, `${id}.json`);
     const raw = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(raw);
 }
 
 async function writeMatter(id, matter) {
+    if (useSupabase) {
+        const { error } = await supabase
+            .from('matters')
+            .upsert({
+                id,
+                data: matter,
+                updated_at: new Date().toISOString()
+            });
+        if (error) throw new Error('Failed to save matter: ' + error.message);
+        return;
+    }
     const filePath = path.join(MATTERS_DIR, `${id}.json`);
     await fs.writeFile(filePath, JSON.stringify(matter, null, 2));
 }
 
+async function deleteMatterById(id) {
+    if (useSupabase) {
+        const { error } = await supabase.from('matters').delete().eq('id', id);
+        if (error) throw new Error('Failed to delete: ' + error.message);
+        return;
+    }
+    const filePath = path.join(MATTERS_DIR, `${id}.json`);
+    await fs.unlink(filePath);
+}
+
 async function listMatters() {
+    if (useSupabase) {
+        const { data, error } = await supabase
+            .from('matters')
+            .select('data')
+            .order('updated_at', { ascending: false });
+        if (error) return [];
+        return (data || []).map(row => row.data);
+    }
     try {
         const files = await fs.readdir(MATTERS_DIR);
         const matters = [];
@@ -268,6 +323,15 @@ async function listMatters() {
 }
 
 async function readNotifications() {
+    if (useSupabase) {
+        const { data, error } = await supabase
+            .from('notifications')
+            .select('data')
+            .order('created_at', { ascending: false })
+            .limit(200);
+        if (error) return [];
+        return (data || []).map(row => row.data);
+    }
     try {
         const raw = await fs.readFile(NOTIFICATIONS_FILE, 'utf-8');
         return JSON.parse(raw);
@@ -277,19 +341,34 @@ async function readNotifications() {
 }
 
 async function writeNotifications(notifs) {
+    if (useSupabase) {
+        // For Supabase, we write individual notifications via addNotification
+        // This function is only used by mark-all-read which updates in place
+        // We'll handle that differently — see the route handlers
+        return;
+    }
     await fs.writeFile(NOTIFICATIONS_FILE, JSON.stringify(notifs, null, 2));
 }
 
 async function addNotification(notification) {
-    const notifs = await readNotifications();
     const notif = {
         id: crypto.randomUUID(),
         createdAt: new Date().toISOString(),
         read: false,
         ...notification
     };
+
+    if (useSupabase) {
+        await supabase.from('notifications').insert({
+            id: notif.id,
+            data: notif,
+            created_at: notif.createdAt
+        });
+        return notif;
+    }
+
+    const notifs = await readNotifications();
     notifs.unshift(notif);
-    // Keep only last 200 notifications
     if (notifs.length > 200) notifs.length = 200;
     await writeNotifications(notifs);
     return notif;
@@ -417,12 +496,19 @@ router.get('/api/matters', async (req, res) => {
                 return {
                     id: m.id,
                     debtorName: m.debtorName,
+                    clientMatter: m.clientMatter || '',
                     caseNumber: m.caseNumber,
                     demandAmount: m.demandAmount,
                     currentStage: m.currentStage,
                     status: m.status,
+                    statusText: m.statusText || '',
                     loanType: m.loanType,
                     courtName: m.courtName,
+                    courtCounty: m.courtCounty || '',
+                    accountNumber: m.accountNumber || '',
+                    debtorState: m.debtorState || '',
+                    serviceType: m.serviceType || '',
+                    defendantResponse: m.defendantResponse || '',
                     updatedAt: m.updatedAt,
                     totalTasks,
                     completedTasks,
@@ -490,8 +576,7 @@ router.put('/api/matters/:id', async (req, res) => {
 // Delete a matter
 router.delete('/api/matters/:id', async (req, res) => {
     try {
-        const filePath = path.join(MATTERS_DIR, `${req.params.id}.json`);
-        await fs.unlink(filePath);
+        await deleteMatterById(req.params.id);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -868,6 +953,15 @@ router.get('/api/notifications', async (req, res) => {
 // Mark notification as read
 router.patch('/api/notifications/:id/read', async (req, res) => {
     try {
+        if (useSupabase) {
+            const { data: row, error: fetchErr } = await supabase
+                .from('notifications').select('data').eq('id', req.params.id).single();
+            if (fetchErr) return res.status(404).json({ error: 'Notification not found' });
+            const notif = row.data;
+            notif.read = true;
+            await supabase.from('notifications').update({ data: notif }).eq('id', req.params.id);
+            return res.json(notif);
+        }
         const notifs = await readNotifications();
         const notif = notifs.find(n => n.id === req.params.id);
         if (!notif) return res.status(404).json({ error: 'Notification not found' });
@@ -882,8 +976,20 @@ router.patch('/api/notifications/:id/read', async (req, res) => {
 // Mark all notifications as read for a user
 router.post('/api/notifications/mark-all-read', async (req, res) => {
     try {
-        const notifs = await readNotifications();
         const userId = req.body.userId;
+        if (useSupabase) {
+            let query = supabase.from('notifications').select('id, data');
+            if (userId) query = query.eq('data->>assignedTo', userId);
+            const { data: rows } = await query;
+            for (const row of (rows || [])) {
+                if (!row.data.read) {
+                    row.data.read = true;
+                    await supabase.from('notifications').update({ data: row.data }).eq('id', row.id);
+                }
+            }
+            return res.json({ success: true });
+        }
+        const notifs = await readNotifications();
         for (const n of notifs) {
             if (!userId || n.assignedTo === userId) {
                 n.read = true;
@@ -1145,17 +1251,24 @@ function matchHeader(rawHeader) {
 function cleanAmount(val) {
     if (!val) return '';
     let s = val.toString();
-    // Strip any text prefix before the dollar amount (e.g. "CC $18,375.52" → "18375.52")
-    // Also handle #VALUE! or other Excel errors
+    // Handle Excel errors
     if (s.includes('#VALUE') || s.includes('#REF') || s.includes('#N/A')) return '';
-    // Find the first dollar sign or digit sequence that looks like an amount
-    const amountMatch = s.match(/\$?\s*([\d,]+\.?\d*)/);
-    if (amountMatch) {
-        const cleaned = amountMatch[1].replace(/,/g, '');
+    // PREFER a dollar-sign-prefixed amount (e.g. "$10,834.92" or "CC $18,375.52")
+    const dollarMatch = s.match(/\$\s*([\d,]+\.?\d*)/);
+    if (dollarMatch) {
+        const cleaned = dollarMatch[1].replace(/,/g, '');
         const n = parseFloat(cleaned);
         return isNaN(n) ? '' : n.toString();
     }
-    const n = parseFloat(s.replace(/[$,\s]/g, ''));
+    // Fallback: find any number that looks like a dollar amount (has decimal or is > 100)
+    const numMatches = s.match(/[\d,]+\.\d{2}/g);
+    if (numMatches) {
+        const cleaned = numMatches[0].replace(/,/g, '');
+        const n = parseFloat(cleaned);
+        return isNaN(n) ? '' : n.toString();
+    }
+    // Last resort: strip non-numeric
+    const n = parseFloat(s.replace(/[^0-9.]/g, ''));
     return isNaN(n) ? '' : n.toString();
 }
 
@@ -1224,21 +1337,24 @@ function parseSheetWithAutoHeaders(sheet) {
 function parseImportRow(row, mapping) {
     const data = {};
     const dates = {};
+    const rawValues = {}; // Keep raw cell values for everything
 
     for (const [col, field] of Object.entries(mapping)) {
-        const val = (row[col] || '').toString().trim();
+        const rawVal = row[col];
+        const val = (rawVal || '').toString().trim();
         if (!val) continue;
+
+        // Always store raw value for reference
+        rawValues[col] = val;
 
         if (field.startsWith('dates.')) {
             const dateKey = field.replace('dates.', '');
             // Extract date from text like "Can file as of 10/24/2025" or plain "9/16/2025"
-            let dateStr = val;
-            // Try to find a date pattern within the text
             const dateMatch = val.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
-            if (dateMatch) dateStr = dateMatch[1];
+            let dateStr = dateMatch ? dateMatch[1] : val;
 
             let parsed = null;
-            if (/^\d{5}$/.test(dateStr)) {
+            if (/^\d{5}$/.test(dateStr.trim())) {
                 // Excel serial date number
                 const excelEpoch = new Date(1899, 11, 30);
                 parsed = new Date(excelEpoch.getTime() + parseInt(dateStr) * 86400000);
@@ -1248,18 +1364,128 @@ function parseImportRow(row, mapping) {
             if (parsed && !isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
                 dates[dateKey] = parsed.toISOString().slice(0, 10);
             }
-            // Also store the full text in notes if it contains extra info beyond the date
-            if (val.length > 15 && dateMatch) {
-                data._extraNotes = (data._extraNotes || '') + `${col}: ${val}\n`;
-            }
         } else if (field === 'demandAmount' || field === 'judgmentAmount') {
             data[field] = cleanAmount(val);
+            // If cell has multiple amounts or text context, keep the full raw text
+            if (val.length > 15 || val.includes(';')) {
+                data._amountRaw = val;
+            }
         } else {
             data[field] = val;
         }
     }
 
+    // Build comprehensive notes from all the rich data
+    const notesParts = [];
+    if (data.notes) notesParts.push(data.notes);
+    if (data._amountRaw) notesParts.push(`Amount detail: ${data._amountRaw}`);
+    // Preserve Account/Loan Info raw text when it has descriptive content (not just a number)
+    if (data.accountNumber && /[a-zA-Z]/.test(data.accountNumber) && data.accountNumber.length > 10) {
+        notesParts.push(`Account/Loan: ${data.accountNumber}`);
+    }
+
+    // Add any date-column text that had extra context
+    for (const [col, field] of Object.entries(mapping)) {
+        if (!field.startsWith('dates.')) continue;
+        const val = rawValues[col];
+        if (!val || val.length < 12) continue;
+        // If the date cell had text beyond just a date, include it
+        const stripped = val.replace(/\d{1,2}\/\d{1,2}\/\d{2,4}/g, '').replace(/[^a-zA-Z]/g, '').trim();
+        if (stripped.length > 3) {
+            notesParts.push(`${col}: ${val}`);
+        }
+    }
+
+    if (notesParts.length > 0) {
+        data.notes = notesParts.join('\n');
+    }
+    delete data._amountRaw;
+
     return { data, dates };
+}
+
+// Infer workflow stage and mark tasks based on status text and dates
+function inferStageFromImport(matter, data, dates) {
+    const statusLower = (data.statusText || '').toLowerCase();
+    const notesLower = (data.notes || '').toLowerCase();
+    const combined = statusLower + ' ' + notesLower;
+
+    // Determine stage from status text keywords
+    let inferredStage = 1; // Default: DVN Letter
+
+    if (statusLower.includes('default judgment') || statusLower.includes('purple')) {
+        inferredStage = 7; // Post-Judgment (default judgment obtained)
+    } else if (statusLower.includes('litigation active') || statusLower.includes('orange')) {
+        inferredStage = 4; // Answer/Response Due (litigation is ongoing)
+    } else if (statusLower.includes('need to proceed with suit') || statusLower.includes('blue')) {
+        inferredStage = 2; // File Complaint
+    } else if (statusLower.includes('waiting for dvl') || statusLower.includes('yellow') || statusLower.includes('still pending')) {
+        inferredStage = 1; // DVN Letter (waiting for response)
+    } else if (statusLower.includes('confirming next') || statusLower.includes('grey')) {
+        inferredStage = 2; // Between DVN and filing
+    } else if (statusLower.includes('stip') || statusLower.includes('close')) {
+        inferredStage = 8; // Matter Closed
+        matter.status = 'closed';
+    }
+
+    // Refine stage based on which dates exist
+    if (dates.judgmentEntered || dates.defaultEntered) {
+        inferredStage = Math.max(inferredStage, 7);
+    }
+    if (dates.answerDue || dates.served) {
+        inferredStage = Math.max(inferredStage, 4);
+    }
+    if (dates.complaintFiled) {
+        inferredStage = Math.max(inferredStage, 3); // Service stage
+    }
+    if (dates.dvnSent) {
+        inferredStage = Math.max(inferredStage, 1);
+    }
+
+    // Refine further from notes
+    if (combined.includes('out for service') || combined.includes('need to serve')) {
+        inferredStage = Math.max(inferredStage, 3);
+    }
+    if (combined.includes('complaint filed')) {
+        inferredStage = Math.max(inferredStage, 3);
+    }
+    if (combined.includes('default') && (combined.includes('filing') || combined.includes('file'))) {
+        inferredStage = Math.max(inferredStage, 6);
+    }
+    if (combined.includes('bk hold') || combined.includes('bankruptcy')) {
+        // Litigation active but on hold
+        inferredStage = Math.max(inferredStage, 4);
+    }
+    if (combined.includes('referred to outside') || combined.includes('outside') && combined.includes('council')) {
+        inferredStage = Math.max(inferredStage, 2);
+    }
+
+    matter.currentStage = inferredStage;
+
+    // Auto-complete tasks for stages before the current one
+    // This makes the workflow progress bar accurate
+    for (const stage of WORKFLOW_STAGES) {
+        if (stage.number >= inferredStage) break;
+        for (const task of stage.tasks) {
+            if (matter.tasks[task.id]) {
+                matter.tasks[task.id].completed = true;
+                matter.tasks[task.id].completedAt = matter.createdAt;
+                matter.tasks[task.id].completedBy = 'import';
+            }
+        }
+    }
+
+    // If defendant responded, mark answer_response tasks
+    const defResponse = (data.defendantResponse || '').toLowerCase();
+    if (defResponse && defResponse !== 'no' && !defResponse.includes('no response')) {
+        if (defResponse.includes('bk') || defResponse.includes('bankruptcy')) {
+            // BK hold — don't advance further
+        } else if (defResponse.includes('yes') || defResponse.includes('answer')) {
+            // Answer was filed — we're in negotiation or beyond
+            inferredStage = Math.max(matter.currentStage, 5);
+            matter.currentStage = inferredStage;
+        }
+    }
 }
 
 // Import from Excel/CSV file
@@ -1300,16 +1526,41 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
             const row = dataRows[i];
             const { data, dates } = parseImportRow(row, mapping);
 
+            // Post-process: split concatenated "Name264-XXXXXXX" into name + clientMatter
+            if (data.debtorName) {
+                const nameFileMatch = data.debtorName.match(/^(.+?)\s*(264-\d+.*)$/);
+                if (nameFileMatch) {
+                    data.debtorName = nameFileMatch[1].trim();
+                    if (!data.clientMatter) {
+                        data.clientMatter = nameFileMatch[2].trim();
+                    }
+                }
+                // Also handle "Name 264-XXXXXXX" with space
+                const nameFileMatch2 = data.debtorName.match(/^(.+?)\s+(264-\d+)$/);
+                if (nameFileMatch2) {
+                    data.debtorName = nameFileMatch2[1].trim();
+                    if (!data.clientMatter) {
+                        data.clientMatter = nameFileMatch2[2].trim();
+                    }
+                }
+            }
+
+            // Capture unmapped columns into notes so no data is lost
+            const unmappedParts = [];
+            for (const col of unmapped) {
+                const val = (row[col] || '').toString().trim();
+                if (val && !val.match(/^Column_\d+$/) && val.length > 0) {
+                    unmappedParts.push(`${col}: ${val}`);
+                }
+            }
+            if (unmappedParts.length > 0) {
+                data.notes = (data.notes ? data.notes + '\n' : '') + unmappedParts.join('\n');
+            }
+
             // Skip rows without a name
             if (!data.debtorName) {
                 skipped.push({ row: headerRowIndex + i + 2, reason: 'No debtor name found' });
                 continue;
-            }
-
-            // Append any extra date-context notes to the notes field
-            if (data._extraNotes) {
-                data.notes = ((data.notes || '') + '\n' + data._extraNotes).trim();
-                delete data._extraNotes;
             }
 
             const matter = createMatterObject(data);
@@ -1319,6 +1570,9 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
                     matter.dates[k] = v;
                 }
             }
+
+            // Infer stage, mark prior tasks complete, set status from spreadsheet data
+            inferStageFromImport(matter, data, dates);
 
             // Add import event
             matter.events.push({
@@ -1402,6 +1656,69 @@ router.post('/api/matters/import/preview', upload.single('file'), async (req, re
             unmappedColumns: unmapped,
             sampleRow,
             preview
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Diagnostic: upload spreadsheet and see raw parsed data (no import)
+router.post('/api/matters/import/debug', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+        const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const { headers, dataRows, headerRowIndex } = parseSheetWithAutoHeaders(workbook.Sheets[sheetName]);
+
+        const mapping = {};
+        const unmapped = [];
+        for (const h of headers) {
+            const match = matchHeader(h);
+            if (match) mapping[h] = match;
+            else unmapped.push(h);
+        }
+
+        // Parse first 5 rows and show all transformations
+        const debugRows = dataRows.slice(0, 5).map((row, i) => {
+            const rawCells = {};
+            for (const h of headers) {
+                rawCells[h] = (row[h] || '').toString().substring(0, 80);
+            }
+            const { data, dates } = parseImportRow(row, mapping);
+
+            // Apply name split
+            let nameSplit = null;
+            if (data.debtorName) {
+                const m = data.debtorName.match(/^(.+?)\s*(264-\d+.*)$/);
+                if (m) nameSplit = { name: m[1], fileNo: m[2] };
+            }
+
+            return {
+                rowIndex: headerRowIndex + i + 2,
+                rawCells,
+                parsedData: data,
+                parsedDates: dates,
+                nameSplit,
+                wouldInferStage: (data.statusText || '').substring(0, 50)
+            };
+        });
+
+        // Also show raw array-of-arrays for first few rows to see cell boundaries
+        const rawAOA = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+        const rawRows = rawAOA.slice(Math.max(0, headerRowIndex - 1), headerRowIndex + 6).map((row, i) => ({
+            rowNum: Math.max(0, headerRowIndex - 1) + i + 1,
+            cells: row.map((c, j) => `[${j}]=${(c || '').toString().substring(0, 40)}`)
+        }));
+
+        res.json({
+            sheetName,
+            headerRowIndex: headerRowIndex + 1,
+            headerCount: headers.length,
+            headers,
+            mapping,
+            unmapped,
+            rawRowsAroundHeader: rawRows,
+            debugRows
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -1581,8 +1898,41 @@ Important:
 // GLOBAL CHAT (cross-matter AI assistant)
 // ============================================================
 
-// In-memory global chat history (resets on server restart — fine for this use case)
+// In-memory fallback for global chat (used when no Supabase)
 let globalChatHistory = [];
+
+async function getGlobalChatHistory() {
+    if (useSupabase) {
+        const { data } = await supabase
+            .from('global_chat')
+            .select('role, content, timestamp')
+            .order('id', { ascending: true })
+            .limit(100);
+        return (data || []).map(r => ({ role: r.role, content: r.content, timestamp: r.timestamp }));
+    }
+    return globalChatHistory;
+}
+
+async function appendGlobalChat(entry) {
+    if (useSupabase) {
+        await supabase.from('global_chat').insert({
+            role: entry.role,
+            content: entry.content,
+            timestamp: entry.timestamp
+        });
+        return;
+    }
+    globalChatHistory.push(entry);
+    if (globalChatHistory.length > 100) globalChatHistory = globalChatHistory.slice(-100);
+}
+
+async function clearGlobalChatHistory() {
+    if (useSupabase) {
+        await supabase.from('global_chat').delete().neq('id', 0);
+        return;
+    }
+    globalChatHistory = [];
+}
 
 function buildAllMattersContext(matters) {
     if (matters.length === 0) return 'No matters loaded yet.';
@@ -1636,7 +1986,7 @@ router.post('/api/chat/global', async (req, res) => {
             content: userMessage,
             timestamp: new Date().toISOString()
         };
-        globalChatHistory.push(userEntry);
+        await appendGlobalChat(userEntry);
 
         const matters = await listMatters();
         const allContext = buildAllMattersContext(matters);
@@ -1669,7 +2019,8 @@ Your role:
 - Be concise and direct. Use bullet points for lists.
 - When referencing cases, always mention the debtor name and case number if available.`;
 
-            const recentChat = globalChatHistory.slice(-20);
+            const fullHistory = await getGlobalChatHistory();
+            const recentChat = fullHistory.slice(-20);
             const chatMessages = recentChat.map(m => ({
                 role: m.role === 'user' ? 'user' : 'model',
                 parts: [{ text: m.content }]
@@ -1700,12 +2051,7 @@ Your role:
             content: assistantContent,
             timestamp: new Date().toISOString()
         };
-        globalChatHistory.push(assistantEntry);
-
-        // Keep history manageable
-        if (globalChatHistory.length > 100) {
-            globalChatHistory = globalChatHistory.slice(-100);
-        }
+        await appendGlobalChat(assistantEntry);
 
         res.json({ message: assistantEntry, matterCount: matters.length });
     } catch (err) {
@@ -1715,14 +2061,23 @@ Your role:
 });
 
 // Get global chat history
-router.get('/api/chat/global/history', (req, res) => {
-    res.json(globalChatHistory);
+router.get('/api/chat/global/history', async (req, res) => {
+    try {
+        const history = await getGlobalChatHistory();
+        res.json(history);
+    } catch (err) {
+        res.json([]);
+    }
 });
 
 // Clear global chat history
-router.delete('/api/chat/global/history', (req, res) => {
-    globalChatHistory = [];
-    res.json({ success: true });
+router.delete('/api/chat/global/history', async (req, res) => {
+    try {
+        await clearGlobalChatHistory();
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 module.exports = router;
