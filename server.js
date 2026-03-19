@@ -27,14 +27,9 @@ let courtInfoCache = null;
 // ============================================================
 // PROFILE-BASED AUTH
 // Profiles stored as JSON files in /profiles/{username}.json
-// Tokens are HMAC-signed (no server-side session state needed)
+// Tokens are HMAC-signed using the user's own passwordHash as key
+// (no global secret needed — works across serverless cold starts)
 // ============================================================
-// TOKEN_SECRET must be stable across restarts. Set TOKEN_SECRET env var in production.
-// Falls back to a deterministic secret derived from SUPABASE_SERVICE_KEY if available.
-const TOKEN_SECRET = process.env.TOKEN_SECRET
-    || (process.env.SUPABASE_SERVICE_KEY
-        ? crypto.createHash('sha256').update('jd-token-secret:' + process.env.SUPABASE_SERVICE_KEY).digest('hex')
-        : crypto.randomBytes(32).toString('hex'));
 const TOKEN_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 // Ensure profiles directory exists on startup
@@ -56,39 +51,11 @@ function verifyPassword(password, stored) {
     return test === hash;
 }
 
-// Helper: create a signed token containing username + timestamp
-function createToken(username) {
+// Helper: create a signed token using the user's passwordHash as HMAC key
+function createToken(username, passwordHash) {
     const payload = `${username}:${Date.now()}`;
-    const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payload).digest('hex');
-    const token = Buffer.from(`${payload}:${sig}`).toString('base64url');
-    console.log('[AUTH] Created token for user:', username, '| secret prefix:', TOKEN_SECRET.slice(0, 8));
-    return token;
-}
-
-// Helper: verify and decode a signed token; returns username or null
-function verifyToken(token) {
-    try {
-        const decoded = Buffer.from(token, 'base64url').toString();
-        const parts = decoded.split(':');
-        if (parts.length !== 3) {
-            console.log('[AUTH] Token decode: wrong number of parts:', parts.length);
-            return null;
-        }
-        const [username, ts, sig] = parts;
-        const expected = crypto.createHmac('sha256', TOKEN_SECRET).update(`${username}:${ts}`).digest('hex');
-        if (sig !== expected) {
-            console.log('[AUTH] Token HMAC mismatch for user:', username, '| secret prefix:', TOKEN_SECRET.slice(0, 8));
-            return null;
-        }
-        if (Date.now() - Number(ts) > TOKEN_MAX_AGE) {
-            console.log('[AUTH] Token expired for user:', username);
-            return null;
-        }
-        return username;
-    } catch (err) {
-        console.log('[AUTH] Token verify error:', err.message);
-        return null;
-    }
+    const sig = crypto.createHmac('sha256', passwordHash).update(payload).digest('hex');
+    return Buffer.from(`${payload}:${sig}`).toString('base64url');
 }
 
 // Helper: read a profile from disk, or from environment variable if not found
@@ -119,8 +86,8 @@ async function writeProfile(username, profile) {
 }
 
 // Returns the session object { username, profile } or null
-// Extracts token from Authorization header or cookie, verifies HMAC signature,
-// then loads the profile from disk/env
+// Token format: base64url("username:timestamp:hmac")
+// HMAC key = user's passwordHash (stable across cold starts)
 async function getSessionAsync(req) {
     const authHeader = req.headers['authorization'] || '';
     let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -130,12 +97,32 @@ async function getSessionAsync(req) {
         if (match) token = match[1];
     }
     if (!token) return null;
-    const username = verifyToken(token);
-    if (!username) return null;
+
+    // Decode token
+    let decoded;
+    try {
+        decoded = Buffer.from(token, 'base64url').toString();
+    } catch (_) {
+        return null;
+    }
+    const parts = decoded.split(':');
+    if (parts.length !== 3) return null;
+    const [username, ts, sig] = parts;
+
+    // Check expiry
+    if (Date.now() - Number(ts) > TOKEN_MAX_AGE) return null;
+
+    // Read profile and verify HMAC using passwordHash as key
     try {
         const profile = await readProfile(username);
+        const expected = crypto.createHmac('sha256', profile.passwordHash).update(`${username}:${ts}`).digest('hex');
+        if (sig !== expected) {
+            console.log('[AUTH] HMAC mismatch for', username);
+            return null;
+        }
         return { username, profile };
-    } catch (_) {
+    } catch (err) {
+        console.log('[AUTH] Profile read failed for', username, err.message);
         return null;
     }
 }
@@ -597,7 +584,7 @@ app.post('/api/signup', async (req, res) => {
     await writeProfile(clean, profile);
 
     // Auto-login after signup
-    const token = createToken(clean);
+    const token = createToken(clean, profile.passwordHash);
     res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_MAX_AGE });
     res.json({ token, username: clean });
 });
@@ -613,7 +600,7 @@ app.post('/api/login', async (req, res) => {
         if (!verifyPassword(password, profile.passwordHash)) {
             return res.status(401).json({ error: 'Invalid username or password.' });
         }
-        const token = createToken(clean);
+        const token = createToken(clean, profile.passwordHash);
         res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: TOKEN_MAX_AGE });
         res.json({ token, username: clean });
     } catch (_) {
