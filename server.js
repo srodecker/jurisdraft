@@ -427,12 +427,8 @@ app.get('/workflow', (req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'workflow.html'), { dotfiles: 'allow' });
 });
 
-// Kinecta Case Manager — requires authentication
+// Kinecta Case Manager — login wall built into the page itself
 app.get('/kinecta', (req, res) => {
-    const session = getSession(req);
-    if (!session) {
-        return res.redirect('/full#login');
-    }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.sendFile(path.join(PUBLIC_DIR, 'kinecta.html'), { dotfiles: 'allow' });
 });
@@ -444,15 +440,6 @@ app.get('/extract', (req, res) => {
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
     res.sendFile(path.join(PUBLIC_DIR, 'full.html'), { dotfiles: 'allow' });
-});
-
-// Block direct access to protected HTML files via static serving
-app.use((req, res, next) => {
-    if (req.path === '/kinecta.html') {
-        const session = getSession(req);
-        if (!session) return res.redirect('/full#login');
-    }
-    next();
 });
 
 // Serve static files with no-cache headers in development

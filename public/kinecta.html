@@ -249,7 +249,32 @@
     </style>
 </head>
 <body>
-    <div class="app-shell">
+    <!-- Login Wall -->
+    <div id="kinectaLogin" style="display:none; position:fixed; inset:0; z-index:9999; background:var(--bg-primary); align-items:center; justify-content:center;">
+        <div style="width:100%; max-width:380px; padding:32px;">
+            <div style="text-align:center; margin-bottom:32px;">
+                <div style="width:56px; height:56px; background:var(--accent-primary); border-radius:16px; display:inline-flex; align-items:center; justify-content:center; margin-bottom:16px;">
+                    <svg width="28" height="28" viewBox="0 0 100 100" fill="none"><rect x="35" y="20" width="8" height="50" rx="4" fill="white"/><rect x="20" y="15" width="38" height="12" rx="6" fill="white"/><rect x="20" y="15" width="12" height="25" rx="6" fill="white"/><rect x="10" y="65" width="60" height="12" rx="6" fill="white"/><rect x="10" y="65" width="12" height="20" rx="6" fill="white"/></svg>
+                </div>
+                <h1 style="font-size:22px; font-weight:700; margin:0 0 4px;">Kinecta Case Manager</h1>
+                <p style="font-size:13px; color:var(--text-secondary); margin:0;">Sign in to continue</p>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
+                <input id="kinLoginUser" type="text" placeholder="Username" autocomplete="username"
+                    style="width:100%; box-sizing:border-box; padding:10px 14px; border-radius:8px; border:1px solid var(--border-primary); background:var(--bg-secondary); color:var(--text-primary); font-size:14px; outline:none;"
+                    onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-primary)'" />
+                <input id="kinLoginPass" type="password" placeholder="Password" autocomplete="current-password"
+                    style="width:100%; box-sizing:border-box; padding:10px 14px; border-radius:8px; border:1px solid var(--border-primary); background:var(--bg-secondary); color:var(--text-primary); font-size:14px; outline:none;"
+                    onfocus="this.style.borderColor='var(--accent-primary)'" onblur="this.style.borderColor='var(--border-primary)'"
+                    onkeydown="if(event.key==='Enter')kinectaSignIn()" />
+                <div id="kinLoginError" style="color:var(--accent-error); font-size:12px; display:none;"></div>
+                <button id="kinLoginBtn" onclick="kinectaSignIn()" class="btn btn-primary" style="width:100%; justify-content:center; padding:10px; font-size:14px;">Sign In</button>
+            </div>
+            <p style="text-align:center; font-size:11px; color:var(--text-tertiary); margin-top:24px;">JurisDraft &copy; 2026</p>
+        </div>
+    </div>
+
+    <div class="app-shell" id="kinectaApp" style="display:none;">
         <!-- Nav Rail -->
         <nav class="nav-rail">
             <div class="nav-brand">
@@ -577,11 +602,55 @@ const TOKEN_KEY = 'jd_token';
 const USER_KEY  = 'jd_username';
 
 function getToken()  { return localStorage.getItem(TOKEN_KEY); }
+function setToken(t) { localStorage.setItem(TOKEN_KEY, t); }
 function getUsername() { return localStorage.getItem(USER_KEY) || ''; }
+function setUsername(u) { localStorage.setItem(USER_KEY, u); }
 
 function authHeaders() {
     const t = getToken();
     return t ? { 'Authorization': 'Bearer ' + t } : {};
+}
+
+function showLoginWall() {
+    document.getElementById('kinectaLogin').style.display = 'flex';
+    document.getElementById('kinectaApp').style.display = 'none';
+    document.getElementById('kinLoginUser').focus();
+}
+
+function showApp() {
+    document.getElementById('kinectaLogin').style.display = 'none';
+    document.getElementById('kinectaApp').style.display = 'flex';
+}
+
+async function kinectaSignIn() {
+    const user = document.getElementById('kinLoginUser').value.trim();
+    const pw = document.getElementById('kinLoginPass').value;
+    const errEl = document.getElementById('kinLoginError');
+    const btn = document.getElementById('kinLoginBtn');
+    if (!user || !pw) { errEl.textContent = 'Enter username and password.'; errEl.style.display = 'block'; return; }
+    btn.disabled = true; btn.textContent = 'Signing in...'; errEl.style.display = 'none';
+    try {
+        const res = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: user, password: pw })
+        });
+        const data = await res.json();
+        if (res.ok && data.token) {
+            setToken(data.token);
+            setUsername(data.username || user);
+            showApp();
+            initApp();
+        } else {
+            errEl.textContent = data.error || 'Invalid credentials.';
+            errEl.style.display = 'block';
+        }
+    } catch (_) {
+        errEl.textContent = 'Network error. Please try again.';
+        errEl.style.display = 'block';
+    } finally {
+        btn.disabled = false; btn.textContent = 'Sign In';
+    }
 }
 
 // Authenticated fetch wrapper — adds Bearer token to every request
@@ -589,9 +658,9 @@ async function authFetch(url, opts = {}) {
     opts.headers = { ...authHeaders(), ...(opts.headers || {}) };
     const res = await fetch(url, opts);
     if (res.status === 401) {
-        // Token expired or invalid — redirect to login
+        // Token expired or invalid — show login wall
         localStorage.removeItem(TOKEN_KEY);
-        window.location.href = '/full#login';
+        showLoginWall();
         throw new Error('Session expired');
     }
     return res;
@@ -618,25 +687,30 @@ let currentView = 'chat'; // 'chat', 'cases', 'detail'
 document.addEventListener('DOMContentLoaded', async () => {
     document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
 
-    // Auth gate — must be logged in
+    // Auth gate — show login wall if not logged in
     if (!getToken()) {
-        window.location.href = '/full#login';
+        showLoginWall();
         return;
     }
     // Verify token is still valid
     try {
-        const authRes = await authFetch('/api/auth-status');
+        const authRes = await fetch('/api/auth-status', { headers: authHeaders() });
         const authData = await authRes.json();
         if (!authData.authenticated) {
             localStorage.removeItem(TOKEN_KEY);
-            window.location.href = '/full#login';
+            showLoginWall();
             return;
         }
     } catch(e) {
-        window.location.href = '/full#login';
+        showLoginWall();
         return;
     }
 
+    showApp();
+    initApp();
+});
+
+async function initApp() {
     try {
         const r = await authFetch('/api/workflow/config');
         const d = await r.json();
@@ -673,13 +747,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadMatters();
     loadNotifications();
     loadGlobalChatHistory();
-});
+}
 
 async function logout() {
     try { await authFetch('/api/logout', { method: 'POST' }); } catch(_) {}
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
-    window.location.href = '/full#login';
+    showLoginWall();
 }
 
 function switchUser(id) {
