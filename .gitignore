@@ -10,3 +10,7 @@ Signatures/
 
 # Old single-user config (migrated to profile system)
 firm-config.json
+
+# Case data — sensitive legal data, never commit
+matters/
+data/notifications.json

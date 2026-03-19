@@ -13,6 +13,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@supabase/supabase-js": "^2.99.3",
     "@xmldom/xmldom": "^0.9.8",
     "cors": "^2.8.5",
     "docxtemplater": "^3.67.6",
