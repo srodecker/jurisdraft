@@ -496,6 +496,7 @@ router.get('/api/matters', async (req, res) => {
                 return {
                     id: m.id,
                     debtorName: m.debtorName,
+                    clientMatter: m.clientMatter || '',
                     caseNumber: m.caseNumber,
                     demandAmount: m.demandAmount,
                     currentStage: m.currentStage,
@@ -1378,6 +1379,10 @@ function parseImportRow(row, mapping) {
     const notesParts = [];
     if (data.notes) notesParts.push(data.notes);
     if (data._amountRaw) notesParts.push(`Amount detail: ${data._amountRaw}`);
+    // Preserve Account/Loan Info raw text when it has descriptive content (not just a number)
+    if (data.accountNumber && /[a-zA-Z]/.test(data.accountNumber) && data.accountNumber.length > 10) {
+        notesParts.push(`Account/Loan: ${data.accountNumber}`);
+    }
 
     // Add any date-column text that had extra context
     for (const [col, field] of Object.entries(mapping)) {
@@ -1538,6 +1543,18 @@ router.post('/api/matters/import', upload.single('file'), async (req, res) => {
                         data.clientMatter = nameFileMatch2[2].trim();
                     }
                 }
+            }
+
+            // Capture unmapped columns into notes so no data is lost
+            const unmappedParts = [];
+            for (const col of unmapped) {
+                const val = (row[col] || '').toString().trim();
+                if (val && !val.match(/^Column_\d+$/) && val.length > 0) {
+                    unmappedParts.push(`${col}: ${val}`);
+                }
+            }
+            if (unmappedParts.length > 0) {
+                data.notes = (data.notes ? data.notes + '\n' : '') + unmappedParts.join('\n');
             }
 
             // Skip rows without a name

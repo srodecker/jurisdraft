@@ -710,9 +710,9 @@ function renderTable() {
         return `<tr class="clickable" onclick="openMatter('${m.id}')">
             <td>
                 <div style="font-weight:500;">${esc(m.debtorName || '-')}</div>
-                <div style="font-size:11px;color:var(--text-tertiary);">${esc(m.accountNumber || m.caseNumber || '')}</div>
+                <div style="font-size:11px;color:var(--text-tertiary);">${esc(m.clientMatter || m.accountNumber || m.caseNumber || '')}</div>
             </td>
-            <td style="font-size:12px;">${esc(m.debtorState || '-')}</td>
+            <td style="font-size:12px;">${esc(m.debtorState || '-')}${m.courtCounty ? '<div style="font-size:10px;color:var(--text-tertiary);">' + esc(m.courtCounty) + '</div>' : ''}</td>
             <td>${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</td>
             <td>
                 <span class="badge badge-stage">${esc(stage.name)}</span>
@@ -814,12 +814,13 @@ function renderOverview() {
         <div class="info-row"><span class="info-lbl">Account #:</span><span class="info-val">${esc(m.accountNumber || '-')}</span></div>
         <div class="info-row"><span class="info-lbl">Case Number:</span><span class="info-val">${esc(m.caseNumber || 'Pending')}</span></div>
         <div class="info-row"><span class="info-lbl">Court:</span><span class="info-val">${esc(m.courtName || 'TBD')}</span></div>
+        ${m.courtCounty ? `<div class="info-row"><span class="info-lbl">County:</span><span class="info-val">${esc(m.courtCounty)}</span></div>` : ''}
         <div class="info-row"><span class="info-lbl">Demand:</span><span class="info-val">${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-'}</span></div>
         <div class="info-row"><span class="info-lbl">Judgment:</span><span class="info-val">${m.judgmentAmount ? '$' + Number(m.judgmentAmount).toLocaleString() : '-'}</span></div>
-        ${m.statusText ? `<div class="info-row"><span class="info-lbl">Status:</span><span class="info-val">${esc(m.statusText)}</span></div>` : ''}
+        ${m.statusText ? `<div class="info-row"><span class="info-lbl">Status:</span><span class="info-val" style="color:${getStatusColor(m.statusText)}">${esc(m.statusText)}</span></div>` : ''}
         ${m.serviceType ? `<div class="info-row"><span class="info-lbl">Service Type:</span><span class="info-val">${esc(m.serviceType)}</span></div>` : ''}
         ${m.defendantResponse ? `<div class="info-row"><span class="info-lbl">Def. Response:</span><span class="info-val">${esc(m.defendantResponse)}</span></div>` : ''}
-        ${m.notes ? `<div class="info-row"><span class="info-lbl">Notes:</span><span class="info-val">${esc(m.notes)}</span></div>` : ''}
+        ${m.notes ? `<div class="info-row" style="align-items:flex-start"><span class="info-lbl">Notes:</span><span class="info-val" style="white-space:pre-wrap">${esc(m.notes)}</span></div>` : ''}
     `;
 
     // Contacts
