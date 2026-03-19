@@ -598,6 +598,26 @@ router.put('/api/matters/:id', async (req, res) => {
     }
 });
 
+// Delete ALL matters (bulk clear)
+router.delete('/api/matters', async (req, res) => {
+    try {
+        if (useSupabase) {
+            const { error } = await supabase.from('matters').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            if (error) throw new Error('Failed to clear matters: ' + error.message);
+            const { error: notifError } = await supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            if (notifError) console.error('Failed to clear notifications:', notifError.message);
+        } else {
+            const files = await fs.readdir(MATTERS_DIR);
+            for (const file of files) {
+                if (file.endsWith('.json')) await fs.unlink(path.join(MATTERS_DIR, file));
+            }
+        }
+        res.json({ success: true, message: 'All matters and notifications cleared' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Delete a matter
 router.delete('/api/matters/:id', async (req, res) => {
     try {
