@@ -79,9 +79,17 @@ async function writeProfile(username, profile) {
 
 // Returns the session object { username, profile } or null
 function getSession(req) {
+    // Check Authorization header first
     const authHeader = req.headers['authorization'] || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
     if (token && activeSessions.has(token)) return activeSessions.get(token);
+    // Fall back to cookie
+    const cookies = req.headers.cookie || '';
+    const match = cookies.match(/(?:^|;\s*)jd_token=([^;]+)/);
+    if (match) {
+        token = match[1];
+        if (activeSessions.has(token)) return activeSessions.get(token);
+    }
     return null;
 }
 
@@ -419,8 +427,12 @@ app.get('/workflow', (req, res) => {
     res.sendFile(path.join(PUBLIC_DIR, 'workflow.html'), { dotfiles: 'allow' });
 });
 
-// Kinecta Case Manager
+// Kinecta Case Manager — requires authentication
 app.get('/kinecta', (req, res) => {
+    const session = getSession(req);
+    if (!session) {
+        return res.redirect('/full#login');
+    }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.sendFile(path.join(PUBLIC_DIR, 'kinecta.html'), { dotfiles: 'allow' });
 });
@@ -432,6 +444,15 @@ app.get('/extract', (req, res) => {
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
     res.sendFile(path.join(PUBLIC_DIR, 'full.html'), { dotfiles: 'allow' });
+});
+
+// Block direct access to protected HTML files via static serving
+app.use((req, res, next) => {
+    if (req.path === '/kinecta.html') {
+        const session = getSession(req);
+        if (!session) return res.redirect('/full#login');
+    }
+    next();
 });
 
 // Serve static files with no-cache headers in development
@@ -447,11 +468,29 @@ app.use(express.static('public', {
 }));
 app.use('/api/', apiLimiter); // Apply rate limiting to all API routes
 
+// Auth middleware — rejects requests without a valid Bearer token
+function requireAuth(req, res, next) {
+    const session = getSession(req);
+    if (!session) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    req.session = session;
+    next();
+}
+
 // Mount external routers
 const extractRouter = require('./routes/extract');
 app.use('/api', extractRouter);
 
 const mattersRouter = require('./routes/matters');
+// Protect all matter/workflow/notification/chat/import endpoints
+app.use('/api/matters', requireAuth);
+app.use('/api/workflow', requireAuth);
+app.use('/api/notifications', requireAuth);
+app.use('/api/chat', requireAuth);
+app.use('/api/team', requireAuth);
+app.use('/api/dashboard', requireAuth);
+app.use('/api/matters-export', requireAuth);
 app.use(mattersRouter);
 
 // ============================================================
@@ -490,6 +529,7 @@ app.post('/api/signup', async (req, res) => {
     // Auto-login after signup
     const token = crypto.randomBytes(32).toString('hex');
     activeSessions.set(token, { username: clean, profile });
+    res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 * 1000 });
     res.json({ token, username: clean });
 });
 
@@ -506,6 +546,7 @@ app.post('/api/login', async (req, res) => {
         }
         const token = crypto.randomBytes(32).toString('hex');
         activeSessions.set(token, { username: clean, profile });
+        res.cookie('jd_token', token, { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 * 1000 });
         res.json({ token, username: clean });
     } catch (_) {
         return res.status(401).json({ error: 'Invalid username or password.' });
@@ -514,8 +555,14 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/logout', (req, res) => {
     const authHeader = req.headers['authorization'] || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    let token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) {
+        const cookies = req.headers.cookie || '';
+        const match = cookies.match(/(?:^|;\s*)jd_token=([^;]+)/);
+        if (match) token = match[1];
+    }
     if (token) activeSessions.delete(token);
+    res.clearCookie('jd_token', { path: '/' });
     res.json({ ok: true });
 });
 
