@@ -2009,28 +2009,71 @@ Important:
 function fuzzyMatchMatter(matters, extractedName, extractedCaseNum) {
     if (!extractedName && !extractedCaseNum) return { match: null, confidence: 'none' };
 
-    const normalize = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+    // Normalize: strip client matter numbers (e.g. "264-20251784"), punctuation, digits
+    const normalize = s => (s || '').toLowerCase()
+        .replace(/\d{3}-\d{7,}/g, '')       // strip client matter numbers like 264-20251784
+        .replace(/[^a-z ]/g, '')             // strip all non-alpha except spaces
+        .replace(/\s+/g, ' ').trim();
+
+    // Get individual name words as a set (for order-independent matching)
+    const nameWords = s => normalize(s).split(/\s+/).filter(w => w.length > 1);
+
     const normName = normalize(extractedName);
 
     // Try case number match first (most reliable)
     if (extractedCaseNum) {
-        const normCase = normalize(extractedCaseNum);
-        const caseMatch = matters.find(m => normalize(m.caseNumber) === normCase && normCase.length > 3);
+        const normCase = (extractedCaseNum || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const caseMatch = matters.find(m => {
+            const mc = (m.caseNumber || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            return mc === normCase && normCase.length > 3;
+        });
         if (caseMatch) return { match: caseMatch, confidence: 'exact' };
     }
 
     if (!normName) return { match: null, confidence: 'none' };
 
-    // Exact name match
+    // Exact normalized name match
     const exact = matters.find(m => normalize(m.debtorName) === normName);
     if (exact) return { match: exact, confidence: 'exact' };
+
+    // Name-parts match: all words from shorter name appear in longer name
+    // Handles "Rodriguez, Leonardo Gonzalez" vs "Gonzalez Rodriguez, Leonardo"
+    const extractedWords = nameWords(extractedName);
+    if (extractedWords.length >= 2) {
+        const partsMatches = [];
+        for (const m of matters) {
+            const matterWords = nameWords(m.debtorName);
+            if (matterWords.length < 2) continue;
+            const shorter = extractedWords.length <= matterWords.length ? extractedWords : matterWords;
+            const longer = extractedWords.length <= matterWords.length ? matterWords : extractedWords;
+            const allFound = shorter.every(w => longer.some(lw => lw === w || lw.startsWith(w) || w.startsWith(lw)));
+            if (allFound && shorter.length >= 2) {
+                partsMatches.push(m);
+            }
+        }
+        if (partsMatches.length === 1) return { match: partsMatches[0], confidence: 'likely' };
+        if (partsMatches.length > 1) {
+            // Pick the one with closest word count
+            partsMatches.sort((a, b) =>
+                Math.abs(nameWords(a.debtorName).length - extractedWords.length) -
+                Math.abs(nameWords(b.debtorName).length - extractedWords.length)
+            );
+            return { match: partsMatches[0], confidence: 'likely' };
+        }
+    }
 
     // Last name match — handle "Last, First" and "First Last" formats
     const extractLastName = (name) => {
         const n = normalize(name);
-        if (n.includes(',')) return n.split(',')[0].trim();
-        const parts = n.split(/\s+/);
-        return parts[parts.length - 1];
+        if (n.includes(' ')) {
+            // If comma-style, first part is last name
+            const orig = (name || '').toLowerCase();
+            if (orig.includes(',')) return normalize(orig.split(',')[0]);
+            // Otherwise last word
+            const parts = n.split(/\s+/);
+            return parts[parts.length - 1];
+        }
+        return n;
     };
 
     const extractedLast = extractLastName(extractedName);
@@ -2044,10 +2087,11 @@ function fuzzyMatchMatter(matters, extractedName, extractedCaseNum) {
     // If multiple last name matches, try first name too
     if (lastNameMatches.length > 1) {
         const extractFirstName = (name) => {
+            const orig = (name || '').toLowerCase();
             const n = normalize(name);
-            if (n.includes(',')) {
-                const parts = n.split(',');
-                return parts[1] ? parts[1].trim().split(/\s+/)[0] : '';
+            if (orig.includes(',')) {
+                const after = normalize(orig.split(',').slice(1).join(','));
+                return after.split(/\s+/)[0] || '';
             }
             return n.split(/\s+/)[0];
         };
@@ -2059,7 +2103,6 @@ function fuzzyMatchMatter(matters, extractedName, extractedCaseNum) {
             });
             if (fullMatch) return { match: fullMatch, confidence: 'likely' };
         }
-        // Return first last name match as possible
         return { match: lastNameMatches[0], confidence: 'possible' };
     }
 
@@ -2069,6 +2112,16 @@ function fuzzyMatchMatter(matters, extractedName, extractedCaseNum) {
         return mn.includes(normName) || normName.includes(mn);
     });
     if (partial) return { match: partial, confidence: 'possible' };
+
+    // Last resort: check if any extracted word (3+ chars) matches any matter word
+    if (extractedWords.length >= 1) {
+        const wordMatch = matters.find(m => {
+            const mw = nameWords(m.debtorName);
+            const shared = extractedWords.filter(w => w.length >= 3 && mw.some(mww => mww === w));
+            return shared.length >= 2; // need at least 2 matching words
+        });
+        if (wordMatch) return { match: wordMatch, confidence: 'possible' };
+    }
 
     return { match: null, confidence: 'none' };
 }
@@ -2183,7 +2236,7 @@ IMPORTANT RULES:
                 status: matchedMatter.status
             } : null,
             matchConfidence: confidence,
-            allMatters: matters.map(m => ({ id: m.id, debtorName: m.debtorName, caseNumber: m.caseNumber }))
+            allMatters: matters.map(m => ({ id: m.id, debtorName: m.debtorName, caseNumber: m.caseNumber, clientMatter: m.clientMatter }))
         });
     } catch (err) {
         res.status(500).json({ error: err.message });
