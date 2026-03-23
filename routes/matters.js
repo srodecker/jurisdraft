@@ -302,8 +302,9 @@ async function readMatter(id) {
         const raw = await fs.readFile(filePath, 'utf-8');
         matter = JSON.parse(raw);
     }
-    // Backward compat: ensure hearings array exists
+    // Backward compat: ensure arrays exist
     if (!matter.hearings) matter.hearings = [];
+    if (!matter.docketUploads) matter.docketUploads = [];
     return matter;
 }
 
@@ -472,6 +473,8 @@ function createMatterObject(data) {
         events: [],
         // Structured hearings extracted from dockets
         hearings: [],
+        // Docket upload log
+        docketUploads: [],
         // Chat history for AI assistant
         chatHistory: [],
         notes: data.notes || '',
@@ -1016,6 +1019,11 @@ ${dateEntries || 'No dates recorded'}
 
 COURT HEARINGS (from docket):
 ${hearings || 'No hearings on file'}
+
+DOCKET UPLOADS:
+${(matter.docketUploads || []).length > 0
+    ? (matter.docketUploads || []).map(u => `- ${new Date(u.uploadedAt).toLocaleString()}: ${u.hearingsExtracted} hearing(s), ${u.filingsExtracted} filing(s) extracted${u.hearingSummary ? ' — ' + u.hearingSummary : ''}`).join('\n')
+    : 'No dockets uploaded'}
 
 NEXT PENDING TASKS (first 5):
 ${pendingTasks.slice(0, 5).map(t => `- [${t.stage}] ${t.task} (Assigned: ${t.assignee})`).join('\n') || 'All tasks complete'}
@@ -2312,7 +2320,21 @@ router.post('/api/docket/save', async (req, res) => {
             }
         }
 
-        // Log the intake
+        // Log the upload to docketUploads array
+        const uploadRecord = {
+            id: crypto.randomUUID(),
+            uploadedAt: now,
+            uploadedBy: req.body.uploadedBy || 'unknown',
+            hearingsExtracted: savedHearings,
+            filingsExtracted: savedFilings,
+            hearingSummary: (hearings || []).map(h => `${h.type || 'Hearing'} ${h.date || ''}${h.department ? ' Dept ' + h.department : ''}`).join('; '),
+            caseNumber: caseNumber || matter.caseNumber || null,
+            courtName: courtName || matter.courtName || null
+        };
+        if (!matter.docketUploads) matter.docketUploads = [];
+        matter.docketUploads.push(uploadRecord);
+
+        // Log the intake as a timeline event too
         matter.events.push({
             id: crypto.randomUUID(),
             type: 'note',
@@ -2332,6 +2354,30 @@ router.post('/api/docket/save', async (req, res) => {
             savedFilings,
             matter
         });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/docket/uploads — list all docket uploads across all matters
+router.get('/api/docket/uploads', async (req, res) => {
+    try {
+        const matters = await listMatters();
+        const uploads = [];
+        for (const m of matters) {
+            const mUploads = m.docketUploads || [];
+            for (const u of mUploads) {
+                uploads.push({
+                    ...u,
+                    matterId: m.id,
+                    debtorName: m.debtorName,
+                    caseNumber: m.caseNumber || u.caseNumber
+                });
+            }
+        }
+        // Sort newest first
+        uploads.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+        res.json(uploads);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -2418,12 +2464,18 @@ function buildAllMattersContext(matters) {
             })
             .join('; ');
 
+        // Docket upload log
+        const docketLog = (m.docketUploads || [])
+            .map(u => `${new Date(u.uploadedAt).toLocaleDateString()} (${u.hearingsExtracted}h/${u.filingsExtracted}f)`)
+            .join('; ');
+
         return `--- ${m.debtorName || 'Unknown'} ---
 Case#: ${m.caseNumber || 'Pending'} | Stage: ${stageName} (${completedTasks}/${totalTasks}) | Amount: ${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : 'N/A'}
 Loan: ${m.loanType || '?'} | Court: ${m.courtName || 'TBD'} | Status: ${m.status}${m.statusText ? ' - ' + m.statusText : ''}
 Account: ${m.accountNumber || '?'} | Service: ${m.serviceType || '?'} | Def. Response: ${m.defendantResponse || '?'}
 Dates: ${dateEntries || 'None'}
 Hearings: ${hearingsSummary || 'None on file'}
+Docket uploads: ${docketLog || 'None'}
 Next tasks: ${pendingTasks.slice(0, 3).join(' → ') || 'All complete'}
 Recent: ${recentEvents || 'No events'}
 Notes: ${m.notes || 'None'}`;
@@ -2470,6 +2522,7 @@ Your role:
 - Help with date calculations and California collection law
 - When asked about a specific person/debtor, search through all cases to find them (use partial name matching)
 - Provide workload summaries by team member when asked
+- Track docket uploads: each matter has a "Docket uploads" field showing when dockets were uploaded and what was extracted. When asked "which matters did I upload dockets for?" or "list all docket uploads", compile a list from the Docket uploads field across all matters.
 - Be concise and direct. Use bullet points for lists.
 - When referencing cases, always mention the debtor name and case number if available.`;
 
