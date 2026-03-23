@@ -1973,7 +1973,8 @@ async function saveDocketData() {
                 caseNumber: docketExtracted.caseNumber,
                 courtName: docketExtracted.courtName,
                 county: docketExtracted.county,
-                judge: docketExtracted.judge
+                judge: docketExtracted.judge,
+                uploadedBy: currentUserId
             })
         });
         const data = await r.json();
