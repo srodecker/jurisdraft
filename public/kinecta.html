@@ -315,6 +315,17 @@
             font-size: 12px; color: var(--text-secondary);
         }
         .docket-recent-item:last-child { border-bottom: none; }
+        .docket-dd-item {
+            padding: 8px 12px; cursor: pointer; font-size: 13px;
+            border-bottom: 1px solid var(--border-secondary);
+        }
+        .docket-dd-item:last-child { border-bottom: none; }
+        .docket-dd-item:hover { background: var(--bg-tertiary); }
+        .docket-dd-item .dd-name { font-weight: 500; }
+        .docket-dd-item .dd-sub { font-size: 11px; color: var(--text-tertiary); }
+        .docket-dd-empty {
+            padding: 12px; text-align: center; font-size: 12px; color: var(--text-tertiary);
+        }
         .spinner-inline {
             display: inline-block; width: 18px; height: 18px;
             border: 2px solid var(--border-primary);
@@ -515,7 +526,16 @@
                             <!-- Manual matter selector (shown when no match or user wants to change) -->
                             <div id="docketManualSelect" style="display:none;margin-bottom:14px;">
                                 <label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Select Matter:</label>
-                                <select id="docketMatterSelect" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text-primary);"></select>
+                                <div style="position:relative;">
+                                    <input type="text" id="docketMatterSearch" placeholder="Type to search matters..." autocomplete="off"
+                                        style="width:100%;box-sizing:border-box;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text-primary);"
+                                        oninput="filterDocketMatterList()" onfocus="filterDocketMatterList()" />
+                                    <div id="docketMatterDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:var(--bg-secondary);border:1px solid var(--border-primary);border-radius:0 0 6px 6px;max-height:220px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.3);"></div>
+                                </div>
+                                <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="createMatterFromDocket()">
+                                    <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                    Create New Matter
+                                </button>
                             </div>
 
                             <!-- Hearings Table -->
@@ -1824,11 +1844,8 @@ async function handleDocketUpload(files) {
         // Store matched matter ID
         docketMatchedMatterId = data.matchedMatter ? data.matchedMatter.id : null;
 
-        // Populate manual select dropdown
-        const sel = document.getElementById('docketMatterSelect');
-        sel.innerHTML = '<option value="">-- Select a matter --</option>' +
-            docketAllMatters.map(m => `<option value="${m.id}" ${m.id === docketMatchedMatterId ? 'selected' : ''}>${esc(m.debtorName)}${m.caseNumber ? ' (' + esc(m.caseNumber) + ')' : ''}</option>`).join('');
-        sel.onchange = () => { docketMatchedMatterId = sel.value; };
+        // Clear the search input for manual selection
+        document.getElementById('docketMatterSearch').value = '';
 
         // Render hearings table
         renderDocketHearings(docketExtracted.hearings || []);
@@ -1982,6 +1999,95 @@ async function saveDocketData() {
     } finally {
         btn.disabled = false;
         btn.textContent = 'Save to Matter';
+    }
+}
+
+function filterDocketMatterList() {
+    const input = document.getElementById('docketMatterSearch');
+    const dropdown = document.getElementById('docketMatterDropdown');
+    const query = input.value.toLowerCase().trim();
+
+    if (!docketAllMatters || docketAllMatters.length === 0) {
+        dropdown.innerHTML = '<div class="docket-dd-empty">No matters loaded</div>';
+        dropdown.style.display = 'block';
+        return;
+    }
+
+    let filtered = docketAllMatters;
+    if (query.length > 0) {
+        filtered = docketAllMatters.filter(m =>
+            (m.debtorName || '').toLowerCase().includes(query) ||
+            (m.caseNumber || '').toLowerCase().includes(query) ||
+            (m.clientMatter || '').toLowerCase().includes(query)
+        );
+    }
+
+    if (filtered.length === 0) {
+        dropdown.innerHTML = '<div class="docket-dd-empty">No matches — try a different search or create a new matter</div>';
+    } else {
+        dropdown.innerHTML = filtered.slice(0, 15).map(m =>
+            `<div class="docket-dd-item" onclick="selectDocketMatter('${m.id}', '${esc(m.debtorName)}')">
+                <div class="dd-name">${esc(m.debtorName)}</div>
+                <div class="dd-sub">${m.caseNumber ? esc(m.caseNumber) : 'No case #'}${m.clientMatter ? ' · ' + esc(m.clientMatter) : ''}</div>
+            </div>`
+        ).join('');
+    }
+    dropdown.style.display = 'block';
+}
+
+function selectDocketMatter(id, name) {
+    docketMatchedMatterId = id;
+    const input = document.getElementById('docketMatterSearch');
+    input.value = name;
+    document.getElementById('docketMatterDropdown').style.display = 'none';
+    showToast('Selected: ' + name);
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', e => {
+    const dropdown = document.getElementById('docketMatterDropdown');
+    const input = document.getElementById('docketMatterSearch');
+    if (dropdown && input && !dropdown.contains(e.target) && e.target !== input) {
+        dropdown.style.display = 'none';
+    }
+});
+
+async function createMatterFromDocket() {
+    if (!docketExtracted) { showToast('No docket data to create from', true); return; }
+
+    const name = docketExtracted.defendant || '';
+    if (!name) { showToast('No defendant name extracted from docket', true); return; }
+
+    try {
+        const r = await authFetch('/api/matters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                debtorName: name,
+                caseNumber: docketExtracted.caseNumber || '',
+                courtName: docketExtracted.courtName || '',
+                courtCounty: docketExtracted.county || ''
+            })
+        });
+        const newMatter = await r.json();
+
+        // Set as matched matter
+        docketMatchedMatterId = newMatter.id;
+        docketAllMatters.push({ id: newMatter.id, debtorName: newMatter.debtorName, caseNumber: newMatter.caseNumber });
+
+        // Update the match card to show the new matter
+        renderDocketMatchCard({
+            id: newMatter.id,
+            debtorName: newMatter.debtorName,
+            caseNumber: newMatter.caseNumber,
+            stageName: 'Intake',
+            status: 'active'
+        }, 'exact');
+        document.getElementById('docketManualSelect').style.display = 'none';
+
+        showToast('Created matter for ' + newMatter.debtorName);
+    } catch (e) {
+        showToast('Failed to create matter: ' + e.message, true);
     }
 }
 
