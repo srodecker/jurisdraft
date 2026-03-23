@@ -49,11 +49,11 @@ if (!useSupabase) {
 // ============================================================
 
 const TEAM_MEMBERS = [
-    { id: 'shane', name: 'Shane Rodecker', role: 'Paralegal', email: 'srodecker@wrightlegal.net' },
-    { id: 'darius', name: 'Darius Ghomashchi', role: 'Attorney', email: 'sghomashchi@wrightlegal.net' },
-    { id: 'eric', name: 'Eric W. Cha', role: 'Attorney', email: 'echa@wrightlegal.net' },
-    { id: 'miguel', name: 'Miguel Villanueva', role: 'Paralegal', email: 'mvillanueva@wrightlegal.net' },
-    { id: 'adriana', name: 'Adriana Barrett', role: 'Secretary', email: '' }
+    { id: 'shane', name: 'Shane Rodecker', role: 'Filing/Tracking', email: 'srodecker@wrightlegal.net' },
+    { id: 'darius', name: 'Darius Ghomashchi', role: 'Attorney (Oversight)', email: 'sghomashchi@wrightlegal.net' },
+    { id: 'miguel', name: 'Miguel Villanueva', role: 'Drafting', email: 'mvillanueva@wrightlegal.net' },
+    { id: 'michelle', name: 'Michelle', role: 'MRR / DVN Review', email: '' },
+    { id: 'sam', name: 'Sam', role: 'Intake', email: '' }
 ];
 
 // ============================================================
@@ -71,13 +71,7 @@ const WORKFLOW_CONFIG = {
         name: 'Sabaa "Darius" Ghomashchi, Esq.',
         sbn: '352285',
         email: 'sghomashchi@wrightlegal.net',
-        secretary: 'Adriana Barrett'
-    },
-    secondAttorney: {
-        name: 'Eric W. Cha, Esq.',
-        sbn: '331218',
-        email: 'echa@wrightlegal.net',
-        secretary: 'Kim Walsh'
+        secretary: 'Shane Rodecker'
     },
     contacts: {
         processServer: { name: 'Eddie', company: 'Nationwide Legal', email: 'wright@nationwidelegal.com' },
@@ -92,16 +86,33 @@ const WORKFLOW_CONFIG = {
 };
 
 // Workflow stage definitions with checklist items and default assignments
+// Aligned to actual team workflow: Sam (Intake), Miguel (Drafting), Michelle (MRR/DVN Review), Shane (Filing/Tracking), Darius (Oversight)
 const WORKFLOW_STAGES = [
+    {
+        id: 'intake',
+        number: 0,
+        name: 'Intake',
+        description: 'Matt emails referral — Sam enters info, pings team',
+        tasks: [
+            { id: 'sam_enters_info', label: 'Enter matter info from Matt\'s referral email', assignee: 'sam' },
+            { id: 'shane_log_spreadsheet', label: 'Add matter to spreadsheet', assignee: 'shane' },
+            { id: 'miguel_prep_drafts', label: 'Triggered to prep drafts', assignee: 'miguel' },
+            { id: 'darius_legal_review', label: 'Legal review — determine course of action', assignee: 'darius', needsReview: true }
+        ]
+    },
     {
         id: 'dvn_letter',
         number: 1,
         name: 'DVN Letter',
+        description: 'Miguel drafts DVN → Michelle reviews → Shane mails',
         tasks: [
-            { id: 'print_mail_dvn', label: 'Print and mail DVN Letter', assignee: 'shane' },
-            { id: 'save_dvn_pdf', label: 'Print DVN Letter to PDF and save in correspondence folder', assignee: 'shane' },
+            { id: 'draft_dvn', label: 'Draft DVN Letter', assignee: 'miguel' },
+            { id: 'review_dvn', label: 'Review DVN (MRR)', assignee: 'michelle', needsReview: true },
+            { id: 'dvn_ready_ping', label: 'Ping Shane: DVN Ready', assignee: 'michelle' },
+            { id: 'print_mail_dvn', label: 'Mail DVN Letter', assignee: 'shane' },
+            { id: 'email_client', label: 'Email DVN copy to Matt (client)', assignee: 'shane' },
             { id: 'calendar_response', label: 'Calendar response date in PL', assignee: 'shane' },
-            { id: 'email_client', label: 'Email DVN Letter to client', assignee: 'shane' },
+            { id: 'save_dvn_pdf', label: 'Print DVN Letter to PDF and save in correspondence folder', assignee: 'shane' },
             { id: 'add_spreadsheet', label: 'Add to spreadsheet with $$ amounts and response date', assignee: 'shane' }
         ]
     },
@@ -109,8 +120,9 @@ const WORKFLOW_STAGES = [
         id: 'file_complaint',
         number: 2,
         name: 'File Complaint',
+        description: 'Miguel drafts complaint → Shane files',
         tasks: [
-            { id: 'prepare_complaint', label: 'Prepare Complaint with Summons, Civil Case Cover Sheet, and local court forms', assignee: 'shane' },
+            { id: 'draft_complaint', label: 'Draft Complaint with Summons, Civil Case Cover Sheet, and local court forms', assignee: 'miguel' },
             { id: 'attorney_approval', label: 'Get approval from Darius to file', assignee: 'darius', needsReview: true },
             { id: 'file_onelegal', label: 'File via Onelegal', assignee: 'shane' },
             { id: 'add_case_number', label: 'When received: Add case number to PL with date', assignee: 'shane' },
@@ -123,13 +135,17 @@ const WORKFLOW_STAGES = [
         id: 'service_of_summons',
         number: 3,
         name: 'Service of Summons & Complaint',
+        description: 'Shane sends to NW Legal → checks service status → if failed, pings Darius for pub decision',
         tasks: [
             { id: 'prepare_buckslip', label: 'Prepare NW Buckslip for Service', assignee: 'shane' },
             { id: 'check_address', label: 'Check address in client opening email, DVN Letter, Experian Credit Report (Client docs)', assignee: 'shane' },
             { id: 'lexis_search', label: 'Do Lexis Search and save in Client Documents', assignee: 'shane' },
             { id: 'confirm_address', label: 'Confirm service address with attorney', assignee: 'darius', needsReview: true },
             { id: 'email_nationwide', label: 'Email NW buckslip + service package to Eddie at wright@nationwidelegal.com', assignee: 'shane' },
+            { id: 'service_successful', label: 'Service successful?', assignee: 'shane' },
+            { id: 'pub_request', label: 'If service failed: Ping Darius for publish/service decision', assignee: 'darius', needsReview: true },
             { id: 'receive_pos', label: 'Receive Proof of Service from Eddie (personal or substituted service)', assignee: 'shane' },
+            { id: 'file_pos', label: 'File POS & ping team', assignee: 'shane' },
             { id: 'calendar_served', label: 'Calendar "Complaint served by hand/substituted service"', assignee: 'shane' },
             { id: 'add_answer_due', label: 'Add Answer due date to spreadsheet', assignee: 'shane' }
         ]
@@ -138,9 +154,13 @@ const WORKFLOW_STAGES = [
         id: 'answer_response',
         number: 4,
         name: 'Answer/Response Due',
+        description: 'Check if debtor answered — if yes: Darius negotiates, Miguel preps discovery. If no: proceed to default.',
         tasks: [
             { id: 'check_answer', label: 'Check if Answer/Response was served', assignee: 'shane' },
-            { id: 'calendar_answer', label: 'If Answer served: Calendar "Answer served on [date], should we prepare discovery?"', assignee: 'shane' },
+            { id: 'save_answer_prolaw', label: 'If Answer filed: Save to ProLaw & ping Darius/Miguel', assignee: 'shane' },
+            { id: 'darius_negotiate', label: 'Negotiate with debtor/debtor\'s counsel', assignee: 'darius' },
+            { id: 'miguel_discovery', label: 'Prep discovery', assignee: 'miguel' },
+            { id: 'calendar_answer', label: 'Calendar "Answer served on [date], should we prepare discovery?"', assignee: 'shane' },
             { id: 'add_answer_date', label: 'Add Answer date to spreadsheet and Answer Chart', assignee: 'shane' }
         ]
     },
@@ -148,35 +168,42 @@ const WORKFLOW_STAGES = [
         id: 'negotiations',
         number: 5,
         name: 'Negotiations & Stipulated Judgment',
-        description: 'If Borrower or attorney reaches Darius for settlement',
+        description: 'If Borrower or attorney reaches Darius for settlement — Miguel preps stip judgment',
         tasks: [
-            { id: 'prepare_stip', label: 'Prepare Stipulated Judgment', assignee: 'shane' },
+            { id: 'prepare_stip', label: 'Prepare Stipulated Judgment', assignee: 'miguel' },
+            { id: 'stip_ping_shane', label: 'Ping Shane: Stip Judgment ready', assignee: 'miguel' },
             { id: 'both_sign', label: 'Both parties sign Stipulated Judgment', assignee: 'darius' },
             { id: 'submit_court', label: 'Submit Stipulated Judgment to court', assignee: 'shane' },
             { id: 'judge_signs', label: 'Judge signs Stipulated Judgment', assignee: 'shane' },
             { id: 'notice_entry', label: 'Prepare Notice of Entry of Stipulated Judgment — file and serve', assignee: 'shane' },
+            { id: 'darius_review_stip', label: 'Darius reviews notice/abstract', assignee: 'darius', needsReview: true },
             { id: 'abstract_stip', label: 'Prepare Abstract of Judgment (per Stipulation) and file', assignee: 'shane' },
+            { id: 'file_serve_stip', label: 'File/serve & ping Joyce', assignee: 'shane' },
             { id: 'email_recording', label: 'When filed: Email to Joyce Copeland Clark for recording', assignee: 'shane' },
-            { id: 'email_client_recorded', label: 'When recorded: Email to client', assignee: 'shane' }
+            { id: 'email_client_recorded', label: 'When recorded: Send abstract to Matt (client)', assignee: 'shane' }
         ]
     },
     {
         id: 'no_answer_default',
         number: 6,
         name: 'Default Judgment',
-        description: 'If no Answer/Response was filed',
+        description: 'If no Answer/Response — Shane preps default request, Darius reviews, Miguel preps judgment package',
         tasks: [
             { id: 'check_docket', label: 'Check docket for Answer/Response, save docket to Pleadings', assignee: 'shane' },
             { id: 'prepare_red', label: 'Prepare Request for Entry of Default (Judicial Council form)', assignee: 'shane' },
             { id: 'military_search', label: 'Do military search and save in Client Documents', assignee: 'shane' },
+            { id: 'darius_review_default', label: 'Darius reviews Request for Default', assignee: 'darius', needsReview: true },
             { id: 'file_serve_red', label: 'File and serve Request for Entry of Default', assignee: 'shane' },
             { id: 'save_default_pl', label: 'When conformed copy received: Save in PL', assignee: 'shane' },
             { id: 'email_accounting', label: 'Email "request fees/costs for default judgment" to Debbie Baugh or Bryce Hoyt, cc Darius and Miguel', assignee: 'shane' },
             { id: 'prepare_dismissal', label: 'Prepare Request for Dismissal as to Doe Defendants', assignee: 'shane' },
             { id: 'prepare_rcj', label: 'Prepare Request for Court Judgment', assignee: 'shane' },
             { id: 'miguel_declarations', label: 'Prepare Attorney Declaration, Client Declaration, and Proposed Judgment', assignee: 'miguel' },
+            { id: 'miguel_judgment_pkg', label: 'Prep judgment package & ping team', assignee: 'miguel' },
             { id: 'client_declaration', label: 'Attorney emails Client Declaration to Matthew Marquez (client) for signature', assignee: 'darius' },
             { id: 'attach_exhibits', label: 'Attach exhibits to Client Declaration (OCR and Bookmark), attach Exhibit 1 - Summons to Attorney Declaration', assignee: 'shane' },
+            { id: 'prep_final_judgment', label: 'Prep final judgment forms & ping Darius', assignee: 'shane' },
+            { id: 'darius_final_review', label: 'Darius reviews final judgment forms', assignee: 'darius', needsReview: true },
             { id: 'file_rcj', label: 'File: Request for Court Judgment', assignee: 'shane' },
             { id: 'file_client_decl', label: 'File: Client Declaration', assignee: 'shane' },
             { id: 'file_atty_decl', label: 'File: Attorney Declaration', assignee: 'shane' },
@@ -184,9 +211,12 @@ const WORKFLOW_STAGES = [
             { id: 'file_dismissal_does', label: 'File: Request for Dismissal (as to Doe Defendants only)', assignee: 'shane' },
             { id: 'receive_default_judgment', label: 'Receive entered Default Judgment', assignee: 'shane' },
             { id: 'email_judgment_atty', label: 'Email Default Judgment to Darius', assignee: 'shane' },
-            { id: 'email_judgment_client', label: 'Attorney or secretary emails Default Judgment to client', assignee: 'darius' },
-            { id: 'notice_entry_judgment', label: 'Prepare Notice of Entry of Judgment — file and serve (approve before filing)', assignee: 'shane' },
-            { id: 'abstract_judgment', label: 'Prepare Abstract of Judgment — file (approve before filing)', assignee: 'shane' }
+            { id: 'email_judgment_client', label: 'Email Default Judgment to client', assignee: 'darius' },
+            { id: 'notice_entry_judgment', label: 'Prep Notice of Entry of Judgment & ping Darius', assignee: 'shane' },
+            { id: 'darius_review_entry', label: 'Darius reviews Notice of Entry/Abstract', assignee: 'darius', needsReview: true },
+            { id: 'abstract_judgment', label: 'Prepare Abstract of Judgment — file', assignee: 'shane' },
+            { id: 'file_serve_judgment', label: 'File/serve & ping Joyce', assignee: 'shane' },
+            { id: 'send_abstract_client', label: 'Send abstract to Matt (client)', assignee: 'shane' }
         ]
     },
     {
@@ -258,6 +288,7 @@ const EVENT_TYPES = [
 // ============================================================
 
 async function readMatter(id) {
+    let matter;
     if (useSupabase) {
         const { data, error } = await supabase
             .from('matters')
@@ -265,11 +296,15 @@ async function readMatter(id) {
             .eq('id', id)
             .single();
         if (error) throw new Error('Matter not found');
-        return data.data;
+        matter = data.data;
+    } else {
+        const filePath = path.join(MATTERS_DIR, `${id}.json`);
+        const raw = await fs.readFile(filePath, 'utf-8');
+        matter = JSON.parse(raw);
     }
-    const filePath = path.join(MATTERS_DIR, `${id}.json`);
-    const raw = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(raw);
+    // Backward compat: ensure hearings array exists
+    if (!matter.hearings) matter.hearings = [];
+    return matter;
 }
 
 async function writeMatter(id, matter) {
@@ -416,7 +451,7 @@ function createMatterObject(data) {
         attorney: WORKFLOW_CONFIG.attorney.name,
         attorneyEmail: WORKFLOW_CONFIG.attorney.email,
         secretary: WORKFLOW_CONFIG.attorney.secretary,
-        currentStage: 1,
+        currentStage: 0,
         tasks,
         dates: {
             dvnSent: null,
@@ -435,6 +470,8 @@ function createMatterObject(data) {
         },
         // Timeline events: hearings, filings, correspondence, minute orders, etc.
         events: [],
+        // Structured hearings extracted from dockets
+        hearings: [],
         // Chat history for AI assistant
         chatHistory: [],
         notes: data.notes || '',
@@ -593,6 +630,26 @@ router.put('/api/matters/:id', async (req, res) => {
         if (!req.body.dates) updated.dates = existing.dates;
         await writeMatter(updated.id, updated);
         res.json(updated);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete ALL matters (bulk clear)
+router.delete('/api/matters', async (req, res) => {
+    try {
+        if (useSupabase) {
+            const { error } = await supabase.from('matters').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            if (error) throw new Error('Failed to clear matters: ' + error.message);
+            const { error: notifError } = await supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+            if (notifError) console.error('Failed to clear notifications:', notifError.message);
+        } else {
+            const files = await fs.readdir(MATTERS_DIR);
+            for (const file of files) {
+                if (file.endsWith('.json')) await fs.unlink(path.join(MATTERS_DIR, file));
+            }
+        }
+        res.json({ success: true, message: 'All matters and notifications cleared' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -927,6 +984,17 @@ function buildMatterContext(matter) {
         .map(([k, v]) => `- ${k.replace(/([A-Z])/g, ' $1').trim()}: ${v}`)
         .join('\n');
 
+    // Hearings (structured data from docket uploads)
+    const hearings = (matter.hearings || [])
+        .sort((a, b) => new Date(a.date) - new Date(b.date))
+        .map(h => {
+            const dept = h.department ? ` — Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
+            const time = h.time ? ` at ${h.time}` : '';
+            const status = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
+            return `- ${h.type}: ${h.date}${time}${dept}${status}`;
+        })
+        .join('\n');
+
     return `CASE: ${matter.debtorName || 'Unknown Debtor'}
 Case Number: ${matter.caseNumber || 'Not yet assigned'}
 Client: ${matter.creditorName || 'Kinecta Federal Credit Union'}
@@ -945,6 +1013,9 @@ Defendant Response: ${matter.defendantResponse || 'Not set'}
 
 KEY DATES:
 ${dateEntries || 'No dates recorded'}
+
+COURT HEARINGS (from docket):
+${hearings || 'No hearings on file'}
 
 NEXT PENDING TASKS (first 5):
 ${pendingTasks.slice(0, 5).map(t => `- [${t.stage}] ${t.task} (Assigned: ${t.assignee})`).join('\n') || 'All tasks complete'}
@@ -1501,7 +1572,7 @@ function inferStageFromImport(matter, data, dates) {
     }
 
     // Map to stage
-    let inferredStage = colorCode ? COLOR_TO_STAGE[colorCode] : 1;
+    let inferredStage = colorCode ? COLOR_TO_STAGE[colorCode] : 1; // default to DVN stage for imports (past intake)
 
     // Stip = closed
     if (colorCode === 'stip') {
@@ -1930,6 +2001,290 @@ Important:
 });
 
 // ============================================================
+// DOCKET INTAKE — upload a docket PDF/image, extract hearings,
+// auto-match to a matter, and save structured hearing data
+// ============================================================
+
+// Fuzzy match extracted defendant name to existing matters
+function fuzzyMatchMatter(matters, extractedName, extractedCaseNum) {
+    if (!extractedName && !extractedCaseNum) return { match: null, confidence: 'none' };
+
+    const normalize = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+    const normName = normalize(extractedName);
+
+    // Try case number match first (most reliable)
+    if (extractedCaseNum) {
+        const normCase = normalize(extractedCaseNum);
+        const caseMatch = matters.find(m => normalize(m.caseNumber) === normCase && normCase.length > 3);
+        if (caseMatch) return { match: caseMatch, confidence: 'exact' };
+    }
+
+    if (!normName) return { match: null, confidence: 'none' };
+
+    // Exact name match
+    const exact = matters.find(m => normalize(m.debtorName) === normName);
+    if (exact) return { match: exact, confidence: 'exact' };
+
+    // Last name match — handle "Last, First" and "First Last" formats
+    const extractLastName = (name) => {
+        const n = normalize(name);
+        if (n.includes(',')) return n.split(',')[0].trim();
+        const parts = n.split(/\s+/);
+        return parts[parts.length - 1];
+    };
+
+    const extractedLast = extractLastName(extractedName);
+    const lastNameMatches = matters.filter(m => {
+        const matterLast = extractLastName(m.debtorName);
+        return matterLast === extractedLast && extractedLast.length > 2;
+    });
+
+    if (lastNameMatches.length === 1) return { match: lastNameMatches[0], confidence: 'likely' };
+
+    // If multiple last name matches, try first name too
+    if (lastNameMatches.length > 1) {
+        const extractFirstName = (name) => {
+            const n = normalize(name);
+            if (n.includes(',')) {
+                const parts = n.split(',');
+                return parts[1] ? parts[1].trim().split(/\s+/)[0] : '';
+            }
+            return n.split(/\s+/)[0];
+        };
+        const extractedFirst = extractFirstName(extractedName);
+        if (extractedFirst) {
+            const fullMatch = lastNameMatches.find(m => {
+                const mFirst = extractFirstName(m.debtorName);
+                return mFirst === extractedFirst || mFirst.startsWith(extractedFirst) || extractedFirst.startsWith(mFirst);
+            });
+            if (fullMatch) return { match: fullMatch, confidence: 'likely' };
+        }
+        // Return first last name match as possible
+        return { match: lastNameMatches[0], confidence: 'possible' };
+    }
+
+    // Substring / partial match
+    const partial = matters.find(m => {
+        const mn = normalize(m.debtorName);
+        return mn.includes(normName) || normName.includes(mn);
+    });
+    if (partial) return { match: partial, confidence: 'possible' };
+
+    return { match: null, confidence: 'none' };
+}
+
+// POST /api/docket/intake — extract hearings from uploaded docket
+router.post('/api/docket/intake', upload.array('files'), async (req, res) => {
+    try {
+        const files = req.files || [];
+        if (files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+
+        const apiKey = process.env.GOOGLE_API_KEY;
+        if (!apiKey) {
+            return res.status(400).json({ error: 'No GOOGLE_API_KEY configured. Docket extraction requires the Gemini API.' });
+        }
+
+        const docketPrompt = `You are a legal docket analysis assistant. You are analyzing a court docket or register of actions for a civil case.
+
+Extract ALL of the following information from this docket. Return a JSON object:
+
+{
+  "defendant": "full name of the defendant/debtor as shown on the docket (Last, First Middle format preferred)",
+  "plaintiff": "plaintiff/creditor name",
+  "caseNumber": "the case number exactly as shown",
+  "courtName": "full court name",
+  "county": "county if shown",
+  "judge": "assigned judge if shown",
+  "hearings": [
+    {
+      "type": "the type of hearing — use one of: CMC, Trial, OSC, MSJ, Hearing, Status Conference, Motion, Demurrer, Ex Parte, Prove-Up, Default Judgment Hearing, or the specific type as labeled",
+      "date": "YYYY-MM-DD",
+      "time": "HH:MM AM/PM format if shown, or null",
+      "department": "department number/name (e.g. '19', 'Dept 19', 'Courtroom 3')",
+      "judge": "judge for this hearing if different from assigned judge",
+      "description": "full description as shown on docket (e.g. 'Case Management Conference')",
+      "status": "if the hearing has a result noted (e.g. 'Held', 'Continued', 'Vacated', 'Off Calendar'), include it here. If it's a future date with no result, use 'Scheduled'"
+    }
+  ],
+  "filings": [
+    {
+      "title": "document title as shown (e.g. 'Complaint', 'Proof of Service', 'Answer')",
+      "date": "YYYY-MM-DD",
+      "filedBy": "who filed it (Plaintiff, Defendant, Court, etc.)",
+      "description": "any additional detail"
+    }
+  ]
+}
+
+IMPORTANT RULES:
+- Extract EVERY hearing date listed on the docket, whether past or future
+- For each hearing, always include the department number if shown
+- Pay close attention to time formats — convert to HH:MM AM/PM
+- For dates, use YYYY-MM-DD format
+- If a hearing was continued to a new date, list BOTH the original (status: "Continued") and new date (status: "Scheduled")
+- Extract ALL filings/documents listed in the register of actions
+- If this doesn't appear to be a court docket, still extract whatever case/hearing info you can find
+- Return ONLY valid JSON, no other text`;
+
+        // Send to Gemini
+        const parts = [{ text: docketPrompt }];
+        for (const f of files) {
+            parts.push({
+                inline_data: {
+                    mime_type: f.mimetype,
+                    data: f.buffer.toString('base64')
+                }
+            });
+        }
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts }],
+                generationConfig: { temperature: 0.0, response_mime_type: 'application/json' }
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            return res.status(response.status).json({ error: 'Gemini API error', details: errText });
+        }
+
+        const result = await response.json();
+        let extracted = {};
+        try {
+            let text = result.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+            const match = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
+            if (match) text = match[1];
+            extracted = JSON.parse(text);
+        } catch (e) {
+            return res.status(500).json({ error: 'Failed to parse docket extraction result', raw: result });
+        }
+
+        // Fuzzy match to an existing matter
+        const matters = await listMatters();
+        const { match: matchedMatter, confidence } = fuzzyMatchMatter(
+            matters,
+            extracted.defendant,
+            extracted.caseNumber
+        );
+
+        res.json({
+            success: true,
+            extracted,
+            matchedMatter: matchedMatter ? {
+                id: matchedMatter.id,
+                debtorName: matchedMatter.debtorName,
+                caseNumber: matchedMatter.caseNumber,
+                currentStage: matchedMatter.currentStage,
+                stageName: getStageLabel(matchedMatter.currentStage),
+                status: matchedMatter.status
+            } : null,
+            matchConfidence: confidence,
+            allMatters: matters.map(m => ({ id: m.id, debtorName: m.debtorName, caseNumber: m.caseNumber }))
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/docket/save — save extracted docket data to a specific matter
+router.post('/api/docket/save', async (req, res) => {
+    try {
+        const { matterId, hearings, filings, caseNumber, courtName, county, judge } = req.body;
+        if (!matterId) return res.status(400).json({ error: 'matterId is required' });
+
+        const matter = await readMatter(matterId);
+
+        // Update case info if we have it and matter doesn't
+        if (caseNumber && !matter.caseNumber) matter.caseNumber = caseNumber;
+        if (courtName && !matter.courtName) matter.courtName = courtName;
+        if (county && !matter.courtCounty) matter.courtCounty = county;
+
+        const now = new Date().toISOString();
+        let savedHearings = 0;
+        let savedFilings = 0;
+
+        // Save hearings — both to hearings[] and as events
+        if (hearings && Array.isArray(hearings)) {
+            for (const h of hearings) {
+                const hearingId = crypto.randomUUID();
+
+                // Add to structured hearings array
+                matter.hearings.push({
+                    id: hearingId,
+                    type: h.type || 'Hearing',
+                    date: h.date,
+                    time: h.time || null,
+                    department: h.department || null,
+                    judge: h.judge || judge || null,
+                    description: h.description || h.type || 'Hearing',
+                    status: h.status || 'Scheduled',
+                    source: 'docket_upload',
+                    uploadedAt: now
+                });
+
+                // Also add as timeline event
+                const deptStr = h.department ? ` — Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
+                const timeStr = h.time ? ` at ${h.time}` : '';
+                const statusStr = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
+                matter.events.push({
+                    id: crypto.randomUUID(),
+                    type: 'hearing',
+                    title: `${h.type || 'Hearing'}${deptStr}${statusStr}`,
+                    description: `${h.description || h.type || 'Hearing'}${timeStr}${deptStr}. Source: docket upload.`,
+                    date: h.date || now,
+                    addedBy: 'extraction',
+                    createdAt: now
+                });
+                savedHearings++;
+            }
+        }
+
+        // Save filings as timeline events
+        if (filings && Array.isArray(filings)) {
+            for (const f of filings) {
+                matter.events.push({
+                    id: crypto.randomUUID(),
+                    type: 'filing',
+                    title: f.title || 'Filing',
+                    description: [f.description, f.filedBy ? `Filed by: ${f.filedBy}` : ''].filter(Boolean).join('. ') + '. Source: docket upload.',
+                    date: f.date || now,
+                    addedBy: 'extraction',
+                    createdAt: now
+                });
+                savedFilings++;
+            }
+        }
+
+        // Log the intake
+        matter.events.push({
+            id: crypto.randomUUID(),
+            type: 'note',
+            title: 'Docket uploaded and processed',
+            description: `Extracted ${savedHearings} hearing(s) and ${savedFilings} filing(s) from docket upload.`,
+            date: now,
+            addedBy: 'system',
+            createdAt: now
+        });
+
+        matter.updatedAt = now;
+        await writeMatter(matter.id, matter);
+
+        res.json({
+            success: true,
+            savedHearings,
+            savedFilings,
+            matter
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============================================================
 // GLOBAL CHAT (cross-matter AI assistant)
 // ============================================================
 
@@ -2000,11 +2355,22 @@ function buildAllMattersContext(matters) {
             .map(e => `${e.title} (${new Date(e.date).toLocaleDateString()})`)
             .join('; ');
 
+        // Include hearings in global context
+        const hearingsSummary = (m.hearings || [])
+            .sort((a, b) => new Date(a.date) - new Date(b.date))
+            .map(h => {
+                const dept = h.department ? ` Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
+                const status = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
+                return `${h.type}: ${h.date}${dept}${status}`;
+            })
+            .join('; ');
+
         return `--- ${m.debtorName || 'Unknown'} ---
 Case#: ${m.caseNumber || 'Pending'} | Stage: ${stageName} (${completedTasks}/${totalTasks}) | Amount: ${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : 'N/A'}
 Loan: ${m.loanType || '?'} | Court: ${m.courtName || 'TBD'} | Status: ${m.status}${m.statusText ? ' - ' + m.statusText : ''}
 Account: ${m.accountNumber || '?'} | Service: ${m.serviceType || '?'} | Def. Response: ${m.defendantResponse || '?'}
 Dates: ${dateEntries || 'None'}
+Hearings: ${hearingsSummary || 'None on file'}
 Next tasks: ${pendingTasks.slice(0, 3).join(' → ') || 'All complete'}
 Recent: ${recentEvents || 'No events'}
 Notes: ${m.notes || 'None'}`;
