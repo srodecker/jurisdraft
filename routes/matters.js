@@ -49,11 +49,11 @@ if (!useSupabase) {
 // ============================================================
 
 const TEAM_MEMBERS = [
-    { id: 'shane', name: 'Shane Rodecker', role: 'Paralegal', email: 'srodecker@wrightlegal.net' },
-    { id: 'darius', name: 'Darius Ghomashchi', role: 'Attorney', email: 'sghomashchi@wrightlegal.net' },
-    { id: 'eric', name: 'Eric W. Cha', role: 'Attorney', email: 'echa@wrightlegal.net' },
-    { id: 'miguel', name: 'Miguel Villanueva', role: 'Paralegal', email: 'mvillanueva@wrightlegal.net' },
-    { id: 'adriana', name: 'Adriana Barrett', role: 'Secretary', email: '' }
+    { id: 'shane', name: 'Shane Rodecker', role: 'Filing/Tracking', email: 'srodecker@wrightlegal.net' },
+    { id: 'darius', name: 'Darius Ghomashchi', role: 'Attorney (Oversight)', email: 'sghomashchi@wrightlegal.net' },
+    { id: 'miguel', name: 'Miguel Villanueva', role: 'Drafting', email: 'mvillanueva@wrightlegal.net' },
+    { id: 'michelle', name: 'Michelle', role: 'MRR / DVN Review', email: '' },
+    { id: 'sam', name: 'Sam', role: 'Intake', email: '' }
 ];
 
 // ============================================================
@@ -71,13 +71,7 @@ const WORKFLOW_CONFIG = {
         name: 'Sabaa "Darius" Ghomashchi, Esq.',
         sbn: '352285',
         email: 'sghomashchi@wrightlegal.net',
-        secretary: 'Adriana Barrett'
-    },
-    secondAttorney: {
-        name: 'Eric W. Cha, Esq.',
-        sbn: '331218',
-        email: 'echa@wrightlegal.net',
-        secretary: 'Kim Walsh'
+        secretary: 'Shane Rodecker'
     },
     contacts: {
         processServer: { name: 'Eddie', company: 'Nationwide Legal', email: 'wright@nationwidelegal.com' },
@@ -92,16 +86,33 @@ const WORKFLOW_CONFIG = {
 };
 
 // Workflow stage definitions with checklist items and default assignments
+// Aligned to actual team workflow: Sam (Intake), Miguel (Drafting), Michelle (MRR/DVN Review), Shane (Filing/Tracking), Darius (Oversight)
 const WORKFLOW_STAGES = [
+    {
+        id: 'intake',
+        number: 0,
+        name: 'Intake',
+        description: 'Matt emails referral — Sam enters info, pings team',
+        tasks: [
+            { id: 'sam_enters_info', label: 'Enter matter info from Matt\'s referral email', assignee: 'sam' },
+            { id: 'shane_log_spreadsheet', label: 'Add matter to spreadsheet', assignee: 'shane' },
+            { id: 'miguel_prep_drafts', label: 'Triggered to prep drafts', assignee: 'miguel' },
+            { id: 'darius_legal_review', label: 'Legal review — determine course of action', assignee: 'darius', needsReview: true }
+        ]
+    },
     {
         id: 'dvn_letter',
         number: 1,
         name: 'DVN Letter',
+        description: 'Miguel drafts DVN → Michelle reviews → Shane mails',
         tasks: [
-            { id: 'print_mail_dvn', label: 'Print and mail DVN Letter', assignee: 'shane' },
-            { id: 'save_dvn_pdf', label: 'Print DVN Letter to PDF and save in correspondence folder', assignee: 'shane' },
+            { id: 'draft_dvn', label: 'Draft DVN Letter', assignee: 'miguel' },
+            { id: 'review_dvn', label: 'Review DVN (MRR)', assignee: 'michelle', needsReview: true },
+            { id: 'dvn_ready_ping', label: 'Ping Shane: DVN Ready', assignee: 'michelle' },
+            { id: 'print_mail_dvn', label: 'Mail DVN Letter', assignee: 'shane' },
+            { id: 'email_client', label: 'Email DVN copy to Matt (client)', assignee: 'shane' },
             { id: 'calendar_response', label: 'Calendar response date in PL', assignee: 'shane' },
-            { id: 'email_client', label: 'Email DVN Letter to client', assignee: 'shane' },
+            { id: 'save_dvn_pdf', label: 'Print DVN Letter to PDF and save in correspondence folder', assignee: 'shane' },
             { id: 'add_spreadsheet', label: 'Add to spreadsheet with $$ amounts and response date', assignee: 'shane' }
         ]
     },
@@ -109,8 +120,9 @@ const WORKFLOW_STAGES = [
         id: 'file_complaint',
         number: 2,
         name: 'File Complaint',
+        description: 'Miguel drafts complaint → Shane files',
         tasks: [
-            { id: 'prepare_complaint', label: 'Prepare Complaint with Summons, Civil Case Cover Sheet, and local court forms', assignee: 'shane' },
+            { id: 'draft_complaint', label: 'Draft Complaint with Summons, Civil Case Cover Sheet, and local court forms', assignee: 'miguel' },
             { id: 'attorney_approval', label: 'Get approval from Darius to file', assignee: 'darius', needsReview: true },
             { id: 'file_onelegal', label: 'File via Onelegal', assignee: 'shane' },
             { id: 'add_case_number', label: 'When received: Add case number to PL with date', assignee: 'shane' },
@@ -123,13 +135,17 @@ const WORKFLOW_STAGES = [
         id: 'service_of_summons',
         number: 3,
         name: 'Service of Summons & Complaint',
+        description: 'Shane sends to NW Legal → checks service status → if failed, pings Darius for pub decision',
         tasks: [
             { id: 'prepare_buckslip', label: 'Prepare NW Buckslip for Service', assignee: 'shane' },
             { id: 'check_address', label: 'Check address in client opening email, DVN Letter, Experian Credit Report (Client docs)', assignee: 'shane' },
             { id: 'lexis_search', label: 'Do Lexis Search and save in Client Documents', assignee: 'shane' },
             { id: 'confirm_address', label: 'Confirm service address with attorney', assignee: 'darius', needsReview: true },
             { id: 'email_nationwide', label: 'Email NW buckslip + service package to Eddie at wright@nationwidelegal.com', assignee: 'shane' },
+            { id: 'service_successful', label: 'Service successful?', assignee: 'shane' },
+            { id: 'pub_request', label: 'If service failed: Ping Darius for publish/service decision', assignee: 'darius', needsReview: true },
             { id: 'receive_pos', label: 'Receive Proof of Service from Eddie (personal or substituted service)', assignee: 'shane' },
+            { id: 'file_pos', label: 'File POS & ping team', assignee: 'shane' },
             { id: 'calendar_served', label: 'Calendar "Complaint served by hand/substituted service"', assignee: 'shane' },
             { id: 'add_answer_due', label: 'Add Answer due date to spreadsheet', assignee: 'shane' }
         ]
@@ -138,9 +154,13 @@ const WORKFLOW_STAGES = [
         id: 'answer_response',
         number: 4,
         name: 'Answer/Response Due',
+        description: 'Check if debtor answered — if yes: Darius negotiates, Miguel preps discovery. If no: proceed to default.',
         tasks: [
             { id: 'check_answer', label: 'Check if Answer/Response was served', assignee: 'shane' },
-            { id: 'calendar_answer', label: 'If Answer served: Calendar "Answer served on [date], should we prepare discovery?"', assignee: 'shane' },
+            { id: 'save_answer_prolaw', label: 'If Answer filed: Save to ProLaw & ping Darius/Miguel', assignee: 'shane' },
+            { id: 'darius_negotiate', label: 'Negotiate with debtor/debtor\'s counsel', assignee: 'darius' },
+            { id: 'miguel_discovery', label: 'Prep discovery', assignee: 'miguel' },
+            { id: 'calendar_answer', label: 'Calendar "Answer served on [date], should we prepare discovery?"', assignee: 'shane' },
             { id: 'add_answer_date', label: 'Add Answer date to spreadsheet and Answer Chart', assignee: 'shane' }
         ]
     },
@@ -148,35 +168,42 @@ const WORKFLOW_STAGES = [
         id: 'negotiations',
         number: 5,
         name: 'Negotiations & Stipulated Judgment',
-        description: 'If Borrower or attorney reaches Darius for settlement',
+        description: 'If Borrower or attorney reaches Darius for settlement — Miguel preps stip judgment',
         tasks: [
-            { id: 'prepare_stip', label: 'Prepare Stipulated Judgment', assignee: 'shane' },
+            { id: 'prepare_stip', label: 'Prepare Stipulated Judgment', assignee: 'miguel' },
+            { id: 'stip_ping_shane', label: 'Ping Shane: Stip Judgment ready', assignee: 'miguel' },
             { id: 'both_sign', label: 'Both parties sign Stipulated Judgment', assignee: 'darius' },
             { id: 'submit_court', label: 'Submit Stipulated Judgment to court', assignee: 'shane' },
             { id: 'judge_signs', label: 'Judge signs Stipulated Judgment', assignee: 'shane' },
             { id: 'notice_entry', label: 'Prepare Notice of Entry of Stipulated Judgment — file and serve', assignee: 'shane' },
+            { id: 'darius_review_stip', label: 'Darius reviews notice/abstract', assignee: 'darius', needsReview: true },
             { id: 'abstract_stip', label: 'Prepare Abstract of Judgment (per Stipulation) and file', assignee: 'shane' },
+            { id: 'file_serve_stip', label: 'File/serve & ping Joyce', assignee: 'shane' },
             { id: 'email_recording', label: 'When filed: Email to Joyce Copeland Clark for recording', assignee: 'shane' },
-            { id: 'email_client_recorded', label: 'When recorded: Email to client', assignee: 'shane' }
+            { id: 'email_client_recorded', label: 'When recorded: Send abstract to Matt (client)', assignee: 'shane' }
         ]
     },
     {
         id: 'no_answer_default',
         number: 6,
         name: 'Default Judgment',
-        description: 'If no Answer/Response was filed',
+        description: 'If no Answer/Response — Shane preps default request, Darius reviews, Miguel preps judgment package',
         tasks: [
             { id: 'check_docket', label: 'Check docket for Answer/Response, save docket to Pleadings', assignee: 'shane' },
             { id: 'prepare_red', label: 'Prepare Request for Entry of Default (Judicial Council form)', assignee: 'shane' },
             { id: 'military_search', label: 'Do military search and save in Client Documents', assignee: 'shane' },
+            { id: 'darius_review_default', label: 'Darius reviews Request for Default', assignee: 'darius', needsReview: true },
             { id: 'file_serve_red', label: 'File and serve Request for Entry of Default', assignee: 'shane' },
             { id: 'save_default_pl', label: 'When conformed copy received: Save in PL', assignee: 'shane' },
             { id: 'email_accounting', label: 'Email "request fees/costs for default judgment" to Debbie Baugh or Bryce Hoyt, cc Darius and Miguel', assignee: 'shane' },
             { id: 'prepare_dismissal', label: 'Prepare Request for Dismissal as to Doe Defendants', assignee: 'shane' },
             { id: 'prepare_rcj', label: 'Prepare Request for Court Judgment', assignee: 'shane' },
             { id: 'miguel_declarations', label: 'Prepare Attorney Declaration, Client Declaration, and Proposed Judgment', assignee: 'miguel' },
+            { id: 'miguel_judgment_pkg', label: 'Prep judgment package & ping team', assignee: 'miguel' },
             { id: 'client_declaration', label: 'Attorney emails Client Declaration to Matthew Marquez (client) for signature', assignee: 'darius' },
             { id: 'attach_exhibits', label: 'Attach exhibits to Client Declaration (OCR and Bookmark), attach Exhibit 1 - Summons to Attorney Declaration', assignee: 'shane' },
+            { id: 'prep_final_judgment', label: 'Prep final judgment forms & ping Darius', assignee: 'shane' },
+            { id: 'darius_final_review', label: 'Darius reviews final judgment forms', assignee: 'darius', needsReview: true },
             { id: 'file_rcj', label: 'File: Request for Court Judgment', assignee: 'shane' },
             { id: 'file_client_decl', label: 'File: Client Declaration', assignee: 'shane' },
             { id: 'file_atty_decl', label: 'File: Attorney Declaration', assignee: 'shane' },
@@ -184,9 +211,12 @@ const WORKFLOW_STAGES = [
             { id: 'file_dismissal_does', label: 'File: Request for Dismissal (as to Doe Defendants only)', assignee: 'shane' },
             { id: 'receive_default_judgment', label: 'Receive entered Default Judgment', assignee: 'shane' },
             { id: 'email_judgment_atty', label: 'Email Default Judgment to Darius', assignee: 'shane' },
-            { id: 'email_judgment_client', label: 'Attorney or secretary emails Default Judgment to client', assignee: 'darius' },
-            { id: 'notice_entry_judgment', label: 'Prepare Notice of Entry of Judgment — file and serve (approve before filing)', assignee: 'shane' },
-            { id: 'abstract_judgment', label: 'Prepare Abstract of Judgment — file (approve before filing)', assignee: 'shane' }
+            { id: 'email_judgment_client', label: 'Email Default Judgment to client', assignee: 'darius' },
+            { id: 'notice_entry_judgment', label: 'Prep Notice of Entry of Judgment & ping Darius', assignee: 'shane' },
+            { id: 'darius_review_entry', label: 'Darius reviews Notice of Entry/Abstract', assignee: 'darius', needsReview: true },
+            { id: 'abstract_judgment', label: 'Prepare Abstract of Judgment — file', assignee: 'shane' },
+            { id: 'file_serve_judgment', label: 'File/serve & ping Joyce', assignee: 'shane' },
+            { id: 'send_abstract_client', label: 'Send abstract to Matt (client)', assignee: 'shane' }
         ]
     },
     {
@@ -416,7 +446,7 @@ function createMatterObject(data) {
         attorney: WORKFLOW_CONFIG.attorney.name,
         attorneyEmail: WORKFLOW_CONFIG.attorney.email,
         secretary: WORKFLOW_CONFIG.attorney.secretary,
-        currentStage: 1,
+        currentStage: 0,
         tasks,
         dates: {
             dvnSent: null,
@@ -1521,7 +1551,7 @@ function inferStageFromImport(matter, data, dates) {
     }
 
     // Map to stage
-    let inferredStage = colorCode ? COLOR_TO_STAGE[colorCode] : 1;
+    let inferredStage = colorCode ? COLOR_TO_STAGE[colorCode] : 1; // default to DVN stage for imports (past intake)
 
     // Stip = closed
     if (colorCode === 'stip') {
