@@ -288,6 +288,7 @@ const EVENT_TYPES = [
 // ============================================================
 
 async function readMatter(id) {
+    let matter;
     if (useSupabase) {
         const { data, error } = await supabase
             .from('matters')
@@ -295,11 +296,15 @@ async function readMatter(id) {
             .eq('id', id)
             .single();
         if (error) throw new Error('Matter not found');
-        return data.data;
+        matter = data.data;
+    } else {
+        const filePath = path.join(MATTERS_DIR, `${id}.json`);
+        const raw = await fs.readFile(filePath, 'utf-8');
+        matter = JSON.parse(raw);
     }
-    const filePath = path.join(MATTERS_DIR, `${id}.json`);
-    const raw = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(raw);
+    // Backward compat: ensure hearings array exists
+    if (!matter.hearings) matter.hearings = [];
+    return matter;
 }
 
 async function writeMatter(id, matter) {
@@ -465,6 +470,8 @@ function createMatterObject(data) {
         },
         // Timeline events: hearings, filings, correspondence, minute orders, etc.
         events: [],
+        // Structured hearings extracted from dockets
+        hearings: [],
         // Chat history for AI assistant
         chatHistory: [],
         notes: data.notes || '',
@@ -977,6 +984,17 @@ function buildMatterContext(matter) {
         .map(([k, v]) => `- ${k.replace(/([A-Z])/g, ' $1').trim()}: ${v}`)
         .join('\n');
 
+    // Hearings (structured data from docket uploads)
+    const hearings = (matter.hearings || [])
+        .sort((a, b) => new Date(a.date) - new Date(b.date))
+        .map(h => {
+            const dept = h.department ? ` — Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
+            const time = h.time ? ` at ${h.time}` : '';
+            const status = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
+            return `- ${h.type}: ${h.date}${time}${dept}${status}`;
+        })
+        .join('\n');
+
     return `CASE: ${matter.debtorName || 'Unknown Debtor'}
 Case Number: ${matter.caseNumber || 'Not yet assigned'}
 Client: ${matter.creditorName || 'Kinecta Federal Credit Union'}
@@ -995,6 +1013,9 @@ Defendant Response: ${matter.defendantResponse || 'Not set'}
 
 KEY DATES:
 ${dateEntries || 'No dates recorded'}
+
+COURT HEARINGS (from docket):
+${hearings || 'No hearings on file'}
 
 NEXT PENDING TASKS (first 5):
 ${pendingTasks.slice(0, 5).map(t => `- [${t.stage}] ${t.task} (Assigned: ${t.assignee})`).join('\n') || 'All tasks complete'}
@@ -1980,6 +2001,290 @@ Important:
 });
 
 // ============================================================
+// DOCKET INTAKE — upload a docket PDF/image, extract hearings,
+// auto-match to a matter, and save structured hearing data
+// ============================================================
+
+// Fuzzy match extracted defendant name to existing matters
+function fuzzyMatchMatter(matters, extractedName, extractedCaseNum) {
+    if (!extractedName && !extractedCaseNum) return { match: null, confidence: 'none' };
+
+    const normalize = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+    const normName = normalize(extractedName);
+
+    // Try case number match first (most reliable)
+    if (extractedCaseNum) {
+        const normCase = normalize(extractedCaseNum);
+        const caseMatch = matters.find(m => normalize(m.caseNumber) === normCase && normCase.length > 3);
+        if (caseMatch) return { match: caseMatch, confidence: 'exact' };
+    }
+
+    if (!normName) return { match: null, confidence: 'none' };
+
+    // Exact name match
+    const exact = matters.find(m => normalize(m.debtorName) === normName);
+    if (exact) return { match: exact, confidence: 'exact' };
+
+    // Last name match — handle "Last, First" and "First Last" formats
+    const extractLastName = (name) => {
+        const n = normalize(name);
+        if (n.includes(',')) return n.split(',')[0].trim();
+        const parts = n.split(/\s+/);
+        return parts[parts.length - 1];
+    };
+
+    const extractedLast = extractLastName(extractedName);
+    const lastNameMatches = matters.filter(m => {
+        const matterLast = extractLastName(m.debtorName);
+        return matterLast === extractedLast && extractedLast.length > 2;
+    });
+
+    if (lastNameMatches.length === 1) return { match: lastNameMatches[0], confidence: 'likely' };
+
+    // If multiple last name matches, try first name too
+    if (lastNameMatches.length > 1) {
+        const extractFirstName = (name) => {
+            const n = normalize(name);
+            if (n.includes(',')) {
+                const parts = n.split(',');
+                return parts[1] ? parts[1].trim().split(/\s+/)[0] : '';
+            }
+            return n.split(/\s+/)[0];
+        };
+        const extractedFirst = extractFirstName(extractedName);
+        if (extractedFirst) {
+            const fullMatch = lastNameMatches.find(m => {
+                const mFirst = extractFirstName(m.debtorName);
+                return mFirst === extractedFirst || mFirst.startsWith(extractedFirst) || extractedFirst.startsWith(mFirst);
+            });
+            if (fullMatch) return { match: fullMatch, confidence: 'likely' };
+        }
+        // Return first last name match as possible
+        return { match: lastNameMatches[0], confidence: 'possible' };
+    }
+
+    // Substring / partial match
+    const partial = matters.find(m => {
+        const mn = normalize(m.debtorName);
+        return mn.includes(normName) || normName.includes(mn);
+    });
+    if (partial) return { match: partial, confidence: 'possible' };
+
+    return { match: null, confidence: 'none' };
+}
+
+// POST /api/docket/intake — extract hearings from uploaded docket
+router.post('/api/docket/intake', upload.array('files'), async (req, res) => {
+    try {
+        const files = req.files || [];
+        if (files.length === 0) return res.status(400).json({ error: 'No files uploaded' });
+
+        const apiKey = process.env.GOOGLE_API_KEY;
+        if (!apiKey) {
+            return res.status(400).json({ error: 'No GOOGLE_API_KEY configured. Docket extraction requires the Gemini API.' });
+        }
+
+        const docketPrompt = `You are a legal docket analysis assistant. You are analyzing a court docket or register of actions for a civil case.
+
+Extract ALL of the following information from this docket. Return a JSON object:
+
+{
+  "defendant": "full name of the defendant/debtor as shown on the docket (Last, First Middle format preferred)",
+  "plaintiff": "plaintiff/creditor name",
+  "caseNumber": "the case number exactly as shown",
+  "courtName": "full court name",
+  "county": "county if shown",
+  "judge": "assigned judge if shown",
+  "hearings": [
+    {
+      "type": "the type of hearing — use one of: CMC, Trial, OSC, MSJ, Hearing, Status Conference, Motion, Demurrer, Ex Parte, Prove-Up, Default Judgment Hearing, or the specific type as labeled",
+      "date": "YYYY-MM-DD",
+      "time": "HH:MM AM/PM format if shown, or null",
+      "department": "department number/name (e.g. '19', 'Dept 19', 'Courtroom 3')",
+      "judge": "judge for this hearing if different from assigned judge",
+      "description": "full description as shown on docket (e.g. 'Case Management Conference')",
+      "status": "if the hearing has a result noted (e.g. 'Held', 'Continued', 'Vacated', 'Off Calendar'), include it here. If it's a future date with no result, use 'Scheduled'"
+    }
+  ],
+  "filings": [
+    {
+      "title": "document title as shown (e.g. 'Complaint', 'Proof of Service', 'Answer')",
+      "date": "YYYY-MM-DD",
+      "filedBy": "who filed it (Plaintiff, Defendant, Court, etc.)",
+      "description": "any additional detail"
+    }
+  ]
+}
+
+IMPORTANT RULES:
+- Extract EVERY hearing date listed on the docket, whether past or future
+- For each hearing, always include the department number if shown
+- Pay close attention to time formats — convert to HH:MM AM/PM
+- For dates, use YYYY-MM-DD format
+- If a hearing was continued to a new date, list BOTH the original (status: "Continued") and new date (status: "Scheduled")
+- Extract ALL filings/documents listed in the register of actions
+- If this doesn't appear to be a court docket, still extract whatever case/hearing info you can find
+- Return ONLY valid JSON, no other text`;
+
+        // Send to Gemini
+        const parts = [{ text: docketPrompt }];
+        for (const f of files) {
+            parts.push({
+                inline_data: {
+                    mime_type: f.mimetype,
+                    data: f.buffer.toString('base64')
+                }
+            });
+        }
+
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [{ parts }],
+                generationConfig: { temperature: 0.0, response_mime_type: 'application/json' }
+            })
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            return res.status(response.status).json({ error: 'Gemini API error', details: errText });
+        }
+
+        const result = await response.json();
+        let extracted = {};
+        try {
+            let text = result.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+            const match = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/```\s*([\s\S]*?)\s*```/);
+            if (match) text = match[1];
+            extracted = JSON.parse(text);
+        } catch (e) {
+            return res.status(500).json({ error: 'Failed to parse docket extraction result', raw: result });
+        }
+
+        // Fuzzy match to an existing matter
+        const matters = await listMatters();
+        const { match: matchedMatter, confidence } = fuzzyMatchMatter(
+            matters,
+            extracted.defendant,
+            extracted.caseNumber
+        );
+
+        res.json({
+            success: true,
+            extracted,
+            matchedMatter: matchedMatter ? {
+                id: matchedMatter.id,
+                debtorName: matchedMatter.debtorName,
+                caseNumber: matchedMatter.caseNumber,
+                currentStage: matchedMatter.currentStage,
+                stageName: getStageLabel(matchedMatter.currentStage),
+                status: matchedMatter.status
+            } : null,
+            matchConfidence: confidence,
+            allMatters: matters.map(m => ({ id: m.id, debtorName: m.debtorName, caseNumber: m.caseNumber }))
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/docket/save — save extracted docket data to a specific matter
+router.post('/api/docket/save', async (req, res) => {
+    try {
+        const { matterId, hearings, filings, caseNumber, courtName, county, judge } = req.body;
+        if (!matterId) return res.status(400).json({ error: 'matterId is required' });
+
+        const matter = await readMatter(matterId);
+
+        // Update case info if we have it and matter doesn't
+        if (caseNumber && !matter.caseNumber) matter.caseNumber = caseNumber;
+        if (courtName && !matter.courtName) matter.courtName = courtName;
+        if (county && !matter.courtCounty) matter.courtCounty = county;
+
+        const now = new Date().toISOString();
+        let savedHearings = 0;
+        let savedFilings = 0;
+
+        // Save hearings — both to hearings[] and as events
+        if (hearings && Array.isArray(hearings)) {
+            for (const h of hearings) {
+                const hearingId = crypto.randomUUID();
+
+                // Add to structured hearings array
+                matter.hearings.push({
+                    id: hearingId,
+                    type: h.type || 'Hearing',
+                    date: h.date,
+                    time: h.time || null,
+                    department: h.department || null,
+                    judge: h.judge || judge || null,
+                    description: h.description || h.type || 'Hearing',
+                    status: h.status || 'Scheduled',
+                    source: 'docket_upload',
+                    uploadedAt: now
+                });
+
+                // Also add as timeline event
+                const deptStr = h.department ? ` — Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
+                const timeStr = h.time ? ` at ${h.time}` : '';
+                const statusStr = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
+                matter.events.push({
+                    id: crypto.randomUUID(),
+                    type: 'hearing',
+                    title: `${h.type || 'Hearing'}${deptStr}${statusStr}`,
+                    description: `${h.description || h.type || 'Hearing'}${timeStr}${deptStr}. Source: docket upload.`,
+                    date: h.date || now,
+                    addedBy: 'extraction',
+                    createdAt: now
+                });
+                savedHearings++;
+            }
+        }
+
+        // Save filings as timeline events
+        if (filings && Array.isArray(filings)) {
+            for (const f of filings) {
+                matter.events.push({
+                    id: crypto.randomUUID(),
+                    type: 'filing',
+                    title: f.title || 'Filing',
+                    description: [f.description, f.filedBy ? `Filed by: ${f.filedBy}` : ''].filter(Boolean).join('. ') + '. Source: docket upload.',
+                    date: f.date || now,
+                    addedBy: 'extraction',
+                    createdAt: now
+                });
+                savedFilings++;
+            }
+        }
+
+        // Log the intake
+        matter.events.push({
+            id: crypto.randomUUID(),
+            type: 'note',
+            title: 'Docket uploaded and processed',
+            description: `Extracted ${savedHearings} hearing(s) and ${savedFilings} filing(s) from docket upload.`,
+            date: now,
+            addedBy: 'system',
+            createdAt: now
+        });
+
+        matter.updatedAt = now;
+        await writeMatter(matter.id, matter);
+
+        res.json({
+            success: true,
+            savedHearings,
+            savedFilings,
+            matter
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============================================================
 // GLOBAL CHAT (cross-matter AI assistant)
 // ============================================================
 
@@ -2050,11 +2355,22 @@ function buildAllMattersContext(matters) {
             .map(e => `${e.title} (${new Date(e.date).toLocaleDateString()})`)
             .join('; ');
 
+        // Include hearings in global context
+        const hearingsSummary = (m.hearings || [])
+            .sort((a, b) => new Date(a.date) - new Date(b.date))
+            .map(h => {
+                const dept = h.department ? ` Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
+                const status = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
+                return `${h.type}: ${h.date}${dept}${status}`;
+            })
+            .join('; ');
+
         return `--- ${m.debtorName || 'Unknown'} ---
 Case#: ${m.caseNumber || 'Pending'} | Stage: ${stageName} (${completedTasks}/${totalTasks}) | Amount: ${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : 'N/A'}
 Loan: ${m.loanType || '?'} | Court: ${m.courtName || 'TBD'} | Status: ${m.status}${m.statusText ? ' - ' + m.statusText : ''}
 Account: ${m.accountNumber || '?'} | Service: ${m.serviceType || '?'} | Def. Response: ${m.defendantResponse || '?'}
 Dates: ${dateEntries || 'None'}
+Hearings: ${hearingsSummary || 'None on file'}
 Next tasks: ${pendingTasks.slice(0, 3).join(' → ') || 'All complete'}
 Recent: ${recentEvents || 'No events'}
 Notes: ${m.notes || 'None'}`;

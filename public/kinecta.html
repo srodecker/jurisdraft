@@ -240,6 +240,100 @@
         .my-task-item:hover { color: var(--accent-primary); }
         .my-task-matter { color: var(--text-tertiary); font-size: 11px; margin-left: auto; }
 
+        /* Docket Intake */
+        .docket-drop-zone {
+            border: 2px dashed var(--border-primary);
+            border-radius: 12px;
+            padding: 48px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 200ms;
+            background: var(--bg-secondary);
+        }
+        .docket-drop-zone:hover, .docket-drop-zone.dragover {
+            border-color: var(--accent-primary);
+            background: var(--accent-primary-light);
+        }
+        .docket-drop-zone.processing {
+            pointer-events: none;
+            opacity: 0.7;
+        }
+        .docket-results { margin-top: 20px; }
+        .docket-match-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-primary);
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .docket-match-card.matched { border-color: var(--accent-success); }
+        .docket-match-card.no-match { border-color: var(--accent-warning); }
+        .docket-match-icon {
+            width: 36px; height: 36px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px; flex-shrink: 0;
+        }
+        .docket-match-icon.matched { background: var(--accent-success-light); color: var(--accent-success); }
+        .docket-match-icon.no-match { background: var(--accent-warning-light); color: #d97706; }
+        .confidence-badge {
+            font-size: 10px; font-weight: 600; text-transform: uppercase;
+            padding: 2px 6px; border-radius: 4px; letter-spacing: 0.03em;
+        }
+        .confidence-exact { background: var(--accent-success-light); color: var(--accent-success); }
+        .confidence-likely { background: var(--accent-primary-light); color: var(--accent-primary); }
+        .confidence-possible { background: var(--accent-warning-light); color: #d97706; }
+        .docket-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-primary);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 14px;
+        }
+        .docket-table th {
+            text-align: left; padding: 8px 14px; font-weight: 600;
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+            color: var(--text-tertiary); border-bottom: 1px solid var(--border-primary);
+            background: var(--bg-tertiary);
+        }
+        .docket-table td { padding: 8px 14px; border-bottom: 1px solid var(--border-secondary); }
+        .docket-table tr:last-child td { border-bottom: none; }
+        .docket-table input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent-primary); }
+        .docket-section-title {
+            font-size: 13px; font-weight: 600; margin: 16px 0 8px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .docket-recent { margin-top: 24px; }
+        .docket-recent-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 0; border-bottom: 1px solid var(--border-secondary);
+            font-size: 12px; color: var(--text-secondary);
+        }
+        .docket-recent-item:last-child { border-bottom: none; }
+        .spinner-inline {
+            display: inline-block; width: 18px; height: 18px;
+            border: 2px solid var(--border-primary);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast {
+            position: fixed; bottom: 24px; right: 24px; z-index: 300;
+            background: var(--accent-success); color: white;
+            padding: 12px 20px; border-radius: 8px;
+            font-size: 13px; font-weight: 500;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            animation: toastIn 200ms ease-out;
+        }
+        .toast.error { background: var(--accent-error); }
+        @keyframes toastIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
         /* Responsive */
         @media (max-width: 768px) {
             .nav-rail { display: none; }
@@ -292,6 +386,10 @@
                 <a class="nav-link active" id="navChatLink" onclick="showGlobalChat()" style="cursor:pointer;">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
                     AI Chat
+                </a>
+                <a class="nav-link" id="navDocketLink" onclick="showDocketIntake()" style="cursor:pointer;">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                    Docket Intake
                 </a>
                 <a class="nav-link" id="navCasesLink" onclick="showCasesView()" style="cursor:pointer;">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
@@ -355,6 +453,7 @@
                     <span id="chatToolbar">
                         <button class="btn btn-secondary btn-sm" onclick="clearGlobalChat()">Clear Chat</button>
                     </span>
+                    <span id="docketToolbar" style="display:none;"></span>
                 </div>
             </div>
 
@@ -383,6 +482,89 @@
                         <div style="display:flex;gap:8px;padding-top:12px;border-top:1px solid var(--border-primary);">
                             <textarea class="chat-input" id="globalChatInput" placeholder="Ask about any case... e.g. 'What's going on with Aguero?'" rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendGlobalChat();}"></textarea>
                             <button class="chat-send" id="globalChatSendBtn" onclick="sendGlobalChat()">Send</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- DOCKET INTAKE VIEW -->
+                <div id="docketIntakeView" style="display:none;">
+                    <div style="max-width:800px;margin:0 auto;">
+                        <h2 style="font-size:20px;font-weight:700;margin:0 0 4px;">Docket Intake</h2>
+                        <p style="font-size:13px;color:var(--text-secondary);margin:0 0 20px;">Upload a court docket PDF or image. The system will extract hearings, trial dates, and filings, then match them to the correct case.</p>
+
+                        <!-- Drop Zone -->
+                        <div class="docket-drop-zone" id="docketDropZone" onclick="document.getElementById('docketFileInput').click()">
+                            <svg width="40" height="40" fill="none" stroke="var(--text-tertiary)" viewBox="0 0 24 24" style="margin:0 auto 12px;display:block;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                            <div style="font-size:14px;font-weight:500;margin-bottom:4px;">Drop docket PDF or image here</div>
+                            <div style="font-size:12px;color:var(--text-tertiary);">or click to browse — supports PDF, JPG, PNG</div>
+                        </div>
+                        <input type="file" id="docketFileInput" accept=".pdf,.jpg,.jpeg,.png,.tiff,.bmp" multiple style="display:none" onchange="handleDocketUpload(this.files)" />
+
+                        <!-- Processing indicator -->
+                        <div id="docketProcessing" style="display:none;text-align:center;padding:32px;">
+                            <div class="spinner-inline" style="width:32px;height:32px;border-width:3px;margin:0 auto 12px;"></div>
+                            <div style="font-size:14px;font-weight:500;">Analyzing docket...</div>
+                            <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">Extracting hearings, dates, and filings</div>
+                        </div>
+
+                        <!-- Results -->
+                        <div id="docketResults" class="docket-results" style="display:none;">
+                            <!-- Match Card -->
+                            <div id="docketMatchCard"></div>
+
+                            <!-- Manual matter selector (shown when no match or user wants to change) -->
+                            <div id="docketManualSelect" style="display:none;margin-bottom:14px;">
+                                <label style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Select Matter:</label>
+                                <select id="docketMatterSelect" style="width:100%;background:var(--bg-tertiary);border:1px solid var(--border-primary);border-radius:6px;padding:8px 10px;font-size:13px;color:var(--text-primary);"></select>
+                            </div>
+
+                            <!-- Hearings Table -->
+                            <div id="docketHearingsSection" style="display:none;">
+                                <div class="docket-section-title">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                    Extracted Hearings
+                                </div>
+                                <table class="docket-table">
+                                    <thead><tr>
+                                        <th style="width:30px;"></th>
+                                        <th>Type</th>
+                                        <th>Date</th>
+                                        <th>Time</th>
+                                        <th>Department</th>
+                                        <th>Status</th>
+                                    </tr></thead>
+                                    <tbody id="docketHearingsBody"></tbody>
+                                </table>
+                            </div>
+
+                            <!-- Filings Table -->
+                            <div id="docketFilingsSection" style="display:none;">
+                                <div class="docket-section-title">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                    Extracted Filings
+                                </div>
+                                <table class="docket-table">
+                                    <thead><tr>
+                                        <th style="width:30px;"></th>
+                                        <th>Filing</th>
+                                        <th>Date</th>
+                                        <th>Filed By</th>
+                                    </tr></thead>
+                                    <tbody id="docketFilingsBody"></tbody>
+                                </table>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div style="display:flex;gap:8px;margin-top:16px;">
+                                <button class="btn btn-primary" id="docketSaveBtn" onclick="saveDocketData()">Save to Matter</button>
+                                <button class="btn btn-secondary" onclick="resetDocketIntake()">Upload Another</button>
+                            </div>
+                        </div>
+
+                        <!-- Recent Uploads -->
+                        <div class="docket-recent" id="docketRecentSection" style="display:none;">
+                            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-tertiary);margin-bottom:8px;">Recent Uploads</div>
+                            <div id="docketRecentList"></div>
                         </div>
                     </div>
                 </div>
@@ -486,6 +668,14 @@
                         <div class="info-card">
                             <h3>Key Dates</h3>
                             <div class="dates-grid" id="datesGrid"></div>
+                        </div>
+                        <!-- Court Hearings -->
+                        <div class="info-card" id="hearingsCard" style="display:none;">
+                            <h3>
+                                <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                                Court Hearings
+                            </h3>
+                            <div id="hearingsContent"></div>
                         </div>
                         <!-- Next Up -->
                         <div class="info-card">
@@ -923,11 +1113,14 @@ async function openMatter(id) {
     } catch(e) { alert('Failed to load matter'); return; }
 
     document.getElementById('globalChatView').style.display = 'none';
+    document.getElementById('docketIntakeView').style.display = 'none';
     document.getElementById('listView').style.display = 'none';
     document.getElementById('detailView').style.display = 'block';
     document.getElementById('casesToolbar').style.display = '';
     document.getElementById('chatToolbar').style.display = 'none';
+    document.getElementById('docketToolbar').style.display = 'none';
     document.getElementById('navChatLink').classList.remove('active');
+    document.getElementById('navDocketLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.add('active');
     currentView = 'detail';
     document.getElementById('breadcrumb').innerHTML = `<a onclick="showList()">All Cases</a><span class="sep">/</span><span class="current">${esc(currentMatter.debtorName || 'Matter')}</span>`;
@@ -938,11 +1131,14 @@ async function openMatter(id) {
 
 function showList() {
     document.getElementById('globalChatView').style.display = 'none';
+    document.getElementById('docketIntakeView').style.display = 'none';
     document.getElementById('listView').style.display = 'block';
     document.getElementById('detailView').style.display = 'none';
     document.getElementById('casesToolbar').style.display = '';
     document.getElementById('chatToolbar').style.display = 'none';
+    document.getElementById('docketToolbar').style.display = 'none';
     document.getElementById('navChatLink').classList.remove('active');
+    document.getElementById('navDocketLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.add('active');
     document.getElementById('breadcrumb').innerHTML = '<span class="current">All Cases</span>';
     currentView = 'cases';
@@ -1015,6 +1211,31 @@ function renderOverview() {
 
     // Dates
     renderDates();
+
+    // Hearings from docket uploads
+    const hearingsCard = document.getElementById('hearingsCard');
+    const hearingsContent = document.getElementById('hearingsContent');
+    const mHearings = (m.hearings || []).sort((a, b) => new Date(a.date) - new Date(b.date));
+    if (mHearings.length > 0) {
+        hearingsCard.style.display = 'block';
+        const today = new Date().toISOString().slice(0, 10);
+        hearingsContent.innerHTML = mHearings.map(h => {
+            const dateStr = h.date ? new Date(h.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+            const isFuture = h.date >= today;
+            const isPast = h.date < today;
+            const deptStr = h.department ? 'Dept ' + h.department.replace(/^Dept\.?\s*/i, '') : '';
+            const statusStr = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
+            const color = isPast ? 'var(--text-tertiary)' : 'var(--accent-primary)';
+            return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border-secondary);font-size:12px;${isPast ? 'opacity:0.6;' : ''}">
+                <span style="color:${color};font-weight:600;min-width:60px;">${esc(h.type || 'Hearing')}</span>
+                <span style="flex:1;${isFuture ? 'font-weight:500;' : ''}">${dateStr}${h.time ? ' at ' + esc(h.time) : ''}</span>
+                ${deptStr ? `<span style="color:var(--text-secondary);font-size:11px;">${esc(deptStr)}</span>` : ''}
+                ${statusStr ? `<span style="font-size:10px;color:var(--text-tertiary);">${esc(statusStr)}</span>` : ''}
+            </div>`;
+        }).join('');
+    } else {
+        hearingsCard.style.display = 'none';
+    }
 
     // Next Up — first 3 pending tasks
     const pending = [];
@@ -1388,12 +1609,15 @@ async function deleteMatter() {
 function showGlobalChat() {
     currentView = 'chat';
     document.getElementById('globalChatView').style.display = 'block';
+    document.getElementById('docketIntakeView').style.display = 'none';
     document.getElementById('listView').style.display = 'none';
     document.getElementById('detailView').style.display = 'none';
     document.getElementById('navChatLink').classList.add('active');
+    document.getElementById('navDocketLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.remove('active');
     document.getElementById('casesToolbar').style.display = 'none';
     document.getElementById('chatToolbar').style.display = '';
+    document.getElementById('docketToolbar').style.display = 'none';
     document.getElementById('breadcrumb').innerHTML = '<span class="current">AI Chat</span>';
     currentMatter = null;
     // Focus input
@@ -1403,12 +1627,15 @@ function showGlobalChat() {
 function showCasesView() {
     currentView = 'cases';
     document.getElementById('globalChatView').style.display = 'none';
+    document.getElementById('docketIntakeView').style.display = 'none';
     document.getElementById('listView').style.display = 'block';
     document.getElementById('detailView').style.display = 'none';
     document.getElementById('navChatLink').classList.remove('active');
+    document.getElementById('navDocketLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.add('active');
     document.getElementById('casesToolbar').style.display = '';
     document.getElementById('chatToolbar').style.display = 'none';
+    document.getElementById('docketToolbar').style.display = 'none';
     document.getElementById('breadcrumb').innerHTML = '<span class="current">All Cases</span>';
     currentMatter = null;
     loadMatters();
@@ -1522,6 +1749,282 @@ async function clearGlobalChat() {
         await authFetch('/api/chat/global/history', { method: 'DELETE' });
         renderGlobalChat([]);
     } catch(e) {}
+}
+
+// ============================================================
+// DOCKET INTAKE
+// ============================================================
+let docketExtracted = null;
+let docketMatchedMatterId = null;
+let docketAllMatters = [];
+let docketRecentUploads = [];
+
+function showDocketIntake() {
+    currentView = 'docket';
+    document.getElementById('globalChatView').style.display = 'none';
+    document.getElementById('docketIntakeView').style.display = 'block';
+    document.getElementById('listView').style.display = 'none';
+    document.getElementById('detailView').style.display = 'none';
+    document.getElementById('navChatLink').classList.remove('active');
+    document.getElementById('navDocketLink').classList.add('active');
+    document.getElementById('navCasesLink').classList.remove('active');
+    document.getElementById('casesToolbar').style.display = 'none';
+    document.getElementById('chatToolbar').style.display = 'none';
+    document.getElementById('docketToolbar').style.display = '';
+    document.getElementById('breadcrumb').innerHTML = '<span class="current">Docket Intake</span>';
+    currentMatter = null;
+}
+
+// Drag and drop setup
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+        const dz = document.getElementById('docketDropZone');
+        if (!dz) return;
+        dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+        dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+        dz.addEventListener('drop', e => {
+            e.preventDefault();
+            dz.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) handleDocketUpload(e.dataTransfer.files);
+        });
+    }, 500);
+});
+
+async function handleDocketUpload(files) {
+    if (!files || files.length === 0) return;
+
+    // Show processing, hide results
+    document.getElementById('docketDropZone').style.display = 'none';
+    document.getElementById('docketProcessing').style.display = 'block';
+    document.getElementById('docketResults').style.display = 'none';
+
+    const formData = new FormData();
+    for (const f of files) formData.append('files', f);
+
+    try {
+        const r = await authFetch('/api/docket/intake', { method: 'POST', body: formData });
+        const data = await r.json();
+
+        if (data.error) {
+            showToast(data.error, true);
+            resetDocketIntake();
+            return;
+        }
+
+        docketExtracted = data.extracted;
+        docketAllMatters = data.allMatters || [];
+
+        // Show results
+        document.getElementById('docketProcessing').style.display = 'none';
+        document.getElementById('docketResults').style.display = 'block';
+
+        // Render match card
+        renderDocketMatchCard(data.matchedMatter, data.matchConfidence);
+
+        // Store matched matter ID
+        docketMatchedMatterId = data.matchedMatter ? data.matchedMatter.id : null;
+
+        // Populate manual select dropdown
+        const sel = document.getElementById('docketMatterSelect');
+        sel.innerHTML = '<option value="">-- Select a matter --</option>' +
+            docketAllMatters.map(m => `<option value="${m.id}" ${m.id === docketMatchedMatterId ? 'selected' : ''}>${esc(m.debtorName)}${m.caseNumber ? ' (' + esc(m.caseNumber) + ')' : ''}</option>`).join('');
+        sel.onchange = () => { docketMatchedMatterId = sel.value; };
+
+        // Render hearings table
+        renderDocketHearings(docketExtracted.hearings || []);
+
+        // Render filings table
+        renderDocketFilings(docketExtracted.filings || []);
+
+    } catch (e) {
+        showToast('Upload failed: ' + e.message, true);
+        resetDocketIntake();
+    }
+}
+
+function renderDocketMatchCard(match, confidence) {
+    const card = document.getElementById('docketMatchCard');
+    const manualSel = document.getElementById('docketManualSelect');
+
+    if (match && confidence !== 'none') {
+        card.innerHTML = `<div class="docket-match-card matched">
+            <div class="docket-match-icon matched">&#10003;</div>
+            <div style="flex:1;">
+                <div style="font-size:14px;font-weight:600;">${esc(match.debtorName)}</div>
+                <div style="font-size:12px;color:var(--text-secondary);">
+                    Case: ${esc(match.caseNumber || 'Pending')} &middot; Stage: ${esc(match.stageName)} &middot; ${esc(match.status)}
+                </div>
+            </div>
+            <span class="confidence-badge confidence-${confidence}">${confidence} match</span>
+            <button class="btn-ghost" onclick="document.getElementById('docketManualSelect').style.display='block'" style="font-size:11px;">Change</button>
+        </div>`;
+        manualSel.style.display = 'none';
+    } else {
+        card.innerHTML = `<div class="docket-match-card no-match">
+            <div class="docket-match-icon no-match">?</div>
+            <div style="flex:1;">
+                <div style="font-size:14px;font-weight:600;">No matching matter found</div>
+                <div style="font-size:12px;color:var(--text-secondary);">
+                    Defendant on docket: ${esc(docketExtracted.defendant || 'Unknown')} — Select a matter below
+                </div>
+            </div>
+        </div>`;
+        manualSel.style.display = 'block';
+    }
+}
+
+function renderDocketHearings(hearings) {
+    const section = document.getElementById('docketHearingsSection');
+    const tbody = document.getElementById('docketHearingsBody');
+    if (!hearings || hearings.length === 0) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    tbody.innerHTML = hearings.map((h, i) => {
+        const dateStr = h.date ? new Date(h.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+        const isFuture = h.date && new Date(h.date) >= new Date(new Date().toISOString().slice(0, 10));
+        const statusColor = h.status === 'Scheduled' ? 'var(--accent-primary)' : 'var(--text-secondary)';
+        return `<tr>
+            <td><input type="checkbox" checked data-hearing-idx="${i}" class="docket-hearing-chk" /></td>
+            <td style="font-weight:500;">${esc(h.type || 'Hearing')}</td>
+            <td style="${isFuture ? 'color:var(--accent-primary);font-weight:500;' : ''}">${dateStr}</td>
+            <td>${esc(h.time || '-')}</td>
+            <td>${esc(h.department || '-')}</td>
+            <td style="color:${statusColor};font-size:12px;">${esc(h.status || '-')}</td>
+        </tr>`;
+    }).join('');
+}
+
+function renderDocketFilings(filings) {
+    const section = document.getElementById('docketFilingsSection');
+    const tbody = document.getElementById('docketFilingsBody');
+    if (!filings || filings.length === 0) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    tbody.innerHTML = filings.map((f, i) => {
+        const dateStr = f.date ? new Date(f.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+        return `<tr>
+            <td><input type="checkbox" checked data-filing-idx="${i}" class="docket-filing-chk" /></td>
+            <td style="font-weight:500;">${esc(f.title || 'Filing')}</td>
+            <td>${dateStr}</td>
+            <td>${esc(f.filedBy || '-')}</td>
+        </tr>`;
+    }).join('');
+}
+
+async function saveDocketData() {
+    const matterId = docketMatchedMatterId || document.getElementById('docketMatterSelect').value;
+    if (!matterId) {
+        showToast('Please select a matter first', true);
+        return;
+    }
+
+    // Gather checked hearings
+    const hearings = [];
+    document.querySelectorAll('.docket-hearing-chk:checked').forEach(chk => {
+        const idx = parseInt(chk.dataset.hearingIdx);
+        if (docketExtracted.hearings && docketExtracted.hearings[idx]) {
+            hearings.push(docketExtracted.hearings[idx]);
+        }
+    });
+
+    // Gather checked filings
+    const filings = [];
+    document.querySelectorAll('.docket-filing-chk:checked').forEach(chk => {
+        const idx = parseInt(chk.dataset.filingIdx);
+        if (docketExtracted.filings && docketExtracted.filings[idx]) {
+            filings.push(docketExtracted.filings[idx]);
+        }
+    });
+
+    if (hearings.length === 0 && filings.length === 0) {
+        showToast('No items selected to save', true);
+        return;
+    }
+
+    const btn = document.getElementById('docketSaveBtn');
+    btn.disabled = true;
+    btn.textContent = 'Saving...';
+
+    try {
+        const r = await authFetch('/api/docket/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                matterId,
+                hearings,
+                filings,
+                caseNumber: docketExtracted.caseNumber,
+                courtName: docketExtracted.courtName,
+                county: docketExtracted.county,
+                judge: docketExtracted.judge
+            })
+        });
+        const data = await r.json();
+
+        if (data.error) {
+            showToast(data.error, true);
+        } else {
+            const matterName = docketAllMatters.find(m => m.id === matterId)?.debtorName || 'matter';
+            showToast(`Saved ${data.savedHearings} hearing(s) and ${data.savedFilings} filing(s) to ${matterName}`);
+
+            // Add to recent uploads
+            docketRecentUploads.unshift({
+                debtorName: matterName,
+                hearings: data.savedHearings,
+                filings: data.savedFilings,
+                time: new Date()
+            });
+            renderDocketRecent();
+            resetDocketIntake();
+        }
+    } catch (e) {
+        showToast('Save failed: ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Save to Matter';
+    }
+}
+
+function resetDocketIntake() {
+    document.getElementById('docketDropZone').style.display = '';
+    document.getElementById('docketProcessing').style.display = 'none';
+    document.getElementById('docketResults').style.display = 'none';
+    document.getElementById('docketFileInput').value = '';
+    docketExtracted = null;
+    docketMatchedMatterId = null;
+}
+
+function renderDocketRecent() {
+    const section = document.getElementById('docketRecentSection');
+    const list = document.getElementById('docketRecentList');
+    if (docketRecentUploads.length === 0) { section.style.display = 'none'; return; }
+    section.style.display = 'block';
+
+    list.innerHTML = docketRecentUploads.map(u => {
+        const ago = getTimeAgo(u.time);
+        return `<div class="docket-recent-item">
+            <svg width="12" height="12" fill="none" stroke="var(--accent-success)" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            <span style="font-weight:500;color:var(--text-primary);">${esc(u.debtorName)}</span>
+            <span>&mdash; ${u.hearings} hearing(s), ${u.filings} filing(s)</span>
+            <span style="margin-left:auto;font-size:11px;color:var(--text-tertiary);">${ago}</span>
+        </div>`;
+    }).join('');
+}
+
+function getTimeAgo(date) {
+    const s = Math.floor((new Date() - new Date(date)) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' hr ago';
+    return Math.floor(s / 86400) + ' day(s) ago';
+}
+
+function showToast(msg, isError) {
+    const el = document.createElement('div');
+    el.className = 'toast' + (isError ? ' error' : '');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 4000);
 }
 
 // ============================================================
