@@ -895,9 +895,17 @@ router.post('/api/matters/:id/chat', async (req, res) => {
         if (apiKey) {
             const systemPrompt = `You are a legal case assistant for Wright Legal Group. You help manage collection cases for Kinecta Federal Credit Union.
 
+Today's date is ${new Date().toISOString().slice(0, 10)}.
+
 You have access to the following case information:
 
 ${matterContext}
+
+RESPONSE STYLE:
+- Be concise, direct, and professional. This tool is shown to supervisors.
+- Lead with the answer, not preamble. Do not repeat the question back.
+- When asked "what is the next [hearing/date/deadline]?" — give ONLY the single next one, cleanly formatted.
+- Use bold for key info (names, dates, amounts). Use bullet points for short lists.
 
 Your role:
 - Answer questions about this specific case
@@ -906,8 +914,7 @@ Your role:
 - Help with date calculations (e.g., response deadlines, service deadlines)
 - Provide guidance on California collection law procedures
 - Draft brief emails or notes when asked
-
-Be concise and professional. Use the actual case data to inform your answers. If you don't know something, say so.`;
+- If you don't know something, say so.`;
 
             const chatMessages = recentChat.map(m => ({
                 role: m.role === 'user' ? 'user' : 'model',
@@ -2587,6 +2594,8 @@ router.post('/api/chat/global', async (req, res) => {
         if (apiKey) {
             const systemPrompt = `You are a legal case management assistant for Wright Legal Group, managing debt collection cases for Kinecta Federal Credit Union.
 
+Today's date is ${new Date().toISOString().slice(0, 10)}.
+
 You have access to ALL ${matters.length} active cases. Here is the full case database:
 
 ${allContext}
@@ -2596,6 +2605,19 @@ ${TEAM_MEMBERS.map(m => `- ${m.name} (${m.role})`).join('\n')}
 
 WORKFLOW STAGES:
 ${WORKFLOW_STAGES.map(s => `${s.number}. ${s.name}`).join('\n')}
+
+RESPONSE STYLE:
+- Be concise, direct, and professional. This tool is shown to supervisors and clients.
+- Use clean formatting: bold for names/dates, bullet points for short lists.
+- CRITICAL: When the user asks "what is the NEXT [hearing/CMC/trial/deadline]?" — give them ONLY THE SINGLE NEXT ONE. Not a list of all upcoming ones. Just the soonest one after today's date. Format it cleanly like:
+  **Debtor Name** (Case# XXXXX)
+  CMC — April 14, 2026 at 8:30 AM
+  Dept 19, [Court Name]
+- Only list multiple items when the user asks "all", "list", "upcoming", or "what CMCs do we have?"
+- When asked about a specific case, lead with the most important info (next hearing, current stage, what needs to happen next).
+- When multiple items share the same soonest date, include all of them.
+- Always sort chronologically when listing dates.
+- Do not repeat back the question. Just answer it.
 
 Your role:
 - Answer questions about ANY case or across ALL cases
@@ -2607,7 +2629,6 @@ Your role:
 - When asked about a specific person/debtor, search through all cases to find them (use partial name matching)
 - Provide workload summaries by team member when asked
 - Track docket uploads: each matter has a "Docket uploads" field showing when dockets were uploaded and what was extracted. When asked "which matters did I upload dockets for?" or "list all docket uploads", compile a list from the Docket uploads field across all matters.
-- Be concise and direct. Use bullet points for lists.
 - When referencing cases, always mention the debtor name and case number if available.`;
 
             const fullHistory = await getGlobalChatHistory();
