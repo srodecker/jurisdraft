@@ -2013,6 +2013,52 @@ Important:
 // auto-match to a matter, and save structured hearing data
 // ============================================================
 
+// Normalize date strings to YYYY-MM-DD format
+// Handles: MM/DD/YYYY, M/D/YYYY, YYYY-MM-DD, and dates with trailing text
+// e.g. "07/10/2026 Court Trial" → "2026-07-10"
+function normalizeDate(raw) {
+    if (!raw) return null;
+    const s = String(raw).trim();
+
+    // Try MM/DD/YYYY or M/D/YYYY (extract from surrounding text)
+    const mmddyyyy = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mmddyyyy) {
+        const [, mm, dd, yyyy] = mmddyyyy;
+        const m = parseInt(mm, 10), d = parseInt(dd, 10), y = parseInt(yyyy, 10);
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && y >= 1900 && y <= 2100) {
+            return `${yyyy}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        }
+    }
+
+    // Try YYYY-MM-DD (extract from surrounding text)
+    const isoMatch = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (isoMatch) {
+        const [, yyyy, mm, dd] = isoMatch;
+        const m = parseInt(mm, 10), d = parseInt(dd, 10), y = parseInt(yyyy, 10);
+        if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && y >= 1900 && y <= 2100) {
+            return `${yyyy}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        }
+    }
+
+    return null; // unparseable
+}
+
+// Known hearing types for filtering extraction results
+const HEARING_TYPES = [
+    'cmc', 'case management conference',
+    'trial', 'court trial', 'jury trial', 'bench trial',
+    'osc', 'order to show cause',
+    'msj', 'motion for summary judgment', 'motion: summary judgment', 'summary judgment',
+    'hearing', 'motion hearing',
+    'status conference', 'final status conference', 'fsc',
+    'motion', 'motion to compel', 'motion to dismiss', 'motion to quash',
+    'demurrer',
+    'ex parte', 'ex parte hearing',
+    'prove-up', 'prove up', 'default prove-up',
+    'default judgment hearing',
+    'arbitration', 'mediation',
+];
+
 // Fuzzy match extracted defendant name to existing matters
 function fuzzyMatchMatter(matters, extractedName, extractedCaseNum) {
     if (!extractedName && !extractedCaseNum) return { match: null, confidence: 'none' };
@@ -2224,6 +2270,40 @@ IMPORTANT RULES:
             return res.status(500).json({ error: 'Failed to parse docket extraction result', raw: result });
         }
 
+        // Post-process: normalize dates and filter hearing types
+        if (extracted.hearings && Array.isArray(extracted.hearings)) {
+            const validHearings = [];
+            const demotedToFilings = [];
+            for (const h of extracted.hearings) {
+                h.date = normalizeDate(h.date);
+                // Check if this is actually a hearing type
+                const typeLower = (h.type || '').toLowerCase().trim();
+                const descLower = (h.description || '').toLowerCase().trim();
+                const isHearing = HEARING_TYPES.some(ht => typeLower.includes(ht) || descLower.includes(ht));
+                if (isHearing && h.date) {
+                    validHearings.push(h);
+                } else if (h.date) {
+                    // Demote non-hearing items to filings
+                    demotedToFilings.push({
+                        title: h.description || h.type || 'Filing',
+                        date: h.date,
+                        filedBy: '',
+                        description: h.description || ''
+                    });
+                }
+                // Items with null dates (unparseable) are dropped
+            }
+            extracted.hearings = validHearings;
+            if (!extracted.filings) extracted.filings = [];
+            extracted.filings.push(...demotedToFilings);
+        }
+
+        if (extracted.filings && Array.isArray(extracted.filings)) {
+            extracted.filings = extracted.filings
+                .map(f => ({ ...f, date: normalizeDate(f.date) }))
+                .filter(f => f.date); // drop filings with unparseable dates
+        }
+
         // Fuzzy match to an existing matter
         const matters = await listMatters();
         const { match: matchedMatter, confidence } = fuzzyMatchMatter(
@@ -2271,13 +2351,16 @@ router.post('/api/docket/save', async (req, res) => {
         // Save hearings — both to hearings[] and as events
         if (hearings && Array.isArray(hearings)) {
             for (const h of hearings) {
+                const safeDate = normalizeDate(h.date);
+                if (!safeDate) continue; // skip unparseable dates
+
                 const hearingId = crypto.randomUUID();
 
                 // Add to structured hearings array
                 matter.hearings.push({
                     id: hearingId,
                     type: h.type || 'Hearing',
-                    date: h.date,
+                    date: safeDate,
                     time: h.time || null,
                     department: h.department || null,
                     judge: h.judge || judge || null,
@@ -2296,7 +2379,7 @@ router.post('/api/docket/save', async (req, res) => {
                     type: 'hearing',
                     title: `${h.type || 'Hearing'}${deptStr}${statusStr}`,
                     description: `${h.description || h.type || 'Hearing'}${timeStr}${deptStr}. Source: docket upload.`,
-                    date: h.date || now,
+                    date: safeDate,
                     addedBy: 'extraction',
                     createdAt: now
                 });
@@ -2307,12 +2390,13 @@ router.post('/api/docket/save', async (req, res) => {
         // Save filings as timeline events
         if (filings && Array.isArray(filings)) {
             for (const f of filings) {
+                const safeDate = normalizeDate(f.date) || now;
                 matter.events.push({
                     id: crypto.randomUUID(),
                     type: 'filing',
                     title: f.title || 'Filing',
                     description: [f.description, f.filedBy ? `Filed by: ${f.filedBy}` : ''].filter(Boolean).join('. ') + '. Source: docket upload.',
-                    date: f.date || now,
+                    date: safeDate,
                     addedBy: 'extraction',
                     createdAt: now
                 });

@@ -1235,14 +1235,17 @@ function renderOverview() {
     // Hearings from docket uploads
     const hearingsCard = document.getElementById('hearingsCard');
     const hearingsContent = document.getElementById('hearingsContent');
-    const mHearings = (m.hearings || []).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const mHearings = (m.hearings || [])
+        .map(h => ({ ...h, _norm: normalizeClientDate(h.date) }))
+        .filter(h => h._norm)
+        .sort((a, b) => a._norm.localeCompare(b._norm));
     if (mHearings.length > 0) {
         hearingsCard.style.display = 'block';
         const today = new Date().toISOString().slice(0, 10);
         hearingsContent.innerHTML = mHearings.map(h => {
-            const dateStr = h.date ? new Date(h.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : '-';
-            const isFuture = h.date >= today;
-            const isPast = h.date < today;
+            const dateStr = safeFormatDate(h.date, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+            const isFuture = h._norm >= today;
+            const isPast = h._norm < today;
             const deptStr = h.department ? 'Dept ' + h.department.replace(/^Dept\.?\s*/i, '') : '';
             const statusStr = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
             const color = isPast ? 'var(--text-tertiary)' : 'var(--accent-primary)';
@@ -1896,9 +1899,11 @@ function renderDocketHearings(hearings) {
     if (!hearings || hearings.length === 0) { section.style.display = 'none'; return; }
     section.style.display = 'block';
 
+    const today = new Date().toISOString().slice(0, 10);
     tbody.innerHTML = hearings.map((h, i) => {
-        const dateStr = h.date ? new Date(h.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
-        const isFuture = h.date && new Date(h.date) >= new Date(new Date().toISOString().slice(0, 10));
+        const normDate = normalizeClientDate(h.date);
+        const dateStr = safeFormatDate(h.date);
+        const isFuture = normDate && normDate >= today;
         const statusColor = h.status === 'Scheduled' ? 'var(--accent-primary)' : 'var(--text-secondary)';
         return `<tr>
             <td><input type="checkbox" checked data-hearing-idx="${i}" class="docket-hearing-chk" /></td>
@@ -1918,7 +1923,7 @@ function renderDocketFilings(filings) {
     section.style.display = 'block';
 
     tbody.innerHTML = filings.map((f, i) => {
-        const dateStr = f.date ? new Date(f.date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '-';
+        const dateStr = safeFormatDate(f.date);
         return `<tr>
             <td><input type="checkbox" checked data-filing-idx="${i}" class="docket-filing-chk" /></td>
             <td style="font-weight:500;">${esc(f.title || 'Filing')}</td>
@@ -2139,6 +2144,36 @@ function showToast(msg, isError) {
 // ============================================================
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : s; }
+
+// Safe date formatting — handles YYYY-MM-DD, MM/DD/YYYY, and junk strings without producing "Invalid Date"
+function safeFormatDate(raw, opts) {
+    if (!raw) return '-';
+    const s = String(raw).trim();
+    // Extract MM/DD/YYYY and convert to ISO
+    const mdy = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdy) {
+        const d = new Date(`${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}T00:00:00`);
+        return isNaN(d.getTime()) ? '-' : d.toLocaleDateString('en-US', opts || { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    // Try YYYY-MM-DD
+    const iso = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (iso) {
+        const d = new Date(iso[0] + 'T00:00:00');
+        return isNaN(d.getTime()) ? '-' : d.toLocaleDateString('en-US', opts || { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+    return '-';
+}
+
+// Normalize a date string to YYYY-MM-DD (client-side mirror of backend normalizeDate)
+function normalizeClientDate(raw) {
+    if (!raw) return null;
+    const s = String(raw).trim();
+    const mdy = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdy) return `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`;
+    const iso = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (iso) return `${iso[1]}-${iso[2].padStart(2,'0')}-${iso[3].padStart(2,'0')}`;
+    return null;
+}
 function exportCSV() { window.location.href = '/api/matters-export/csv'; }
 
 // ============================================================
