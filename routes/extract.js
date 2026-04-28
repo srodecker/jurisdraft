@@ -16,41 +16,29 @@ function getTodayDateLA() {
 }
 
 // Retry helper function with exponential backoff
-async function fetchWithRetry(url, options, maxRetries = 3) {
+async function fetchWithRetry(url, options, maxRetries = 5) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const response = await fetch(url, {
                 ...options,
-                signal: AbortSignal.timeout(300000) // 5 min timeout
+                signal: AbortSignal.timeout(300000)
             });
-            
-            // If 503 or 429, retry with exponential backoff
+
             if (response.status === 503 || response.status === 429) {
                 if (attempt < maxRetries) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000); // Max 30s
+                    const delay = Math.min(2000 * Math.pow(2, attempt - 1), 60000);
                     console.log(`API returned ${response.status}, retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    continue; // Retry
-                }
-            }
-            
-            return response; // Success or non-retryable error
-        } catch (err) {
-            // Handle timeout/abort errors
-            if (err.name === 'AbortError' || err.name === 'TimeoutError') {
-                if (attempt < maxRetries) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
-                    console.log(`Request timeout, retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
                     await new Promise(resolve => setTimeout(resolve, delay));
                     continue;
                 }
             }
-            
-            // If this is the last attempt, throw the error
+
+            return response;
+        } catch (err) {
             if (attempt === maxRetries) throw err;
-            
-            // Otherwise retry with exponential backoff
-            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
+
+            const delay = Math.min(2000 * Math.pow(2, attempt - 1), 60000);
+            console.log(`Request error (${err.name}), retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
@@ -134,8 +122,8 @@ router.post('/extract', upload.array('files'), async (req, res) => {
                         });
                     } else if (response.status === 429) {
                         console.error('Gemini API Rate Limited (429):', errorText);
-                        return res.status(429).json({ 
-                            error: 'Rate limit exceeded. Please wait a moment and try again.',
+                        return res.status(429).json({
+                            error: 'The AI extraction service is busy. Please wait 30 seconds and try again.',
                             details: errorJson || errorText,
                             retryable: true
                         });
