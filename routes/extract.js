@@ -21,36 +21,20 @@ async function fetchWithRetry(url, options, maxRetries = 3) {
         try {
             const response = await fetch(url, {
                 ...options,
-                signal: AbortSignal.timeout(300000) // 5 min timeout
+                signal: AbortSignal.timeout(300000)
             });
-            
-            // If 503 or 429, retry with exponential backoff
-            if (response.status === 503 || response.status === 429) {
-                if (attempt < maxRetries) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000); // Max 30s
-                    console.log(`API returned ${response.status}, retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    continue; // Retry
-                }
+
+            if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
+                const delay = 5000 * attempt;
+                console.log(`Gemini ${response.status}, retry ${attempt + 1}/${maxRetries} after ${delay / 1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
             }
-            
-            return response; // Success or non-retryable error
+
+            return response;
         } catch (err) {
-            // Handle timeout/abort errors
-            if (err.name === 'AbortError' || err.name === 'TimeoutError') {
-                if (attempt < maxRetries) {
-                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
-                    console.log(`Request timeout, retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    continue;
-                }
-            }
-            
-            // If this is the last attempt, throw the error
             if (attempt === maxRetries) throw err;
-            
-            // Otherwise retry with exponential backoff
-            const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
+            const delay = 5000 * attempt;
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
@@ -83,7 +67,7 @@ router.post('/extract', upload.array('files'), async (req, res) => {
         if (apiKey) {
             try {
                 // Use gemini-2.0-flash-exp which is the latest experimental model
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-001:generateContent?key=${apiKey}`;
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
                 const todayDateLA = getTodayDateLA();
                 const parts = [];
@@ -134,8 +118,8 @@ router.post('/extract', upload.array('files'), async (req, res) => {
                         });
                     } else if (response.status === 429) {
                         console.error('Gemini API Rate Limited (429):', errorText);
-                        return res.status(429).json({ 
-                            error: 'Rate limit exceeded. Please wait a moment and try again.',
+                        return res.status(429).json({
+                            error: 'The AI extraction service is busy. Please wait 30 seconds and try again.',
                             details: errorJson || errorText,
                             retryable: true
                         });
