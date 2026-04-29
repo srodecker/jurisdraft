@@ -16,7 +16,7 @@ function getTodayDateLA() {
 }
 
 // Retry helper function with exponential backoff
-async function fetchWithRetry(url, options, maxRetries = 3) {
+async function fetchWithRetry(url, options, maxRetries = 5) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const response = await fetch(url, {
@@ -24,17 +24,21 @@ async function fetchWithRetry(url, options, maxRetries = 3) {
                 signal: AbortSignal.timeout(300000)
             });
 
-            if ((response.status === 429 || response.status === 503) && attempt < maxRetries) {
-                const delay = 5000 * attempt;
-                console.log(`Gemini ${response.status}, retry ${attempt + 1}/${maxRetries} after ${delay / 1000}s...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-                continue;
+            if (response.status === 503 || response.status === 429) {
+                if (attempt < maxRetries) {
+                    const delay = Math.min(2000 * Math.pow(2, attempt - 1), 60000);
+                    console.log(`API returned ${response.status}, retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
             }
 
             return response;
         } catch (err) {
             if (attempt === maxRetries) throw err;
-            const delay = 5000 * attempt;
+
+            const delay = Math.min(2000 * Math.pow(2, attempt - 1), 60000);
+            console.log(`Request error (${err.name}), retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms...`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
     }
