@@ -13,4 +13,5 @@ firm-config.json
 
 # Case data — sensitive legal data, never commit
 matters/
+case-documents/
 data/notifications.json

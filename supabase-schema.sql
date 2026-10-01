@@ -41,3 +41,28 @@ ALTER TABLE global_chat ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all access to matters" ON matters FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to notifications" ON notifications FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all access to global_chat" ON global_chat FOR ALL USING (true) WITH CHECK (true);
+
+-- Case documents: metadata for files uploaded to a matter.
+-- Files live in the private Storage bucket "case-documents" (created automatically
+-- by the server on first upload; override the name with SUPABASE_DOCUMENTS_BUCKET).
+CREATE TABLE IF NOT EXISTS case_documents (
+    id UUID PRIMARY KEY,
+    matter_id UUID NOT NULL REFERENCES matters(id) ON DELETE CASCADE,
+    file_name TEXT NOT NULL,
+    storage_path TEXT NOT NULL UNIQUE,
+    mime_type TEXT,
+    size_bytes BIGINT,
+    uploaded_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_documents_matter ON case_documents (matter_id, created_at DESC);
+
+-- RLS on with no policies: only the service role key (used by the server) can access.
+-- Requires SUPABASE_SERVICE_KEY; the anon key cannot read or write case documents.
+ALTER TABLE case_documents ENABLE ROW LEVEL SECURITY;
+
+-- Storage bucket (optional — the server creates it if missing)
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('case-documents', 'case-documents', false)
+ON CONFLICT (id) DO NOTHING;

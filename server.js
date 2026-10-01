@@ -542,6 +542,7 @@ app.use('/api/team', requireAuth);
 app.use('/api/dashboard', requireAuth);
 app.use('/api/matters-export', requireAuth);
 app.use(mattersRouter);
+app.use(require('./routes/documents').router);
 
 // ============================================================
 // AUTH ENDPOINTS — profile-based
