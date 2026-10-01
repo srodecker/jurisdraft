@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
+const { deleteAllDocuments } = require('./documents');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -325,6 +326,7 @@ async function writeMatter(id, matter) {
 }
 
 async function deleteMatterById(id) {
+    await deleteAllDocuments(id);
     if (useSupabase) {
         const { error } = await supabase.from('matters').delete().eq('id', id);
         if (error) throw new Error('Failed to delete: ' + error.message);
@@ -641,6 +643,7 @@ router.put('/api/matters/:id', async (req, res) => {
 // Delete ALL matters (bulk clear)
 router.delete('/api/matters', async (req, res) => {
     try {
+        await deleteAllDocuments();
         if (useSupabase) {
             const { error } = await supabase.from('matters').delete().neq('id', '00000000-0000-0000-0000-000000000000');
             if (error) throw new Error('Failed to clear matters: ' + error.message);

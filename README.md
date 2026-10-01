@@ -64,6 +64,15 @@ A sample form (`sample-form.pdf`) is included in the templates folder with these
 - country
 - comments
 
+## Case Documents (/kinecta → Documents)
+
+Upload files to a case: pick a case from the dropdown (or add a new one), then drag files onto the page or click the drop zone. Click **Edit** to rename or remove uploaded files. Up to 50 MB per file.
+
+- **Supabase**: run `supabase-schema.sql` to create the `case_documents` table. Files go to the private Storage bucket `case-documents` (created automatically). Requires `SUPABASE_SERVICE_KEY`. Browsers upload directly to Storage via signed URLs, so the serverless request size limit does not apply.
+- **No Supabase**: files are stored under `case-documents/` on local disk.
+
+Deleting a case deletes its documents.
+
 ## Technical Details
 
 - **Backend**: Node.js with Express

@@ -351,6 +351,24 @@
             .content-scroll { padding: 14px; }
             .stats-row { grid-template-columns: 1fr 1fr; }
         }
+
+        /* Case Documents */
+        .docs-case-bar { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 16px; }
+        .docs-case-bar .fg { flex: 1; margin: 0; }
+        .docs-case-bar select { width: 100%; background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 8px 10px; font-size: 13px; color: var(--text-primary); }
+        .docs-empty-state { text-align: center; padding: 48px 20px; color: var(--text-tertiary); font-size: 13px; border: 1px dashed var(--border-primary); border-radius: 10px; }
+        #documentsView.drag-active .docket-drop-zone { border-color: var(--accent-primary); background: var(--accent-primary-light); }
+        .docs-queue { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+        .docs-queue-item { display: flex; align-items: center; gap: 10px; font-size: 12px; background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 6px; padding: 6px 10px; }
+        .docs-queue-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .docs-progress { width: 140px; height: 4px; background: var(--bg-tertiary); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+        .docs-progress > div { height: 100%; width: 0; background: var(--accent-primary); transition: width 120ms; }
+        .docs-queue-item.done .docs-progress > div { background: var(--accent-success); }
+        .docs-queue-item.error { border-color: var(--accent-error); color: var(--accent-error); }
+        .docs-table td { vertical-align: middle; }
+        .docs-name-link { color: var(--text-primary); cursor: pointer; text-decoration: none; word-break: break-all; }
+        .docs-name-link:hover { color: var(--accent-primary); text-decoration: underline; }
+        .docs-name-input { width: 100%; box-sizing: border-box; background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 5px; padding: 5px 7px; font-size: 12px; color: var(--text-primary); }
     </style>
 </head>
 <body>
@@ -406,6 +424,10 @@
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
                     Cases
                     <span id="navCount" class="nav-count">0</span>
+                </a>
+                <a class="nav-link" id="navDocsLink" onclick="showDocumentsView()" style="cursor:pointer;">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                    Documents
                 </a>
                 <a href="/full" class="nav-link">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
@@ -589,6 +611,54 @@
                     </div>
                 </div>
 
+                <!-- CASE DOCUMENTS VIEW -->
+                <div id="documentsView" style="display:none;">
+                    <div style="max-width:900px;margin:0 auto;">
+                        <h2 style="font-size:20px;font-weight:700;margin:0 0 4px;">Case Documents</h2>
+                        <p style="font-size:13px;color:var(--text-secondary);margin:0 0 20px;">Select a case, then drag files onto the page or click the drop zone to upload. Files are stored securely with the case.</p>
+
+                        <!-- Case selector -->
+                        <div class="docs-case-bar">
+                            <div class="fg">
+                                <label for="docsCaseSelect" style="font-size:11px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">Case</label>
+                                <select id="docsCaseSelect" onchange="onDocsCaseChange(this.value)"></select>
+                            </div>
+                            <button class="btn btn-secondary" onclick="openNewCaseFromDocs()">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                New Case
+                            </button>
+                        </div>
+
+                        <!-- Shown until a case is selected -->
+                        <div id="docsNoCase" class="docs-empty-state">Select a case above (or add a new one) to view and upload its documents.</div>
+
+                        <!-- Shown once inside a case -->
+                        <div id="docsCasePanel" style="display:none;">
+                            <div class="docket-drop-zone" id="docsDropZone" onclick="document.getElementById('docsFileInput').click()">
+                                <svg width="40" height="40" fill="none" stroke="var(--text-tertiary)" viewBox="0 0 24 24" style="margin:0 auto 12px;display:block;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
+                                <div style="font-size:14px;font-weight:500;margin-bottom:4px;">Drop files here to upload to <span id="docsDropCaseName"></span></div>
+                                <div style="font-size:12px;color:var(--text-tertiary);">or click to browse — any file type, up to 50 MB each</div>
+                            </div>
+                            <input type="file" id="docsFileInput" multiple style="display:none" onchange="uploadDocsFiles(this.files); this.value='';" />
+                            <div id="docsQueue" class="docs-queue"></div>
+
+                            <div class="tbl-wrap" style="margin-top:16px;">
+                                <div class="tbl-bar">
+                                    <div style="font-size:13px;font-weight:600;">Uploaded Documents <span id="docsCount" style="color:var(--text-tertiary);font-weight:400;"></span></div>
+                                    <div style="display:flex;gap:6px;">
+                                        <button class="btn btn-danger btn-sm" id="docsRemoveSelectedBtn" style="display:none;" onclick="removeSelectedDocs()">Remove Selected</button>
+                                        <button class="btn btn-secondary btn-sm" id="docsEditBtn" onclick="toggleDocsEdit()">Edit</button>
+                                    </div>
+                                </div>
+                                <table class="docs-table">
+                                    <thead><tr id="docsHeadRow"></tr></thead>
+                                    <tbody id="docsTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- LIST VIEW -->
                 <div id="listView" style="display:none;">
                     <!-- My Tasks -->
@@ -657,6 +727,7 @@
                                 Upload &amp; Extract
                             </button>
                             <input type="file" id="docUpload" accept=".pdf,.jpg,.jpeg,.png,.tiff,.bmp" multiple style="display:none" onchange="handleDocUpload(this)" />
+                            <button class="btn btn-secondary btn-sm" onclick="showDocumentsView(currentMatter.id)">Documents</button>
                             <button class="btn btn-secondary btn-sm" onclick="openEditModal()">Edit</button>
                             <button class="btn btn-danger btn-sm" onclick="deleteMatter()">Delete</button>
                         </div>
@@ -1134,6 +1205,7 @@ async function openMatter(id) {
 
     document.getElementById('globalChatView').style.display = 'none';
     document.getElementById('docketIntakeView').style.display = 'none';
+    document.getElementById('documentsView').style.display = 'none';
     document.getElementById('listView').style.display = 'none';
     document.getElementById('detailView').style.display = 'block';
     document.getElementById('casesToolbar').style.display = '';
@@ -1141,6 +1213,7 @@ async function openMatter(id) {
     document.getElementById('docketToolbar').style.display = 'none';
     document.getElementById('navChatLink').classList.remove('active');
     document.getElementById('navDocketLink').classList.remove('active');
+    document.getElementById('navDocsLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.add('active');
     currentView = 'detail';
     document.getElementById('breadcrumb').innerHTML = `<a onclick="showList()">All Cases</a><span class="sep">/</span><span class="current">${esc(currentMatter.debtorName || 'Matter')}</span>`;
@@ -1152,6 +1225,7 @@ async function openMatter(id) {
 function showList() {
     document.getElementById('globalChatView').style.display = 'none';
     document.getElementById('docketIntakeView').style.display = 'none';
+    document.getElementById('documentsView').style.display = 'none';
     document.getElementById('listView').style.display = 'block';
     document.getElementById('detailView').style.display = 'none';
     document.getElementById('casesToolbar').style.display = '';
@@ -1159,6 +1233,7 @@ function showList() {
     document.getElementById('docketToolbar').style.display = 'none';
     document.getElementById('navChatLink').classList.remove('active');
     document.getElementById('navDocketLink').classList.remove('active');
+    document.getElementById('navDocsLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.add('active');
     document.getElementById('breadcrumb').innerHTML = '<span class="current">All Cases</span>';
     currentView = 'cases';
@@ -1610,8 +1685,10 @@ async function saveMatter() {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
             });
             const newMatter = await r.json();
+            if (!r.ok) throw new Error(newMatter.error || 'Create failed');
             await loadMatters();
-            openMatter(newMatter.id);
+            if (currentView === 'documents') selectDocsCase(newMatter.id);
+            else openMatter(newMatter.id);
         }
         closeModal();
     } catch(e) { alert('Failed to save: ' + e.message); }
@@ -1633,10 +1710,12 @@ function showGlobalChat() {
     currentView = 'chat';
     document.getElementById('globalChatView').style.display = 'block';
     document.getElementById('docketIntakeView').style.display = 'none';
+    document.getElementById('documentsView').style.display = 'none';
     document.getElementById('listView').style.display = 'none';
     document.getElementById('detailView').style.display = 'none';
     document.getElementById('navChatLink').classList.add('active');
     document.getElementById('navDocketLink').classList.remove('active');
+    document.getElementById('navDocsLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.remove('active');
     document.getElementById('casesToolbar').style.display = 'none';
     document.getElementById('chatToolbar').style.display = '';
@@ -1651,10 +1730,12 @@ function showCasesView() {
     currentView = 'cases';
     document.getElementById('globalChatView').style.display = 'none';
     document.getElementById('docketIntakeView').style.display = 'none';
+    document.getElementById('documentsView').style.display = 'none';
     document.getElementById('listView').style.display = 'block';
     document.getElementById('detailView').style.display = 'none';
     document.getElementById('navChatLink').classList.remove('active');
     document.getElementById('navDocketLink').classList.remove('active');
+    document.getElementById('navDocsLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.add('active');
     document.getElementById('casesToolbar').style.display = '';
     document.getElementById('chatToolbar').style.display = 'none';
@@ -1786,10 +1867,12 @@ function showDocketIntake() {
     currentView = 'docket';
     document.getElementById('globalChatView').style.display = 'none';
     document.getElementById('docketIntakeView').style.display = 'block';
+    document.getElementById('documentsView').style.display = 'none';
     document.getElementById('listView').style.display = 'none';
     document.getElementById('detailView').style.display = 'none';
     document.getElementById('navChatLink').classList.remove('active');
     document.getElementById('navDocketLink').classList.add('active');
+    document.getElementById('navDocsLink').classList.remove('active');
     document.getElementById('navCasesLink').classList.remove('active');
     document.getElementById('casesToolbar').style.display = 'none';
     document.getElementById('chatToolbar').style.display = 'none';
@@ -2285,6 +2368,340 @@ async function handleDocUpload(input) {
         btn.disabled = false;
     }
 }
+// ============================================================
+// CASE DOCUMENTS — select a case, upload (drag & drop), rename, remove
+// ============================================================
+const DOCS_MAX_BYTES = 50 * 1024 * 1024;
+const DOCS_CASE_KEY = 'kinecta_docs_case';
+const NEW_CASE_OPTION = '__new__';
+let docsMatterId = null;
+let docsList = [];
+let docsEditMode = false;
+let docsSelected = new Set();
+
+function showDocumentsView(matterId) {
+    currentView = 'documents';
+    ['globalChatView', 'docketIntakeView', 'listView', 'detailView'].forEach(id => document.getElementById(id).style.display = 'none');
+    document.getElementById('documentsView').style.display = 'block';
+    ['navChatLink', 'navDocketLink', 'navCasesLink'].forEach(id => document.getElementById(id).classList.remove('active'));
+    document.getElementById('navDocsLink').classList.add('active');
+    ['casesToolbar', 'chatToolbar', 'docketToolbar'].forEach(id => document.getElementById(id).style.display = 'none');
+    document.getElementById('breadcrumb').innerHTML = '<span class="current">Case Documents</span>';
+    currentMatter = null;
+
+    let preferred = matterId;
+    if (!preferred) { try { preferred = localStorage.getItem(DOCS_CASE_KEY); } catch (_) {} }
+    preferred = preferred || docsMatterId;
+    selectDocsCase(preferred);
+    // Refresh the case list in the background so new cases from elsewhere appear
+    loadMatters().then(() => {
+        if (currentView !== 'documents') return;
+        if (!docsMatterId && preferred) selectDocsCase(preferred);
+        else renderDocsCaseSelect();
+    });
+}
+
+function docsCaseLabel(m) {
+    const name = m.debtorName || 'Unnamed';
+    return m.caseNumber ? `${name} — ${m.caseNumber}` : name;
+}
+
+function renderDocsCaseSelect() {
+    const sel = document.getElementById('docsCaseSelect');
+    const sorted = [...allMatters].sort((a, b) => (a.debtorName || '').localeCompare(b.debtorName || ''));
+    sel.innerHTML = `<option value="">— Select a case —</option>`
+        + sorted.map(m => `<option value="${esc(m.id)}">${esc(docsCaseLabel(m))}${m.status === 'closed' ? ' (closed)' : ''}</option>`).join('')
+        + `<option value="${NEW_CASE_OPTION}">+ Add new case…</option>`;
+    sel.value = docsMatterId && allMatters.some(m => m.id === docsMatterId) ? docsMatterId : '';
+}
+
+function onDocsCaseChange(value) {
+    if (value === NEW_CASE_OPTION) {
+        // Revert the select until the new case is actually created
+        document.getElementById('docsCaseSelect').value = docsMatterId || '';
+        openNewCaseFromDocs();
+        return;
+    }
+    selectDocsCase(value);
+}
+
+function openNewCaseFromDocs() {
+    openNewModal();
+    document.getElementById('modalTitle').textContent = 'New Case';
+    document.getElementById('modalSaveBtn').textContent = 'Create Case';
+}
+
+function selectDocsCase(id) {
+    const matter = id ? allMatters.find(m => m.id === id) : null;
+    docsMatterId = matter ? matter.id : null;
+    docsList = [];
+    docsEditMode = false;
+    docsSelected.clear();
+    try {
+        if (docsMatterId) localStorage.setItem(DOCS_CASE_KEY, docsMatterId);
+        else localStorage.removeItem(DOCS_CASE_KEY);
+    } catch (_) {}
+    renderDocsCaseSelect();
+    document.getElementById('docsQueue').innerHTML = '';
+    document.getElementById('docsNoCase').style.display = matter ? 'none' : 'block';
+    document.getElementById('docsCasePanel').style.display = matter ? 'block' : 'none';
+    if (!matter) return;
+    document.getElementById('docsDropCaseName').textContent = docsCaseLabel(matter);
+    document.getElementById('breadcrumb').innerHTML = `<span class="current">Case Documents</span><span class="sep">/</span><a onclick="openMatter('${esc(matter.id)}')">${esc(matter.debtorName || 'Matter')}</a>`;
+    loadDocs();
+}
+
+async function loadDocs() {
+    const matterId = docsMatterId;
+    if (!matterId) return;
+    document.getElementById('docsTableBody').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:24px;">Loading...</td></tr>`;
+    try {
+        const r = await authFetch(`/api/matters/${matterId}/documents`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Failed to load documents');
+        if (matterId !== docsMatterId) return; // case changed while loading
+        docsList = d.documents || [];
+        docsSelected = new Set([...docsSelected].filter(id => docsList.some(doc => doc.id === id)));
+        renderDocsTable();
+    } catch (e) {
+        if (matterId !== docsMatterId) return;
+        document.getElementById('docsTableBody').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--accent-error);padding:24px;">${esc(e.message)}</td></tr>`;
+    }
+}
+
+function formatBytes(n) {
+    if (!n) return '-';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function renderDocsTable() {
+    const editBtn = document.getElementById('docsEditBtn');
+    editBtn.textContent = docsEditMode ? 'Done' : 'Edit';
+    editBtn.className = 'btn btn-sm ' + (docsEditMode ? 'btn-primary' : 'btn-secondary');
+    editBtn.style.display = docsList.length || docsEditMode ? '' : 'none';
+    const removeBtn = document.getElementById('docsRemoveSelectedBtn');
+    removeBtn.style.display = docsEditMode && docsSelected.size ? '' : 'none';
+    removeBtn.textContent = `Remove Selected (${docsSelected.size})`;
+    document.getElementById('docsCount').textContent = docsList.length ? `(${docsList.length})` : '';
+
+    const allChecked = docsList.length > 0 && docsSelected.size === docsList.length;
+    document.getElementById('docsHeadRow').innerHTML =
+        (docsEditMode ? `<th style="width:30px;"><input type="checkbox" aria-label="Select all" ${allChecked ? 'checked' : ''} onchange="toggleAllDocs(this.checked)"></th>` : '')
+        + `<th>Name</th><th style="width:80px;">Size</th><th style="width:110px;">Uploaded By</th><th style="width:140px;">Uploaded</th><th style="width:${docsEditMode ? 80 : 90}px;"></th>`;
+
+    const body = document.getElementById('docsTableBody');
+    if (docsList.length === 0) {
+        body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:24px;">No documents yet. Drag files onto this page to upload.</td></tr>`;
+        return;
+    }
+    body.innerHTML = docsList.map(doc => {
+        const id = esc(doc.id);
+        const name = docsEditMode
+            ? `<input class="docs-name-input" value="${esc(doc.fileName)}" aria-label="File name" onkeydown="if(event.key==='Enter')this.blur();if(event.key==='Escape'){this.value=this.defaultValue;this.blur();}" onblur="renameDoc('${id}', this)">`
+            : `<a class="docs-name-link" onclick="downloadDoc('${id}')" title="Download">${esc(doc.fileName)}</a>`;
+        const action = docsEditMode
+            ? `<button class="btn btn-danger btn-sm" onclick="removeDoc('${id}')">Remove</button>`
+            : `<button class="btn btn-secondary btn-sm" onclick="downloadDoc('${id}')">Download</button>`;
+        return `<tr>
+            ${docsEditMode ? `<td><input type="checkbox" aria-label="Select ${esc(doc.fileName)}" ${docsSelected.has(doc.id) ? 'checked' : ''} onchange="toggleDocSelected('${id}', this.checked)"></td>` : ''}
+            <td>${name}</td>
+            <td style="color:var(--text-secondary);">${formatBytes(doc.size)}</td>
+            <td style="color:var(--text-secondary);">${esc(doc.uploadedBy || '-')}</td>
+            <td style="color:var(--text-secondary);" title="${esc(new Date(doc.createdAt).toLocaleString())}">${esc(new Date(doc.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))}</td>
+            <td style="text-align:right;">${action}</td>
+        </tr>`;
+    }).join('');
+}
+
+function toggleDocsEdit() {
+    docsEditMode = !docsEditMode;
+    docsSelected.clear();
+    renderDocsTable();
+}
+
+function toggleDocSelected(id, checked) {
+    if (checked) docsSelected.add(id); else docsSelected.delete(id);
+    renderDocsTable();
+}
+
+function toggleAllDocs(checked) {
+    docsSelected = checked ? new Set(docsList.map(d => d.id)) : new Set();
+    renderDocsTable();
+}
+
+async function renameDoc(id, input) {
+    const doc = docsList.find(d => d.id === id);
+    const fileName = input.value.trim();
+    if (!doc || fileName === doc.fileName) return;
+    if (!fileName) { input.value = doc.fileName; return; }
+    try {
+        const r = await authFetch(`/api/matters/${docsMatterId}/documents/${id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fileName })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Rename failed');
+        doc.fileName = d.fileName;
+        input.value = input.defaultValue = d.fileName;
+        if (!input.isConnected) renderDocsTable(); // table re-rendered (e.g. "Done") before the save finished
+        showToast('Renamed to ' + d.fileName);
+    } catch (e) {
+        input.value = doc.fileName;
+        showToast(e.message, true);
+    }
+}
+
+async function deleteDocsByIds(ids) {
+    const matterId = docsMatterId;
+    const results = await Promise.allSettled(ids.map(async id => {
+        const r = await authFetch(`/api/matters/${matterId}/documents/${id}`, { method: 'DELETE' });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Remove failed');
+    }));
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length) showToast(`${failed.length} file(s) could not be removed: ${failed[0].reason.message}`, true);
+    else showToast(`Removed ${ids.length} file(s)`);
+    ids.forEach(id => docsSelected.delete(id));
+    await loadDocs();
+}
+
+async function removeDoc(id) {
+    const doc = docsList.find(d => d.id === id);
+    if (!doc || !confirm(`Remove "${doc.fileName}" from this case? This cannot be undone.`)) return;
+    await deleteDocsByIds([id]);
+}
+
+async function removeSelectedDocs() {
+    const ids = [...docsSelected];
+    if (!ids.length || !confirm(`Remove ${ids.length} file(s) from this case? This cannot be undone.`)) return;
+    await deleteDocsByIds(ids);
+}
+
+async function downloadDoc(id) {
+    const doc = docsList.find(d => d.id === id);
+    if (!doc) return;
+    try {
+        const r = await authFetch(`/api/matters/${docsMatterId}/documents/${id}/download`);
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Download failed');
+        if ((r.headers.get('content-type') || '').includes('application/json')) {
+            // Supabase: short-lived signed URL with attachment disposition
+            const { url } = await r.json();
+            window.location.href = url;
+            return;
+        }
+        const blobUrl = URL.createObjectURL(await r.blob());
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = doc.fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    } catch (e) {
+        showToast(e.message, true);
+    }
+}
+
+// XHR wrapper so uploads can report progress
+function xhrSend(method, url, body, headers, onProgress) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open(method, url);
+        Object.entries(headers || {}).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+        xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+        xhr.onload = () => {
+            let data = {};
+            try { data = JSON.parse(xhr.responseText); } catch (_) {}
+            if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+            else reject(new Error(data.error || data.message || `Upload failed (HTTP ${xhr.status})`));
+        };
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(body);
+    });
+}
+
+function addQueueItem(file) {
+    const el = document.createElement('div');
+    el.className = 'docs-queue-item';
+    el.innerHTML = `<span class="docs-queue-name"></span><span class="docs-queue-status" style="color:var(--text-tertiary);">Waiting…</span><div class="docs-progress"><div></div></div>`;
+    el.querySelector('.docs-queue-name').textContent = file.name;
+    document.getElementById('docsQueue').appendChild(el);
+    return {
+        progress: p => { el.querySelector('.docs-progress > div').style.width = Math.round(p * 100) + '%'; el.querySelector('.docs-queue-status').textContent = Math.round(p * 100) + '%'; },
+        done: () => { el.classList.add('done'); el.querySelector('.docs-progress > div').style.width = '100%'; el.querySelector('.docs-queue-status').textContent = 'Uploaded'; setTimeout(() => el.remove(), 3000); },
+        fail: msg => { el.classList.add('error'); el.querySelector('.docs-queue-status').textContent = msg; el.querySelector('.docs-queue-status').style.color = ''; }
+    };
+}
+
+async function uploadOneDoc(matterId, file, item) {
+    const init = await authFetch(`/api/matters/${matterId}/documents/init`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileName: file.name, size: file.size, mimeType: file.type })
+    });
+    const initData = await init.json();
+    if (!init.ok) throw new Error(initData.error || 'Upload could not start');
+
+    if (!initData.direct) {
+        const form = new FormData();
+        form.append('files', file);
+        await xhrSend('POST', `/api/matters/${matterId}/documents`, form, authHeaders(), item.progress);
+        return;
+    }
+    // Upload straight to Supabase Storage, then register the file with the case
+    await xhrSend('PUT', initData.signedUrl, file, {
+        'Content-Type': file.type || 'application/octet-stream',
+        'x-upsert': 'false',
+        'cache-control': 'max-age=3600'
+    }, item.progress);
+    const done = await authFetch(`/api/matters/${matterId}/documents/complete`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ docId: initData.docId, fileName: file.name, mimeType: file.type })
+    });
+    if (!done.ok) throw new Error((await done.json().catch(() => ({}))).error || 'Upload could not be saved');
+}
+
+async function uploadDocsFiles(fileList) {
+    const matterId = docsMatterId;
+    if (!matterId) { showToast('Select a case before uploading documents', true); return; }
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+
+    let uploaded = 0;
+    for (const file of files) {
+        const item = addQueueItem(file);
+        if (file.size === 0) { item.fail('Empty file (folders are not supported)'); continue; }
+        if (file.size > DOCS_MAX_BYTES) { item.fail('Over 50 MB limit'); continue; }
+        try {
+            await uploadOneDoc(matterId, file, item);
+            item.done();
+            uploaded++;
+        } catch (e) {
+            item.fail(e.message);
+        }
+    }
+    if (uploaded) showToast(`Uploaded ${uploaded} file(s)`);
+    if (matterId === docsMatterId) loadDocs();
+}
+
+// Drag & drop: the whole Documents view is a drop target once a case is selected
+document.addEventListener('DOMContentLoaded', () => {
+    const view = document.getElementById('documentsView');
+    const hasFiles = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+    let depth = 0;
+    view.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; if (docsMatterId) view.classList.add('drag-active'); });
+    view.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = docsMatterId ? 'copy' : 'none'; });
+    view.addEventListener('dragleave', e => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (!depth) view.classList.remove('drag-active'); });
+    view.addEventListener('drop', e => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        depth = 0;
+        view.classList.remove('drag-active');
+        uploadDocsFiles(e.dataTransfer.files);
+    });
+    // Stop the browser from opening files dropped elsewhere on the page
+    window.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+    window.addEventListener('drop', e => { if (hasFiles(e)) e.preventDefault(); });
+});
 </script>
 </body>
 </html>
