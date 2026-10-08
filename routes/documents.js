@@ -10,7 +10,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
-const { fileToParts, generateJson } = require('../lib/gemini');
+const { generateJson, uploadToFileApi, geminiMimeFor, geminiUploadBody } = require('../lib/gemini');
 
 const router = express.Router();
 
@@ -61,7 +61,9 @@ function rowToDoc(row) {
         uploadedBy: row.uploaded_by,
         createdAt: row.created_at,
         analysis: row.analysis || null,
-        analyzedAt: row.analyzed_at || null
+        analyzedAt: row.analyzed_at || null,
+        geminiFileUri: row.gemini_file_uri || null,
+        geminiFileExpiresAt: row.gemini_file_expires_at || null
     };
 }
 
@@ -80,7 +82,7 @@ function docToRow(doc) {
 
 // Client-facing shape: no storage path, analysis reduced to status + type
 function publicDoc(doc) {
-    const { storagePath, analysis, ...rest } = doc;
+    const { storagePath, analysis, geminiFileUri, geminiFileExpiresAt, ...rest } = doc;
     return {
         ...rest,
         analysisStatus: analysis ? analysis.status : 'none',
@@ -95,8 +97,8 @@ function friendlyDbError(error) {
     if (/relation .*case_documents.* does not exist|Could not find the table/i.test(msg)) {
         return 'Documents table missing. Run supabase-schema.sql in the Supabase SQL Editor.';
     }
-    if (/analy[sz]ed?_at|column .*analysis/i.test(msg)) {
-        return 'Documents table needs the AI analysis columns. Run: ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;';
+    if (/analy[sz]ed?_at|column .*analysis|gemini_file/i.test(msg)) {
+        return 'Documents table needs the AI columns. Run: ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ;';
     }
     return msg;
 }
@@ -143,6 +145,19 @@ async function readIndex(matterId) {
 async function writeIndex(matterId, docs) {
     await fs.mkdir(matterDocsDir(matterId), { recursive: true });
     await fs.writeFile(indexPath(matterId), JSON.stringify(docs, null, 2));
+}
+
+// Read-modify-write of a matter's index, serialized so parallel updates don't overwrite each other
+const indexLocks = new Map();
+function updateIndex(matterId, mutate) {
+    const prev = indexLocks.get(matterId) || Promise.resolve();
+    const run = prev.catch(() => {}).then(async () => {
+        const docs = await readIndex(matterId);
+        mutate(docs);
+        await writeIndex(matterId, docs);
+    });
+    indexLocks.set(matterId, run);
+    return run;
 }
 
 // --- Backend-agnostic data access ---
@@ -207,13 +222,79 @@ async function saveAnalysis(doc, analysis) {
         if (error) throw new Error(friendlyDbError(error));
         return;
     }
-    const docs = await readIndex(doc.matterId);
-    const target = docs.find(d => d.id === doc.id);
-    if (target) {
-        target.analysis = analysis;
-        target.analyzedAt = analyzedAt;
-        await writeIndex(doc.matterId, docs);
+    await updateIndex(doc.matterId, docs => {
+        const target = docs.find(d => d.id === doc.id);
+        if (target) {
+            target.analysis = analysis;
+            target.analyzedAt = analyzedAt;
+        }
+    });
+}
+
+// ---- Gemini file cache: the real document is uploaded to Google once and reused for 48 h ----
+const REUSE_MARGIN_MS = 60 * 60 * 1000; // re-upload when less than 1 h of validity is left
+
+async function saveGeminiFile(doc, uri, expiresAt) {
+    if (useSupabase) {
+        const { error } = await supabase.from(TABLE).update({ gemini_file_uri: uri, gemini_file_expires_at: expiresAt }).eq('id', doc.id);
+        if (error) throw new Error(friendlyDbError(error));
+        return;
     }
+    await updateIndex(doc.matterId, docs => {
+        const target = docs.find(d => d.id === doc.id);
+        if (target) {
+            target.geminiFileUri = uri;
+            target.geminiFileExpiresAt = expiresAt;
+        }
+    });
+}
+
+// Returns the Gemini request part for a document ({file_data}), uploading it if needed.
+// Returns null when the file type can't be read by Gemini.
+async function ensureGeminiFile(doc, { buffer = null, force = false } = {}) {
+    const mime = geminiMimeFor(doc.mimeType, doc.fileName);
+    if (!mime) return null;
+    const valid = doc.geminiFileUri && doc.geminiFileExpiresAt &&
+        new Date(doc.geminiFileExpiresAt).getTime() - Date.now() > REUSE_MARGIN_MS;
+    if (valid && !force) return { file_data: { mime_type: mime, file_uri: doc.geminiFileUri } };
+
+    const raw = buffer || await readDocBuffer(doc);
+    const { part, expiresAt } = await uploadToFileApi(geminiUploadBody(raw, doc.mimeType, doc.fileName), mime, doc.fileName);
+    const uri = part.file_data.file_uri;
+    await saveGeminiFile(doc, uri, expiresAt);
+    doc.geminiFileUri = uri;
+    doc.geminiFileExpiresAt = expiresAt;
+    return { file_data: { mime_type: mime, file_uri: uri } };
+}
+
+// Gemini parts for every document of the given docs list: a label before each file.
+// Runs 4 uploads at a time. Returns { parts, included, skipped }.
+async function buildFileParts(docs, { force = false, labelPrefix = '' } = {}) {
+    const results = new Array(docs.length);
+    let next = 0;
+    async function worker() {
+        while (next < docs.length) {
+            const i = next++;
+            results[i] = await ensureGeminiFile(docs[i], { force });
+        }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, docs.length) }, worker));
+    const parts = [];
+    const included = [];
+    const skipped = [];
+    docs.forEach((d, i) => {
+        if (!results[i]) { skipped.push(d.fileName); return; }
+        included.push(d.fileName);
+        parts.push({ text: `=== ${labelPrefix}Document: ${d.fileName} (uploaded ${String(d.createdAt || '').slice(0, 10)}) ===` });
+        parts.push(results[i]);
+    });
+    return { parts, included, skipped };
+}
+
+// File parts for one case, oldest document first
+async function getCaseFileParts(matterId, opts = {}) {
+    const docs = (await listDocs(matterId)).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    return buildFileParts(docs, opts);
 }
 
 // All documents for a matter with their stored AI analysis (server-side use only)
@@ -222,17 +303,17 @@ async function listDocAnalyses(matterId) {
     return docs.map(d => ({ id: d.id, matterId: d.matterId, fileName: d.fileName, createdAt: d.createdAt, analysis: d.analysis || null }));
 }
 
-// Same, for every matter at once → Map(matterId → docs[])
-async function listAllDocAnalyses() {
+// Every document of every matter (full internal records) → Map(matterId → docs[])
+async function listAllDocs() {
     const byMatter = new Map();
     const add = d => {
         if (!byMatter.has(d.matterId)) byMatter.set(d.matterId, []);
-        byMatter.get(d.matterId).push({ id: d.id, matterId: d.matterId, fileName: d.fileName, createdAt: d.createdAt, analysis: d.analysis || null });
+        byMatter.get(d.matterId).push(d);
     };
     if (useSupabase) {
-        const { data, error } = await supabase.from(TABLE).select('*');
+        const { data, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending: true });
         if (error) throw new Error(friendlyDbError(error));
-        data.map(rowToDoc).forEach(add);
+        data.forEach(r => add({ ...rowToDoc(r), storagePath: r.storage_path }));
         return byMatter;
     }
     let dirs = [];
@@ -452,15 +533,15 @@ router.post('/api/matters/:id/documents/:docId/analyze', async (req, res) => {
         doc = await getDoc(req.params.id, req.params.docId);
         if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-        const buffer = await readDocBuffer(doc);
-        const converted = await fileToParts(buffer, doc.mimeType, doc.fileName);
+        // Upload the real file to Gemini (cached for chat), then read it
+        const filePart = await ensureGeminiFile(doc, { force: true });
         let analysis;
-        if (converted.unsupported) {
-            analysis = { status: 'unsupported', error: converted.unsupported };
+        if (!filePart) {
+            analysis = { status: 'unsupported', error: `File type not readable by AI (${doc.mimeType || 'unknown'})` };
         } else {
             const result = await generateJson([
                 { text: `${ANALYSIS_PROMPT}\n\nFile name: ${doc.fileName}` },
-                ...converted.parts
+                filePart
             ]);
             analysis = { status: 'done', ...result };
         }
@@ -469,7 +550,7 @@ router.post('/api/matters/:id/documents/:docId/analyze', async (req, res) => {
     } catch (err) {
         console.error('[Documents] Analysis failed:', err.message);
         // Record the failure so the UI can show it; ignore errors while recording
-        if (doc && !/GOOGLE_API_KEY|analysis columns/.test(err.message)) {
+        if (doc && !/GOOGLE_API_KEY|AI columns/.test(err.message)) {
             try { await saveAnalysis(doc, { status: 'error', error: err.message }); } catch (_) {}
         }
         res.status(500).json({ error: err.message });
@@ -510,4 +591,4 @@ router.delete('/api/matters/:id/documents/:docId', async (req, res) => {
     }
 });
 
-module.exports = { router, deleteAllDocuments, listDocAnalyses, listAllDocAnalyses };
+module.exports = { router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, getCaseFileParts, buildFileParts };

@@ -73,7 +73,7 @@ Upload files to a case: pick a case from the dropdown (or add a new one), then d
 
 Deleting a case deletes its documents.
 
-**AI reading:** each uploaded document is read by Gemini (PDF, images, .docx, text; large files via the Gemini File API) and its summary, key facts, dates and events are stored with the document. **Rebuild case from documents** erases the case's fields, dates, status, tasks, timeline and chat and rebuilds them solely from those readings. The case chat and AI Chat answer from the document summaries. Requires `GOOGLE_API_KEY`.
+**AI reading:** each uploaded document is read by Gemini (PDF, images, .docx, text; large files via the Gemini File API) and its summary, key facts, dates and events are stored with the document. **Rebuild case from documents** erases the case's fields, dates, status, tasks, timeline and chat and rebuilds them solely from those readings. Case chat sends the actual uploaded files to Gemini with every question (files are cached in the Gemini File API for 48 h and re-uploaded when expired), so answers come from the documents themselves. AI Chat does the same when there are 40 documents or fewer in total (`GLOBAL_CHAT_FILE_LIMIT`), otherwise it uses the stored summaries. New uploads are read and the case is rebuilt automatically. Requires `GOOGLE_API_KEY`.
 
 ## Technical Details
 

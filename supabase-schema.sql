@@ -54,11 +54,17 @@ CREATE TABLE IF NOT EXISTS case_documents (
     size_bytes BIGINT,
     uploaded_by TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    analysis JSONB,          -- AI reading of the document (summary, facts, dates, events)
-    analyzed_at TIMESTAMPTZ
+    analysis JSONB,                    -- AI reading of the document (summary, facts, dates, events)
+    analyzed_at TIMESTAMPTZ,
+    gemini_file_uri TEXT,              -- copy of the file uploaded to the Gemini File API (expires after 48 h)
+    gemini_file_expires_at TIMESTAMPTZ
 );
--- Upgrade for tables created before AI analysis existed
-ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;
+-- Upgrade for tables created before the AI columns existed
+ALTER TABLE case_documents
+    ADD COLUMN IF NOT EXISTS analysis JSONB,
+    ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT,
+    ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_case_documents_matter ON case_documents (matter_id, created_at DESC);
 
