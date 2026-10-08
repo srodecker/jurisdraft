@@ -10,6 +10,7 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
+const { fileToParts, generateJson } = require('../lib/gemini');
 
 const router = express.Router();
 
@@ -58,7 +59,9 @@ function rowToDoc(row) {
         mimeType: row.mime_type,
         size: Number(row.size_bytes) || 0,
         uploadedBy: row.uploaded_by,
-        createdAt: row.created_at
+        createdAt: row.created_at,
+        analysis: row.analysis || null,
+        analyzedAt: row.analyzed_at || null
     };
 }
 
@@ -75,15 +78,25 @@ function docToRow(doc) {
     };
 }
 
+// Client-facing shape: no storage path, analysis reduced to status + type
 function publicDoc(doc) {
-    const { storagePath, ...rest } = doc;
-    return rest;
+    const { storagePath, analysis, ...rest } = doc;
+    return {
+        ...rest,
+        analysisStatus: analysis ? analysis.status : 'none',
+        analysisError: analysis && analysis.status !== 'done' ? analysis.error || null : null,
+        documentType: analysis && analysis.documentType ? analysis.documentType : null,
+        documentDate: analysis && analysis.documentDate ? analysis.documentDate : null
+    };
 }
 
 function friendlyDbError(error) {
     const msg = error && error.message ? error.message : String(error);
     if (/relation .*case_documents.* does not exist|Could not find the table/i.test(msg)) {
         return 'Documents table missing. Run supabase-schema.sql in the Supabase SQL Editor.';
+    }
+    if (/analy[sz]ed?_at|column .*analysis/i.test(msg)) {
+        return 'Documents table needs the AI analysis columns. Run: ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ;';
     }
     return msg;
 }
@@ -177,6 +190,85 @@ async function removeDoc(doc) {
     const docs = (await readIndex(doc.matterId)).filter(d => d.id !== doc.id);
     await writeIndex(doc.matterId, docs);
 }
+
+async function readDocBuffer(doc) {
+    if (useSupabase) {
+        const { data, error } = await supabase.storage.from(BUCKET).download(doc.storagePath);
+        if (error) throw new Error(`Could not read "${doc.fileName}" from storage: ${error.message}`);
+        return Buffer.from(await data.arrayBuffer());
+    }
+    return fs.readFile(path.join(DOCS_DIR, doc.storagePath));
+}
+
+async function saveAnalysis(doc, analysis) {
+    const analyzedAt = new Date().toISOString();
+    if (useSupabase) {
+        const { error } = await supabase.from(TABLE).update({ analysis, analyzed_at: analyzedAt }).eq('id', doc.id);
+        if (error) throw new Error(friendlyDbError(error));
+        return;
+    }
+    const docs = await readIndex(doc.matterId);
+    const target = docs.find(d => d.id === doc.id);
+    if (target) {
+        target.analysis = analysis;
+        target.analyzedAt = analyzedAt;
+        await writeIndex(doc.matterId, docs);
+    }
+}
+
+// All documents for a matter with their stored AI analysis (server-side use only)
+async function listDocAnalyses(matterId) {
+    const docs = await listDocs(matterId);
+    return docs.map(d => ({ id: d.id, matterId: d.matterId, fileName: d.fileName, createdAt: d.createdAt, analysis: d.analysis || null }));
+}
+
+// Same, for every matter at once → Map(matterId → docs[])
+async function listAllDocAnalyses() {
+    const byMatter = new Map();
+    const add = d => {
+        if (!byMatter.has(d.matterId)) byMatter.set(d.matterId, []);
+        byMatter.get(d.matterId).push({ id: d.id, matterId: d.matterId, fileName: d.fileName, createdAt: d.createdAt, analysis: d.analysis || null });
+    };
+    if (useSupabase) {
+        const { data, error } = await supabase.from(TABLE).select('*');
+        if (error) throw new Error(friendlyDbError(error));
+        data.map(rowToDoc).forEach(add);
+        return byMatter;
+    }
+    let dirs = [];
+    try { dirs = await fs.readdir(DOCS_DIR); } catch (_) {}
+    for (const dir of dirs) {
+        if (UUID_RE.test(dir)) (await readIndex(dir)).forEach(add);
+    }
+    return byMatter;
+}
+
+const ANALYSIS_PROMPT = `You are a legal document analyst for a California debt collection law firm (client: Kinecta Federal Credit Union).
+Read the attached case document completely and return ONE JSON object describing it. Use only information actually in the document — never guess. Omit fields you cannot find.
+
+{
+  "documentType": "short type, e.g. Complaint, Summons, Proof of Service, Demand Letter / DVN, Default Judgment, Minute Order, Notice of Hearing, Answer, Correspondence, Account Statement, Loan Agreement, Writ, Abstract of Judgment",
+  "documentDate": "YYYY-MM-DD — the date the document was signed, filed or issued",
+  "summary": "detailed factual summary (300-600 words): who, what, when, amounts, court, case number, deadlines, rulings, and anything a paralegal would need to know",
+  "keyFacts": ["short factual statements, each self-contained, e.g. 'Complaint filed 2024-03-12 in LASC, case 24STLC01234'"],
+  "fields": {
+    "debtorName": "full name of debtor/defendant/borrower",
+    "debtorAddress": "street address", "debtorCity": "city", "debtorState": "2-letter state", "debtorZip": "zip",
+    "caseNumber": "court case number", "courtName": "court name", "courtCounty": "county",
+    "demandAmount": "amount owed/demanded, number only", "judgmentAmount": "judgment amount, number only",
+    "loanType": "type of loan", "accountNumber": "account or loan number", "creditorName": "creditor/plaintiff"
+  },
+  "dates": {
+    "dvnSent": "YYYY-MM-DD", "responseDue": "YYYY-MM-DD", "complaintFiled": "YYYY-MM-DD", "served": "YYYY-MM-DD",
+    "serviceType": "personal | substituted", "answerDue": "YYYY-MM-DD", "answerReceived": "YYYY-MM-DD",
+    "defaultEntered": "YYYY-MM-DD", "judgmentEntered": "YYYY-MM-DD", "abstractFiled": "YYYY-MM-DD",
+    "abstractRecorded": "YYYY-MM-DD", "writIssued": "YYYY-MM-DD", "closed": "YYYY-MM-DD"
+  },
+  "events": [{ "type": "filing|hearing|service|correspondence|minute_order|court_order|payment|note", "title": "brief title", "date": "YYYY-MM-DD", "description": "details" }],
+  "hearings": [{ "type": "e.g. Case Management Conference, Trial, OSC", "date": "YYYY-MM-DD", "time": "e.g. 8:30 AM", "department": "e.g. Dept. 25", "location": "courthouse", "status": "scheduled | continued | vacated | held" }]
+}
+
+Rules: dates in YYYY-MM-DD; amounts as plain numbers (no $ or commas); include every date, deadline and event mentioned.`;
 
 // Remove every stored file + metadata row for a matter (called when a matter is deleted).
 // Pass no matterId to remove all documents for all matters.
@@ -353,6 +445,37 @@ router.get('/api/matters/:id/documents/:docId/download', async (req, res) => {
     }
 });
 
+// AI analysis of one document (one per request keeps each call inside serverless time limits)
+router.post('/api/matters/:id/documents/:docId/analyze', async (req, res) => {
+    let doc;
+    try {
+        doc = await getDoc(req.params.id, req.params.docId);
+        if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+        const buffer = await readDocBuffer(doc);
+        const converted = await fileToParts(buffer, doc.mimeType, doc.fileName);
+        let analysis;
+        if (converted.unsupported) {
+            analysis = { status: 'unsupported', error: converted.unsupported };
+        } else {
+            const result = await generateJson([
+                { text: `${ANALYSIS_PROMPT}\n\nFile name: ${doc.fileName}` },
+                ...converted.parts
+            ]);
+            analysis = { status: 'done', ...result };
+        }
+        await saveAnalysis(doc, analysis);
+        res.json(publicDoc({ ...doc, analysis }));
+    } catch (err) {
+        console.error('[Documents] Analysis failed:', err.message);
+        // Record the failure so the UI can show it; ignore errors while recording
+        if (doc && !/GOOGLE_API_KEY|analysis columns/.test(err.message)) {
+            try { await saveAnalysis(doc, { status: 'error', error: err.message }); } catch (_) {}
+        }
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Rename
 router.patch('/api/matters/:id/documents/:docId', async (req, res) => {
     try {
@@ -387,4 +510,4 @@ router.delete('/api/matters/:id/documents/:docId', async (req, res) => {
     }
 });
 
-module.exports = { router, deleteAllDocuments };
+module.exports = { router, deleteAllDocuments, listDocAnalyses, listAllDocAnalyses };
