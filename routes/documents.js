@@ -273,7 +273,8 @@ async function ensureGeminiFile(doc, { buffer = null, force = false } = {}) {
     const raw = buffer || await readDocBuffer(doc);
     const { part, expiresAt } = await uploadToFileApi(geminiUploadBody(raw, doc.mimeType, doc.fileName), mime, doc.fileName);
     const uri = part.file_data.file_uri;
-    await saveGeminiFile(doc, uri, expiresAt);
+    // Caching is an optimisation — a failed save (e.g. columns not migrated yet) must not block reading
+    try { await saveGeminiFile(doc, uri, expiresAt); } catch (e) { console.error('[Documents] Could not cache Gemini file reference:', e.message); }
     doc.geminiFileUri = uri;
     doc.geminiFileExpiresAt = expiresAt;
     return { file_data: { mime_type: mime, file_uri: uri } };
@@ -302,13 +303,14 @@ async function buildFileParts(docs, { force = false, labelPrefix = '' } = {}) {
     }
     await Promise.all(Array.from({ length: Math.min(6, docs.length) }, worker));
     const failed = errors.filter(Boolean);
-    if (docs.length && failed.length === docs.length) throw failed[0];
+    const readable = results.filter(Boolean).length;
+    if (failed.length && !readable) throw new Error(`None of the case documents could be read: ${failed[0].message}`);
 
     const parts = [];
     const included = [];
     const skipped = [];
     docs.forEach((d, i) => {
-        if (errors[i]) { skipped.push(`${d.fileName} (${errors[i].missing ? 'file missing from storage' : 'could not be read'})`); return; }
+        if (errors[i]) { skipped.push(`${d.fileName} (${errors[i].missing ? 'file missing from storage' : String(errors[i].message).slice(0, 150)})`); return; }
         if (!results[i]) { skipped.push(`${d.fileName} (file type not readable)`); return; }
         included.push(d.fileName);
         parts.push({ text: `=== ${labelPrefix}Document: ${d.fileName} (uploaded ${String(d.createdAt || '').slice(0, 10)}) ===` });
