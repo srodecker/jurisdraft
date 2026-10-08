@@ -268,7 +268,7 @@ async function ensureGeminiFile(doc, { buffer = null, force = false } = {}) {
 }
 
 // Gemini parts for every document of the given docs list: a label before each file.
-// Runs 4 uploads at a time. Returns { parts, included, skipped }.
+// Runs 6 uploads at a time. Returns { parts, included, skipped }.
 async function buildFileParts(docs, { force = false, labelPrefix = '' } = {}) {
     const results = new Array(docs.length);
     let next = 0;
@@ -278,7 +278,7 @@ async function buildFileParts(docs, { force = false, labelPrefix = '' } = {}) {
             results[i] = await ensureGeminiFile(docs[i], { force });
         }
     }
-    await Promise.all(Array.from({ length: Math.min(4, docs.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(6, docs.length) }, worker));
     const parts = [];
     const included = [];
     const skipped = [];

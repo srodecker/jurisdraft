@@ -875,8 +875,30 @@ router.delete('/api/matters/:id/events/:eventId', async (req, res) => {
 // CHAT (AI-powered per-matter assistant)
 // ============================================================
 
-// Global chat attaches the real files when the total number of documents is at most this
+// Global chat attaches every case's files when the total number of documents is at most this;
+// otherwise only the files of the case(s) the question is about
 const GLOBAL_CHAT_FILE_LIMIT = Number(process.env.GLOBAL_CHAT_FILE_LIMIT) || 40;
+
+// Which cases' files to attach to a global chat question:
+// cases named in the question (or recent questions), else the only case with documents,
+// else all cases when the total document count is small.
+function pickChatMatters(docMatters, docsByMatter, message, recentText) {
+    const words = text => new Set(String(text || '').toLowerCase().match(/[a-z0-9-]{3,}/g) || []);
+    const nameTokens = m => (String(m.debtorName || '').toLowerCase().match(/[a-z]{3,}/g) || []);
+    const mentions = (m, w) => nameTokens(m).some(t => w.has(t)) || (m.caseNumber && w.has(String(m.caseNumber).toLowerCase()));
+    const now = words(message);
+    let picked = docMatters.filter(m => mentions(m, now));
+    if (!picked.length) {
+        const recent = words(recentText);
+        picked = docMatters.filter(m => mentions(m, recent));
+    }
+    if (!picked.length && docMatters.length === 1) picked = docMatters;
+    if (!picked.length) {
+        const total = docMatters.reduce((n, m) => n + docsByMatter.get(m.id).length, 0);
+        if (total <= GLOBAL_CHAT_FILE_LIMIT) picked = docMatters;
+    }
+    return picked;
+}
 
 // Call Gemini chat. If Google reports an uploaded file is gone, re-upload once via `refreshContents`.
 async function callGeminiChat(systemPrompt, contents, refreshContents) {
@@ -2711,32 +2733,37 @@ router.post('/api/chat/global', async (req, res) => {
         const matters = await listMatters();
         let allContext = buildAllMattersContext(matters);
 
-        // Case documents: attach the real files when there are few enough, otherwise use stored summaries
+        // Case documents: the real files of the case(s) being asked about are attached;
+        // other cases are represented by their stored summaries.
         let docsByMatter = new Map();
         try { docsByMatter = await listAllDocs(); } catch (e) { console.error('[Chat] Could not load documents:', e.message); }
         const caseLabel = m => `${m.debtorName || 'Unnamed'}${m.caseNumber ? ` (${m.caseNumber})` : ''}`;
         const docMatters = matters.filter(m => docsByMatter.has(m.id));
-        const totalDocs = docMatters.reduce((n, m) => n + docsByMatter.get(m.id).length, 0);
-        const attachFiles = totalDocs > 0 && totalDocs <= GLOBAL_CHAT_FILE_LIMIT;
+        const recentUserText = (await getGlobalChatHistory()).filter(h => h.role === 'user').slice(-4).map(h => h.content).join(' ');
+        const fileMatters = pickChatMatters(docMatters, docsByMatter, userMessage, recentUserText);
+        let attachFiles = fileMatters.length > 0;
         const buildGlobalFileParts = async (force = false) => {
             const parts = [];
-            for (const m of docMatters) {
+            for (const m of fileMatters) {
                 const r = await buildFileParts(docsByMatter.get(m.id), { force, labelPrefix: `Case ${caseLabel(m)} — ` });
                 parts.push(...r.parts);
             }
             return parts;
         };
-        if (!attachFiles) {
+        const summariesFor = async list => {
+            let text = '';
             let docBudget = 150000;
-            for (const m of docMatters) {
+            for (const m of list) {
                 if (docBudget <= 0) break;
                 const docs = docsByMatter.get(m.id).map(d => ({ id: d.id, fileName: d.fileName, createdAt: d.createdAt, analysis: d.analysis || null }));
                 const docsContext = await buildDocumentsContext(m.id, docBudget, docs);
                 if (!docsContext) continue;
-                allContext += `\n\n=== CASE DOCUMENTS: ${caseLabel(m)} ===\n${docsContext}`;
+                text += `\n\n=== CASE DOCUMENTS (summaries): ${caseLabel(m)} ===\n${docsContext}`;
                 docBudget -= docsContext.length;
             }
-        }
+            return text;
+        };
+        allContext += await summariesFor(docMatters.filter(m => !fileMatters.includes(m)));
 
         const apiKey = process.env.GOOGLE_API_KEY;
         let assistantContent;
@@ -2781,8 +2808,9 @@ Your role:
 - Track docket uploads: each matter has a "Docket uploads" field showing when dockets were uploaded and what was extracted. When asked "which matters did I upload dockets for?" or "list all docket uploads", compile a list from the Docket uploads field across all matters.
 - When referencing cases, always mention the debtor name and case number if available.
 - ${attachFiles
-    ? 'The uploaded case documents are attached to the user\'s message, each labelled with its case. They are the source of truth: answer from them, name the file for each fact, and say plainly when they do not cover a question. Never invent facts, dates or amounts.'
-    : '"CASE DOCUMENTS" sections are AI summaries of the files uploaded to a case — treat them as the source of truth, name the file when citing a fact, and say so when the documents don\'t cover a question.'}`;
+    ? `The actual uploaded documents for ${fileMatters.map(caseLabel).join(', ')} are attached to the user's message, each labelled with its case. Read them carefully — they are the source of truth: answer from them, name the file for each fact, and say plainly when they do not cover a question. Never invent facts, dates or amounts.`
+    : 'No document files are attached for this question.'}
+- "CASE DOCUMENTS (summaries)" sections are AI summaries of other cases' files. If a question needs detail a summary lacks, say which case and suggest asking about that case by name so its documents are read.`;
 
             const fullHistory = await getGlobalChatHistory();
             const recentChat = fullHistory.slice(-20);
@@ -2791,9 +2819,17 @@ Your role:
             try {
                 const fileParts = attachFiles ? await buildGlobalFileParts() : [];
                 const contents = buildChatContents(recentChat, fileParts, intro);
-                assistantContent = await callGeminiChat(systemPrompt, contents, attachFiles
-                    ? async () => buildChatContents(recentChat, await buildGlobalFileParts(true), intro)
-                    : null);
+                try {
+                    assistantContent = await callGeminiChat(systemPrompt, contents, attachFiles
+                        ? async () => buildChatContents(recentChat, await buildGlobalFileParts(true), intro)
+                        : null);
+                } catch (err) {
+                    // Too much to read in one request → answer from summaries instead
+                    if (!attachFiles || !/token|too large|exceed|limit/i.test(err.message)) throw err;
+                    console.error('[Chat] Documents too large for one request, using summaries:', err.message);
+                    const fallbackPrompt = `${systemPrompt}\n\nNOTE: the document files were too large to attach for this question. Answer from these summaries and say if a detail is missing:${await summariesFor(fileMatters)}`;
+                    assistantContent = await callGeminiChat(fallbackPrompt, buildChatContents(recentChat, [], intro), null);
+                }
             } catch (apiErr) {
                 console.error('Global chat API error:', apiErr.message);
                 assistantContent = `I couldn't reach the AI service or read the case documents right now (${apiErr.message}). Please try again in a moment.`;
