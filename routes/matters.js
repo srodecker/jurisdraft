@@ -929,6 +929,12 @@ async function callGeminiChat(systemPrompt, contents, refreshContents) {
     }
 }
 
+// Note appended to an answer when some documents could not be read, so the user sees why
+function unreadFilesNote(skipped) {
+    const unread = skipped.filter(x => !/file type not readable/.test(x));
+    return unread.length ? `\n\n**Note:** ${unread.length} document(s) could not be read for this answer: ${unread.join("; ")}` : '';
+}
+
 // Chat history → Gemini contents, with the case files attached to the latest user turn
 function buildChatContents(recentChat, fileParts, intro) {
     const contents = recentChat.map(m => ({
@@ -1002,7 +1008,7 @@ RESPONSE STYLE:
                 assistantContent = await callGeminiChat(systemPrompt, contents, async () => {
                     const fresh = await getCaseFileParts(matter.id, { force: true });
                     return buildChatContents(recentChat, fresh.parts, intro);
-                });
+                }) + unreadFilesNote(files.skipped);
             } catch (err) {
                 console.error('[Chat] Failed:', err.message);
                 assistantContent = `I couldn't read the case documents right now (${err.message}). Please try again in a moment.`;
@@ -2659,7 +2665,9 @@ async function clearGlobalChatHistory() {
     globalChatHistory = [];
 }
 
-function buildAllMattersContext(matters) {
+// docMatterIds: cases with uploaded documents — their workflow checklist is left out so answers
+// come from the documents, not from internal task tracking
+function buildAllMattersContext(matters, docMatterIds = new Set()) {
     if (matters.length === 0) return 'No matters loaded yet.';
 
     return matters.map(m => {
@@ -2705,15 +2713,15 @@ function buildAllMattersContext(matters) {
             .map(u => `${new Date(u.uploadedAt).toLocaleDateString()} (${u.hearingsExtracted}h/${u.filingsExtracted}f)`)
             .join('; ');
 
-        return `--- ${m.debtorName || 'Unknown'} ---
-Case#: ${m.caseNumber || 'Pending'} | Stage: ${stageName} (${completedTasks}/${totalTasks}) | Amount: ${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : 'N/A'}
+        const hasDocs = docMatterIds.has(m.id);
+        return `--- ${m.debtorName || 'Unknown'}${hasDocs ? ' (has uploaded case documents)' : ''} ---
+Case#: ${m.caseNumber || 'Pending'}${hasDocs ? '' : ` | Stage: ${stageName} (${completedTasks}/${totalTasks})`} | Amount: ${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : 'N/A'}
 Loan: ${m.loanType || '?'} | Court: ${m.courtName || 'TBD'} | Status: ${m.status}${m.statusText ? ' - ' + m.statusText : ''}
 Account: ${m.accountNumber || '?'} | Service: ${m.serviceType || '?'} | Def. Response: ${m.defendantResponse || '?'}
 Dates: ${dateEntries || 'None'}
 Hearings: ${hearingsSummary || 'None on file'}
 Docket uploads: ${docketLog || 'None'}
-Next tasks: ${pendingTasks.slice(0, 3).join(' → ') || 'All complete'}
-Recent: ${recentEvents || 'No events'}
+${hasDocs ? '' : `Next tasks: ${pendingTasks.slice(0, 3).join(' → ') || 'All complete'}\n`}Recent: ${recentEvents || 'No events'}
 Notes: ${m.notes || 'None'}`;
     }).join('\n\n');
 }
@@ -2731,7 +2739,6 @@ router.post('/api/chat/global', async (req, res) => {
         await appendGlobalChat(userEntry);
 
         const matters = await listMatters();
-        let allContext = buildAllMattersContext(matters);
 
         // Case documents: the real files of the case(s) being asked about are attached;
         // other cases are represented by their stored summaries.
@@ -2739,14 +2746,18 @@ router.post('/api/chat/global', async (req, res) => {
         try { docsByMatter = await listAllDocs(); } catch (e) { console.error('[Chat] Could not load documents:', e.message); }
         const caseLabel = m => `${m.debtorName || 'Unnamed'}${m.caseNumber ? ` (${m.caseNumber})` : ''}`;
         const docMatters = matters.filter(m => docsByMatter.has(m.id));
+        let allContext = buildAllMattersContext(matters, new Set(docMatters.map(m => m.id)));
         const recentUserText = (await getGlobalChatHistory()).filter(h => h.role === 'user').slice(-4).map(h => h.content).join(' ');
         const fileMatters = pickChatMatters(docMatters, docsByMatter, userMessage, recentUserText);
         let attachFiles = fileMatters.length > 0;
+        let globalSkipped = [];
         const buildGlobalFileParts = async (force = false) => {
             const parts = [];
+            globalSkipped = [];
             for (const m of fileMatters) {
                 const r = await buildFileParts(docsByMatter.get(m.id), { force, labelPrefix: `Case ${caseLabel(m)} — ` });
                 parts.push(...r.parts);
+                globalSkipped.push(...r.skipped);
             }
             return parts;
         };
@@ -2791,7 +2802,7 @@ RESPONSE STYLE:
   CMC — April 14, 2026 at 8:30 AM
   Dept 19, [Court Name]
 - Only list multiple items when the user asks "all", "list", "upcoming", or "what CMCs do we have?"
-- When asked about a specific case, lead with the most important info (next hearing, current stage, what needs to happen next).
+- When asked about a specific case, lead with the most important facts. For cases with uploaded documents, take every fact from the documents; never answer from workflow stages or task lists.
 - When multiple items share the same soonest date, include all of them.
 - Always sort chronologically when listing dates.
 - Do not repeat back the question. Just answer it.
@@ -2822,7 +2833,7 @@ Your role:
                 try {
                     assistantContent = await callGeminiChat(systemPrompt, contents, attachFiles
                         ? async () => buildChatContents(recentChat, await buildGlobalFileParts(true), intro)
-                        : null);
+                        : null) + unreadFilesNote(globalSkipped);
                 } catch (err) {
                     // Too much to read in one request → answer from summaries instead
                     if (!attachFiles || !/token|too large|exceed|limit/i.test(err.message)) throw err;
