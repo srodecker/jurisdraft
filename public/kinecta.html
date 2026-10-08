@@ -368,6 +368,12 @@
         .docs-table td { vertical-align: middle; }
         .docs-name-link { color: var(--text-primary); cursor: pointer; text-decoration: none; word-break: break-all; }
         .docs-name-link:hover { color: var(--accent-primary); text-decoration: underline; }
+        .docs-ai-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding: 12px 14px; background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; }
+        .docs-ai { font-size: 11px; white-space: nowrap; }
+        .docs-ai.done { color: var(--accent-success); }
+        .docs-ai.none { color: var(--text-tertiary); }
+        .docs-ai.reading { color: var(--accent-primary); }
+        .docs-ai.unsupported, .docs-ai.error { color: var(--accent-error); }
         .docs-name-input { width: 100%; box-sizing: border-box; background: var(--bg-tertiary); border: 1px solid var(--border-primary); border-radius: 5px; padding: 5px 7px; font-size: 12px; color: var(--text-primary); }
     </style>
 </head>
@@ -642,6 +648,14 @@
                             <input type="file" id="docsFileInput" multiple style="display:none" onchange="uploadDocsFiles(this.files); this.value='';" />
                             <div id="docsQueue" class="docs-queue"></div>
 
+                            <div class="docs-ai-bar">
+                                <div>
+                                    <div style="font-size:13px;font-weight:600;">Case info from documents</div>
+                                    <div id="docsAiStatus" style="font-size:12px;color:var(--text-secondary);margin-top:2px;"></div>
+                                </div>
+                                <button class="btn btn-primary btn-sm" id="docsRebuildBtn" onclick="rebuildCaseFromDocs()">Rebuild case from documents</button>
+                            </div>
+
                             <div class="tbl-wrap" style="margin-top:16px;">
                                 <div class="tbl-bar">
                                     <div style="font-size:13px;font-weight:600;">Uploaded Documents <span id="docsCount" style="color:var(--text-tertiary);font-weight:400;"></span></div>
@@ -722,12 +736,10 @@
                             </div>
                         </div>
                         <div style="display:flex;gap:6px;">
-                            <button class="btn btn-primary btn-sm" onclick="document.getElementById('docUpload').click()">
-                                <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>
-                                Upload &amp; Extract
+                            <button class="btn btn-primary btn-sm" onclick="showDocumentsView(currentMatter.id)">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+                                Documents
                             </button>
-                            <input type="file" id="docUpload" accept=".pdf,.jpg,.jpeg,.png,.tiff,.bmp" multiple style="display:none" onchange="handleDocUpload(this)" />
-                            <button class="btn btn-secondary btn-sm" onclick="showDocumentsView(currentMatter.id)">Documents</button>
                             <button class="btn btn-secondary btn-sm" onclick="openEditModal()">Edit</button>
                             <button class="btn btn-danger btn-sm" onclick="deleteMatter()">Delete</button>
                         </div>
@@ -807,7 +819,7 @@
                         <div class="chat-wrap">
                             <div class="chat-messages" id="chatMessages">
                                 <div style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px;">
-                                    Ask anything about this case. The AI has full context of all case data, dates, tasks, and events.
+                                    Ask anything about this case. The AI answers from the case data and the documents uploaded to this case.
                                 </div>
                             </div>
                             <div class="chat-input-row">
@@ -1510,7 +1522,7 @@ function renderChat() {
 
     if (msgs.length === 0) {
         container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px;">
-            Ask anything about this case. The AI has full context of all case data, dates, tasks, and events.
+            Ask anything about this case. The AI answers from the case data and the documents uploaded to this case.
         </div>`;
         return;
     }
@@ -1521,7 +1533,7 @@ function renderChat() {
         return `<div class="chat-msg">
             <div class="chat-avatar ${isUser ? 'user' : 'ai'}">${isUser ? 'You' : 'AI'}</div>
             <div>
-                <div class="chat-bubble ${isUser ? 'user' : ''}">${esc(m.content)}</div>
+                <div class="chat-bubble ${isUser ? 'user' : ''}">${isUser ? esc(m.content) : formatAiText(m.content)}</div>
                 <div class="chat-time">${time}</div>
             </div>
         </div>`;
@@ -1781,14 +1793,7 @@ function renderGlobalChat(messages) {
     container.innerHTML = messages.map(m => {
         const isUser = m.role === 'user';
         const time = m.timestamp ? new Date(m.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
-        // Convert markdown-like formatting for AI responses
-        let content = esc(m.content);
-        if (!isUser) {
-            // Convert **bold** to <strong>
-            content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-            // Convert bullet points
-            content = content.replace(/^[-•] (.+)$/gm, '<span style="display:flex;gap:6px;"><span style="color:var(--accent-primary);">&#8226;</span><span>$1</span></span>');
-        }
+        const content = isUser ? esc(m.content) : formatAiText(m.content);
         return `<div class="chat-msg" style="max-width:800px;">
             <div class="chat-avatar ${isUser ? 'user' : 'ai'}">${isUser ? 'You' : 'AI'}</div>
             <div style="flex:1;min-width:0;">
@@ -2225,6 +2230,13 @@ function showToast(msg, isError) {
 // ============================================================
 // UTILS
 // ============================================================
+// Escape, then render **bold**, bullet lines and markdown headings in AI replies
+function formatAiText(text) {
+    return esc(text)
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^#{1,4} (.+)$/gm, '<strong>$1</strong>')
+        .replace(/^\s*[-•*] (.+)$/gm, '<span style="display:flex;gap:6px;"><span style="color:var(--accent-primary);">&#8226;</span><span>$1</span></span>');
+}
 function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 function truncate(s, n) { return s && s.length > n ? s.slice(0, n) + '...' : s; }
 
@@ -2320,55 +2332,6 @@ async function handleImportFile(input) {
 }
 
 // ============================================================
-// DOCUMENT UPLOAD & EXTRACTION
-// ============================================================
-async function handleDocUpload(input) {
-    const files = input.files;
-    if (!files || files.length === 0) return;
-    if (!currentMatter) return;
-    input.value = '';
-
-    const fileNames = Array.from(files).map(f => f.name).join(', ');
-    if (!confirm(`Upload and extract data from:\n${fileNames}\n\nThis will analyze the document(s) and fill in any missing case data.`)) return;
-
-    const formData = new FormData();
-    for (const f of files) formData.append('files', f);
-
-    // Show loading state
-    const btn = document.querySelector('#docUpload').previousElementSibling;
-    const origText = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner"></span> Extracting...';
-    btn.disabled = true;
-
-    try {
-        const r = await authFetch(`/api/matters/${currentMatter.id}/extract`, {
-            method: 'POST', body: formData
-        });
-        const result = await r.json();
-
-        if (result.error) {
-            alert('Extraction error: ' + result.error);
-            return;
-        }
-
-        currentMatter = result.matter;
-        renderDetailHeader();
-        switchTab('overview');
-
-        const fields = result.updatedFields;
-        if (fields.length > 0) {
-            alert(`Extraction complete! Updated ${fields.length} field(s):\n${fields.join(', ')}\n\nCheck the Overview and Timeline tabs.`);
-        } else {
-            alert('Extraction complete. No new data found (all fields were already filled). Check the Timeline tab for extracted events.');
-        }
-    } catch(e) {
-        alert('Extraction failed: ' + e.message);
-    } finally {
-        btn.innerHTML = origText;
-        btn.disabled = false;
-    }
-}
-// ============================================================
 // CASE DOCUMENTS — select a case, upload (drag & drop), rename, remove
 // ============================================================
 const DOCS_MAX_BYTES = 50 * 1024 * 1024;
@@ -2454,7 +2417,7 @@ function selectDocsCase(id) {
 async function loadDocs() {
     const matterId = docsMatterId;
     if (!matterId) return;
-    document.getElementById('docsTableBody').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:24px;">Loading...</td></tr>`;
+    document.getElementById('docsTableBody').innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:24px;">Loading...</td></tr>`;
     try {
         const r = await authFetch(`/api/matters/${matterId}/documents`);
         const d = await r.json();
@@ -2465,7 +2428,7 @@ async function loadDocs() {
         renderDocsTable();
     } catch (e) {
         if (matterId !== docsMatterId) return;
-        document.getElementById('docsTableBody').innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--accent-error);padding:24px;">${esc(e.message)}</td></tr>`;
+        document.getElementById('docsTableBody').innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--accent-error);padding:24px;">${esc(e.message)}</td></tr>`;
     }
 }
 
@@ -2485,15 +2448,16 @@ function renderDocsTable() {
     removeBtn.style.display = docsEditMode && docsSelected.size ? '' : 'none';
     removeBtn.textContent = `Remove Selected (${docsSelected.size})`;
     document.getElementById('docsCount').textContent = docsList.length ? `(${docsList.length})` : '';
+    renderDocsAiStatus();
 
     const allChecked = docsList.length > 0 && docsSelected.size === docsList.length;
     document.getElementById('docsHeadRow').innerHTML =
         (docsEditMode ? `<th style="width:30px;"><input type="checkbox" aria-label="Select all" ${allChecked ? 'checked' : ''} onchange="toggleAllDocs(this.checked)"></th>` : '')
-        + `<th>Name</th><th style="width:80px;">Size</th><th style="width:110px;">Uploaded By</th><th style="width:140px;">Uploaded</th><th style="width:${docsEditMode ? 80 : 90}px;"></th>`;
+        + `<th>Name</th><th style="width:150px;">AI</th><th style="width:70px;">Size</th><th style="width:100px;">Uploaded By</th><th style="width:110px;">Uploaded</th><th style="width:${docsEditMode ? 80 : 90}px;"></th>`;
 
     const body = document.getElementById('docsTableBody');
     if (docsList.length === 0) {
-        body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary);padding:24px;">No documents yet. Drag files onto this page to upload.</td></tr>`;
+        body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary);padding:24px;">No documents yet. Drag files onto this page to upload.</td></tr>`;
         return;
     }
     body.innerHTML = docsList.map(doc => {
@@ -2507,6 +2471,7 @@ function renderDocsTable() {
         return `<tr>
             ${docsEditMode ? `<td><input type="checkbox" aria-label="Select ${esc(doc.fileName)}" ${docsSelected.has(doc.id) ? 'checked' : ''} onchange="toggleDocSelected('${id}', this.checked)"></td>` : ''}
             <td>${name}</td>
+            <td>${docAiBadge(doc)}</td>
             <td style="color:var(--text-secondary);">${formatBytes(doc.size)}</td>
             <td style="color:var(--text-secondary);">${esc(doc.uploadedBy || '-')}</td>
             <td style="color:var(--text-secondary);" title="${esc(new Date(doc.createdAt).toLocaleString())}">${esc(new Date(doc.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))}</td>
@@ -2602,6 +2567,107 @@ async function downloadDoc(id) {
     }
 }
 
+// ---- AI: read documents and rebuild the case from them ----
+let docsAiBusy = false;
+const docsReading = new Set();
+
+function docAiBadge(doc) {
+    if (docsReading.has(doc.id)) return `<span class="docs-ai reading">Reading…</span>`;
+    const s = doc.analysisStatus || 'none';
+    if (s === 'done') return `<span class="docs-ai done" title="Read by AI">✓ ${esc(doc.documentType || 'Read')}</span>`;
+    if (s === 'unsupported') return `<span class="docs-ai unsupported" title="${esc(doc.analysisError || '')}">Not readable</span>`;
+    if (s === 'error') return `<span class="docs-ai error" title="${esc(doc.analysisError || '')}">Error — retried on rebuild</span>`;
+    return `<span class="docs-ai none">Not read yet</span>`;
+}
+
+function renderDocsAiStatus(text) {
+    const el = document.getElementById('docsAiStatus');
+    document.getElementById('docsRebuildBtn').disabled = docsAiBusy || docsList.length === 0;
+    if (text) { el.textContent = text; return; }
+    const read = docsList.filter(d => d.analysisStatus === 'done').length;
+    el.textContent = docsList.length
+        ? `${read} of ${docsList.length} document(s) read by AI. Rebuilding replaces all case info with what the documents show.`
+        : 'Upload documents to build this case.';
+}
+
+// Read every document not yet read (or that failed). One request per document.
+async function analyzePendingDocs() {
+    const matterId = docsMatterId;
+    const pending = docsList.filter(d => d.analysisStatus === 'none' || d.analysisStatus === 'error');
+    if (!pending.length) return true;
+    docsAiBusy = true;
+    let failures = 0;
+    try {
+        for (let i = 0; i < pending.length; i++) {
+            const doc = pending[i];
+            if (matterId !== docsMatterId) return false;
+            docsReading.add(doc.id);
+            renderDocsTable();
+            renderDocsAiStatus(`Reading ${i + 1} of ${pending.length}: ${doc.fileName}…`);
+            try {
+                const r = await authFetch(`/api/matters/${matterId}/documents/${doc.id}/analyze`, { method: 'POST' });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.error || 'Analysis failed');
+                Object.assign(doc, d);
+            } catch (e) {
+                failures++;
+                doc.analysisStatus = 'error';
+                doc.analysisError = e.message;
+            } finally {
+                docsReading.delete(doc.id);
+            }
+        }
+    } finally {
+        docsAiBusy = false;
+        if (matterId === docsMatterId) renderDocsTable();
+    }
+    if (failures) showToast(`${failures} document(s) could not be read. Hover "Error" in the AI column for details.`, true);
+    return failures === 0;
+}
+
+async function rebuildCaseFromDocs() {
+    const matterId = docsMatterId;
+    const matter = allMatters.find(m => m.id === matterId);
+    if (!matterId || !docsList.length || docsAiBusy) return;
+    if (!confirm(`Rebuild "${matter ? docsCaseLabel(matter) : 'this case'}" from its ${docsList.length} document(s)?\n\nThis ERASES all current case information — fields, dates, status, timeline, workflow tasks and case chat — and replaces it with what the documents show. Uploaded documents are kept.`)) return;
+
+    const btn = document.getElementById('docsRebuildBtn');
+    const label = btn.textContent;
+    btn.textContent = 'Working…';
+    try {
+        const ok = await analyzePendingDocs();
+        if (matterId !== docsMatterId) return;
+        if (!ok) {
+            renderDocsAiStatus('Some documents could not be read. Remove them or try again (see the AI column).');
+            return;
+        }
+        docsAiBusy = true;
+        renderDocsAiStatus('Building case info from all documents…');
+        const r = await authFetch(`/api/matters/${matterId}/rebuild-from-documents`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Rebuild failed');
+        docsAiBusy = false;
+        await loadMatters();
+        if (matterId === docsMatterId) {
+            renderDocsCaseSelect();
+            const updated = allMatters.find(m => m.id === matterId);
+            if (updated) {
+                document.getElementById('docsDropCaseName').textContent = docsCaseLabel(updated);
+                document.getElementById('breadcrumb').innerHTML = `<span class="current">Case Documents</span><span class="sep">/</span><a onclick="openMatter('${esc(updated.id)}')">${esc(updated.debtorName || 'Matter')}</a>`;
+            }
+            renderDocsAiStatus(`Case rebuilt from ${d.documentsUsed} document(s)${d.skipped && d.skipped.length ? ` (${d.skipped.length} not readable, skipped)` : ''}. Open the case to review it.`);
+        }
+        showToast('Case rebuilt from documents');
+    } catch (e) {
+        showToast(e.message, true);
+        if (matterId === docsMatterId) renderDocsAiStatus();
+    } finally {
+        docsAiBusy = false;
+        btn.textContent = label;
+        btn.disabled = docsList.length === 0;
+    }
+}
+
 // XHR wrapper so uploads can report progress
 function xhrSend(method, url, body, headers, onProgress) {
     return new Promise((resolve, reject) => {
@@ -2680,7 +2746,15 @@ async function uploadDocsFiles(fileList) {
         }
     }
     if (uploaded) showToast(`Uploaded ${uploaded} file(s)`);
-    if (matterId === docsMatterId) loadDocs();
+    if (matterId !== docsMatterId) return;
+    await loadDocs();
+    if (uploaded && !docsAiBusy) {
+        const ok = await analyzePendingDocs();
+        if (ok && matterId === docsMatterId) {
+            renderDocsAiStatus();
+            document.getElementById('docsAiStatus').textContent += ' New documents read — click "Rebuild case from documents" to update the case info.';
+        }
+    }
 }
 
 // Drag & drop: the whole Documents view is a drop target once a case is selected

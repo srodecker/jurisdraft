@@ -4,7 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
-const { deleteAllDocuments } = require('./documents');
+const { deleteAllDocuments, listDocAnalyses, listAllDocAnalyses } = require('./documents');
+const { GEMINI_BASE, GEMINI_MODEL, generateJson } = require('../lib/gemini');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -890,6 +891,7 @@ router.post('/api/matters/:id/chat', async (req, res) => {
 
         // Build context for AI
         const matterContext = buildMatterContext(matter);
+        const documentsContext = await buildDocumentsContext(matter.id);
         const recentChat = matter.chatHistory.slice(-20); // Last 20 messages for context
 
         const apiKey = process.env.GOOGLE_API_KEY;
@@ -903,6 +905,13 @@ Today's date is ${new Date().toISOString().slice(0, 10)}.
 You have access to the following case information:
 
 ${matterContext}
+
+CASE DOCUMENTS (AI summaries of every file uploaded to this case — the source of truth):
+${documentsContext || 'No analyzed documents yet.'}
+
+SOURCES:
+- Base answers on the case documents above. When stating a fact, name the document it came from (file name).
+- If the documents do not contain the answer, say so plainly. Do not invent facts, dates or amounts.
 
 RESPONSE STYLE:
 - Be concise, direct, and professional. This tool is shown to supervisors.
@@ -925,18 +934,19 @@ Your role:
             }));
 
             try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+                const url = `${GEMINI_BASE}/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         systemInstruction: { parts: [{ text: systemPrompt }] },
-                        contents: chatMessages
+                        contents: chatMessages,
+                        generationConfig: { maxOutputTokens: 8192 }
                     })
                 });
 
                 const result = await response.json();
-                assistantContent = result.candidates?.[0]?.content?.parts?.[0]?.text || 'I was unable to generate a response. Please try again.';
+                assistantContent = result.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || 'I was unable to generate a response. Please try again.';
             } catch (apiErr) {
                 assistantContent = `I'm unable to connect to the AI service right now. Here's what I know about this case:\n\n${matterContext}`;
             }
@@ -960,6 +970,166 @@ Your role:
         await writeMatter(matter.id, matter);
         res.json({ message: assistantEntry, matter });
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Text block describing every analyzed document of a matter, for AI chat context.
+// Pass `docs` (from listAllDocAnalyses) to avoid a lookup per matter.
+async function buildDocumentsContext(matterId, maxChars = 150000, docs = null) {
+    if (!docs) {
+        try {
+            docs = await listDocAnalyses(matterId);
+        } catch (e) {
+            console.error('[Chat] Could not load document analyses:', e.message);
+            return '';
+        }
+    }
+    const blocks = [];
+    let total = 0;
+    const done = docs.filter(d => d.analysis && d.analysis.status === 'done')
+        .sort((a, b) => String(a.analysis.documentDate || '').localeCompare(String(b.analysis.documentDate || '')));
+    for (const d of done) {
+        const a = d.analysis;
+        const facts = Array.isArray(a.keyFacts) && a.keyFacts.length ? '\nKey facts:\n' + a.keyFacts.map(f => `- ${f}`).join('\n') : '';
+        const block = `### ${d.fileName} — ${a.documentType || 'Document'}${a.documentDate ? ` (${a.documentDate})` : ''}\n${a.summary || ''}${facts}`;
+        if (total + block.length > maxChars) {
+            blocks.push(`[${done.length - blocks.length} more document(s) omitted for length]`);
+            break;
+        }
+        blocks.push(block);
+        total += block.length;
+    }
+    const pending = docs.filter(d => !d.analysis || d.analysis.status !== 'done');
+    if (pending.length) blocks.push(`Not yet readable by AI: ${pending.map(d => d.fileName).join(', ')}`);
+    return blocks.join('\n\n');
+}
+
+// ============================================================
+// REBUILD CASE FROM DOCUMENTS
+// Wipes all case data (fields, dates, status, tasks, timeline, chat) and rebuilds
+// it solely from the AI analyses of the case's uploaded documents.
+// ============================================================
+const REBUILD_PROMPT = `You are a legal case analyst. Below are AI analyses of every document in ONE debt collection case.
+Combine them into a single, accurate case record. Use only facts from these analyses.
+
+Conflict rules:
+- Prefer court-filed and court-issued documents over letters and notes.
+- For contact details (address) prefer the most recent document.
+- demandAmount = amount demanded/owed before judgment; judgmentAmount only if a judgment was entered.
+- Merge duplicate events/hearings (same date and substance) into one.
+- A hearing that a later document shows as continued, vacated or held must reflect that status.
+
+Return ONE JSON object (omit unknown values):
+{
+  "fields": { "debtorName": "", "debtorAddress": "", "debtorCity": "", "debtorState": "", "debtorZip": "", "caseNumber": "", "courtName": "", "courtCounty": "", "demandAmount": "", "judgmentAmount": "", "loanType": "", "accountNumber": "", "creditorName": "", "serviceType": "personal | substituted", "defendantResponse": "e.g. Answer filed / No response / Default" },
+  "dates": { "dvnSent": "", "responseDue": "", "complaintFiled": "", "served": "", "answerDue": "", "answerReceived": "", "defaultEntered": "", "judgmentEntered": "", "abstractFiled": "", "abstractRecorded": "", "writIssued": "", "closed": "" },
+  "events": [{ "type": "filing|hearing|service|correspondence|minute_order|court_order|payment|note", "title": "", "date": "YYYY-MM-DD", "description": "", "source": "file name" }],
+  "hearings": [{ "type": "", "date": "YYYY-MM-DD", "time": "", "department": "", "judge": "", "description": "", "status": "Scheduled | Continued | Vacated | Held", "source": "file name" }],
+  "statusText": "one line: the latest action/status of the case, e.g. 'Default judgment entered 2025-02-03'",
+  "notes": "short case overview (3-6 sentences)",
+  "sources": { "fieldName": "file name the value came from" }
+}
+Dates in YYYY-MM-DD. Amounts as plain numbers.`;
+
+const REBUILD_FIELDS = ['debtorName', 'debtorAddress', 'debtorCity', 'debtorState', 'debtorZip',
+    'caseNumber', 'courtName', 'courtCounty', 'demandAmount', 'judgmentAmount',
+    'loanType', 'accountNumber', 'creditorName', 'serviceType', 'defendantResponse'];
+
+router.post('/api/matters/:id/rebuild-from-documents', async (req, res) => {
+    try {
+        const existing = await readMatter(req.params.id);
+        const docs = await listDocAnalyses(existing.id);
+        if (docs.length === 0) return res.status(400).json({ error: 'This case has no uploaded documents.' });
+
+        const unanalyzed = docs.filter(d => !d.analysis || d.analysis.status === 'error');
+        if (unanalyzed.length) {
+            return res.status(409).json({ error: 'Some documents have not been read by AI yet.', pending: unanalyzed.map(d => ({ id: d.id, fileName: d.fileName })) });
+        }
+        const usable = docs.filter(d => d.analysis.status === 'done');
+        if (usable.length === 0) return res.status(400).json({ error: 'None of the documents could be read by AI.' });
+
+        const payload = usable.map(d => {
+            const { status, ...analysis } = d.analysis;
+            return { fileName: d.fileName, ...analysis };
+        });
+        const synthesized = await generateJson([{ text: `${REBUILD_PROMPT}\n\nDOCUMENT ANALYSES:\n${JSON.stringify(payload, null, 1)}` }]);
+
+        // Fresh record: same id/createdAt, everything else from documents only
+        const now = new Date().toISOString();
+        const matter = createMatterObject({});
+        matter.id = existing.id;
+        matter.createdAt = existing.createdAt || now;
+        matter.updatedAt = now;
+        matter.statusText = '';
+        matter.colorCode = '';
+        matter.source = 'documents';
+        matter.rebuiltFromDocumentsAt = now;
+
+        const fields = synthesized.fields || {};
+        for (const f of REBUILD_FIELDS) {
+            if (fields[f] !== undefined && fields[f] !== null && String(fields[f]).trim() !== '') matter[f] = String(fields[f]).trim();
+        }
+        if (!matter.debtorName) matter.debtorName = existing.debtorName || '';
+
+        const dates = synthesized.dates || {};
+        for (const key of Object.keys(matter.dates)) {
+            if (key === 'serviceType') continue;
+            const d = normalizeDate(dates[key]);
+            if (d) matter.dates[key] = d;
+        }
+        if (/^(personal|substituted)$/i.test(matter.serviceType || '')) matter.dates.serviceType = matter.serviceType.toLowerCase();
+
+        if (synthesized.statusText) matter.statusText = String(synthesized.statusText);
+        if (synthesized.notes) matter.notes = String(synthesized.notes);
+        matter.fieldSources = synthesized.sources && typeof synthesized.sources === 'object' ? synthesized.sources : {};
+
+        for (const h of Array.isArray(synthesized.hearings) ? synthesized.hearings : []) {
+            const date = normalizeDate(h.date);
+            if (!date) continue;
+            matter.hearings.push({
+                id: crypto.randomUUID(),
+                type: h.type || 'Hearing',
+                date,
+                time: h.time || null,
+                department: h.department || null,
+                judge: h.judge || null,
+                description: h.description || h.type || 'Hearing',
+                status: h.status || 'Scheduled',
+                source: h.source ? `document: ${h.source}` : 'documents',
+                uploadedAt: now
+            });
+        }
+
+        const validTypes = new Set(EVENT_TYPES.map(t => t.id));
+        for (const e of Array.isArray(synthesized.events) ? synthesized.events : []) {
+            const date = normalizeDate(e.date);
+            if (!date) continue;
+            matter.events.push({
+                id: crypto.randomUUID(),
+                type: validTypes.has(e.type) ? e.type : 'note',
+                title: e.title || 'Document event',
+                description: [e.description, e.source ? `Source: ${e.source}` : ''].filter(Boolean).join(' — '),
+                date,
+                addedBy: 'documents',
+                createdAt: now
+            });
+        }
+        matter.events.push({
+            id: crypto.randomUUID(),
+            type: 'status_change',
+            title: 'Case rebuilt from documents',
+            description: `All case information was cleared and rebuilt from ${usable.length} document(s): ${usable.map(d => d.fileName).join(', ')}`,
+            date: now,
+            addedBy: 'system',
+            createdAt: now
+        });
+
+        await writeMatter(matter.id, matter);
+        const skipped = docs.filter(d => d.analysis.status === 'unsupported').map(d => d.fileName);
+        res.json({ success: true, matter, documentsUsed: usable.length, skipped });
+    } catch (err) {
+        console.error('[Rebuild] Failed:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -2589,7 +2759,19 @@ router.post('/api/chat/global', async (req, res) => {
         await appendGlobalChat(userEntry);
 
         const matters = await listMatters();
-        const allContext = buildAllMattersContext(matters);
+        let allContext = buildAllMattersContext(matters);
+        // Add document summaries (budget shared across matters)
+        let docsByMatter = new Map();
+        try { docsByMatter = await listAllDocAnalyses(); } catch (e) { console.error('[Chat] Could not load document analyses:', e.message); }
+        let docBudget = 150000;
+        for (const m of matters) {
+            if (docBudget <= 0) break;
+            if (!docsByMatter.has(m.id)) continue;
+            const docsContext = await buildDocumentsContext(m.id, docBudget, docsByMatter.get(m.id));
+            if (!docsContext) continue;
+            allContext += `\n\n=== CASE DOCUMENTS: ${m.debtorName || 'Unnamed'}${m.caseNumber ? ` (${m.caseNumber})` : ''} ===\n${docsContext}`;
+            docBudget -= docsContext.length;
+        }
 
         const apiKey = process.env.GOOGLE_API_KEY;
         let assistantContent;
@@ -2632,7 +2814,8 @@ Your role:
 - When asked about a specific person/debtor, search through all cases to find them (use partial name matching)
 - Provide workload summaries by team member when asked
 - Track docket uploads: each matter has a "Docket uploads" field showing when dockets were uploaded and what was extracted. When asked "which matters did I upload dockets for?" or "list all docket uploads", compile a list from the Docket uploads field across all matters.
-- When referencing cases, always mention the debtor name and case number if available.`;
+- When referencing cases, always mention the debtor name and case number if available.
+- "CASE DOCUMENTS" sections are AI summaries of the files uploaded to a case — treat them as the source of truth, name the file when citing a fact, and say so when the documents don't cover a question.`;
 
             const fullHistory = await getGlobalChatHistory();
             const recentChat = fullHistory.slice(-20);
@@ -2642,17 +2825,18 @@ Your role:
             }));
 
             try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+                const url = `${GEMINI_BASE}/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         systemInstruction: { parts: [{ text: systemPrompt }] },
-                        contents: chatMessages
+                        contents: chatMessages,
+                        generationConfig: { maxOutputTokens: 8192 }
                     })
                 });
                 const result = await response.json();
-                assistantContent = result.candidates?.[0]?.content?.parts?.[0]?.text || 'I was unable to generate a response. Please try again.';
+                assistantContent = result.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || 'I was unable to generate a response. Please try again.';
             } catch (apiErr) {
                 console.error('Global chat API error:', apiErr);
                 assistantContent = `I'm unable to connect to the AI service right now. You have ${matters.length} active matters loaded.`;

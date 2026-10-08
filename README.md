@@ -73,6 +73,8 @@ Upload files to a case: pick a case from the dropdown (or add a new one), then d
 
 Deleting a case deletes its documents.
 
+**AI reading:** each uploaded document is read by Gemini (PDF, images, .docx, text; large files via the Gemini File API) and its summary, key facts, dates and events are stored with the document. **Rebuild case from documents** erases the case's fields, dates, status, tasks, timeline and chat and rebuilds them solely from those readings. The case chat and AI Chat answer from the document summaries. Requires `GOOGLE_API_KEY`.
+
 ## Technical Details
 
 - **Backend**: Node.js with Express
