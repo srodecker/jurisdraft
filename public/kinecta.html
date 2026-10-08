@@ -2565,6 +2565,7 @@ function docAiBadge(doc) {
     const s = doc.analysisStatus || 'none';
     if (s === 'done') return `<span class="docs-ai done" title="Read by AI">✓ ${esc(doc.documentType || 'Read')}</span>`;
     if (s === 'unsupported') return `<span class="docs-ai unsupported" title="${esc(doc.analysisError || '')}">Not readable</span>`;
+    if (s === 'error' && /missing/i.test(doc.analysisError || '')) return `<span class="docs-ai error" title="${esc(doc.analysisError)}">File missing — re-upload</span>`;
     if (s === 'error') return `<span class="docs-ai error" title="${esc(doc.analysisError || '')}">Error — retried on rebuild</span>`;
     return `<span class="docs-ai none">Not read yet</span>`;
 }

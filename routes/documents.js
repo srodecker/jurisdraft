@@ -209,11 +209,23 @@ async function removeDoc(doc) {
 async function readDocBuffer(doc) {
     if (useSupabase) {
         const { data, error } = await supabase.storage.from(BUCKET).download(doc.storagePath);
-        if (error) throw new Error(`Could not read "${doc.fileName}" from storage: ${error.message}`);
+        if (error) {
+            const err = new Error(`Could not read "${doc.fileName}" from storage: ${error.message}`);
+            err.missing = /not found/i.test(error.message);
+            throw err;
+        }
         return Buffer.from(await data.arrayBuffer());
     }
-    return fs.readFile(path.join(DOCS_DIR, doc.storagePath));
+    try {
+        return await fs.readFile(path.join(DOCS_DIR, doc.storagePath));
+    } catch (e) {
+        const err = new Error(`Could not read "${doc.fileName}" from storage: ${e.code === 'ENOENT' ? 'Object not found' : e.message}`);
+        err.missing = e.code === 'ENOENT';
+        throw err;
+    }
 }
+
+const MISSING_FILE_MESSAGE = 'The stored file is missing — remove this document and upload it again.';
 
 async function saveAnalysis(doc, analysis) {
     const analyzedAt = new Date().toISOString();
@@ -269,25 +281,40 @@ async function ensureGeminiFile(doc, { buffer = null, force = false } = {}) {
 
 // Gemini parts for every document of the given docs list: a label before each file.
 // Runs 6 uploads at a time. Returns { parts, included, skipped }.
+// A file that fails (e.g. missing from storage) is skipped and listed, not fatal —
+// unless every file fails, which points to a service problem.
 async function buildFileParts(docs, { force = false, labelPrefix = '' } = {}) {
     const results = new Array(docs.length);
+    const errors = new Array(docs.length);
     let next = 0;
     async function worker() {
         while (next < docs.length) {
             const i = next++;
-            results[i] = await ensureGeminiFile(docs[i], { force });
+            try {
+                results[i] = await ensureGeminiFile(docs[i], { force });
+            } catch (e) {
+                errors[i] = e;
+                console.error(`[Documents] Skipping "${docs[i].fileName}":`, e.message);
+                // Flag missing files on the Documents page
+                if (e.missing) { try { await saveAnalysis(docs[i], { status: 'error', error: MISSING_FILE_MESSAGE }); } catch (_) {} }
+            }
         }
     }
     await Promise.all(Array.from({ length: Math.min(6, docs.length) }, worker));
+    const failed = errors.filter(Boolean);
+    if (docs.length && failed.length === docs.length) throw failed[0];
+
     const parts = [];
     const included = [];
     const skipped = [];
     docs.forEach((d, i) => {
-        if (!results[i]) { skipped.push(d.fileName); return; }
+        if (errors[i]) { skipped.push(`${d.fileName} (${errors[i].missing ? 'file missing from storage' : 'could not be read'})`); return; }
+        if (!results[i]) { skipped.push(`${d.fileName} (file type not readable)`); return; }
         included.push(d.fileName);
         parts.push({ text: `=== ${labelPrefix}Document: ${d.fileName} (uploaded ${String(d.createdAt || '').slice(0, 10)}) ===` });
         parts.push(results[i]);
     });
+    if (skipped.length) parts.push({ text: `${labelPrefix}Documents that could NOT be read for this answer: ${skipped.join('; ')}` });
     return { parts, included, skipped };
 }
 
@@ -550,10 +577,11 @@ router.post('/api/matters/:id/documents/:docId/analyze', async (req, res) => {
     } catch (err) {
         console.error('[Documents] Analysis failed:', err.message);
         // Record the failure so the UI can show it; ignore errors while recording
+        const message = err.missing ? MISSING_FILE_MESSAGE : err.message;
         if (doc && !/GOOGLE_API_KEY|AI columns/.test(err.message)) {
-            try { await saveAnalysis(doc, { status: 'error', error: err.message }); } catch (_) {}
+            try { await saveAnalysis(doc, { status: 'error', error: message }); } catch (_) {}
         }
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: message });
     }
 });
 
