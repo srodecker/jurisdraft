@@ -4,8 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
-const { deleteAllDocuments, listDocAnalyses, listAllDocAnalyses } = require('./documents');
-const { GEMINI_BASE, GEMINI_MODEL, generateJson } = require('../lib/gemini');
+const { deleteAllDocuments, listDocAnalyses, listAllDocs, getCaseFileParts, buildFileParts } = require('./documents');
+const { GEMINI_BASE, GEMINI_MODEL, generateJson, fetchWithRetry } = require('../lib/gemini');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
@@ -875,107 +875,131 @@ router.delete('/api/matters/:id/events/:eventId', async (req, res) => {
 // CHAT (AI-powered per-matter assistant)
 // ============================================================
 
+// Global chat attaches the real files when the total number of documents is at most this
+const GLOBAL_CHAT_FILE_LIMIT = Number(process.env.GLOBAL_CHAT_FILE_LIMIT) || 40;
+
+// Call Gemini chat. If Google reports an uploaded file is gone, re-upload once via `refreshContents`.
+async function callGeminiChat(systemPrompt, contents, refreshContents) {
+    const apiKey = process.env.GOOGLE_API_KEY;
+    const url = `${GEMINI_BASE}/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const response = await fetchWithRetry(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                contents,
+                generationConfig: { maxOutputTokens: 8192 }
+            })
+        });
+        if (response.ok) {
+            const result = await response.json();
+            return result.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || 'I was unable to generate a response. Please try again.';
+        }
+        const errText = await response.text();
+        const fileGone = /file|permission|not found|expired/i.test(errText) && (response.status === 400 || response.status === 403 || response.status === 404);
+        if (attempt === 1 && fileGone && refreshContents) {
+            console.log('[Chat] Gemini file reference rejected, re-uploading documents');
+            contents = await refreshContents();
+            continue;
+        }
+        throw new Error(`AI service error (HTTP ${response.status}): ${errText.slice(0, 200)}`);
+    }
+}
+
+// Chat history → Gemini contents, with the case files attached to the latest user turn
+function buildChatContents(recentChat, fileParts, intro) {
+    const contents = recentChat.map(m => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content }]
+    }));
+    const last = contents[contents.length - 1];
+    if (last && last.role === 'user' && fileParts.length) {
+        last.parts = [{ text: intro }, ...fileParts, { text: `QUESTION: ${last.parts[0].text}` }];
+    }
+    return contents;
+}
+
+// Case facts already derived from documents (no workflow, staff or spreadsheet-only fields)
+function buildCaseFactsContext(matter) {
+    const lines = [
+        ['Debtor', matter.debtorName],
+        ['Debtor address', [matter.debtorAddress, matter.debtorCity, matter.debtorState, matter.debtorZip].filter(Boolean).join(', ')],
+        ['Case number', matter.caseNumber],
+        ['Court', matter.courtName],
+        ['County', matter.courtCounty],
+        ['Creditor', matter.creditorName],
+        ['Demand amount', matter.demandAmount],
+        ['Judgment amount', matter.judgmentAmount],
+        ['Loan type', matter.loanType],
+        ['Account number', matter.accountNumber],
+        ['Status / last action', matter.statusText],
+        ['Defendant response', matter.defendantResponse]
+    ].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
+    const dates = Object.entries(matter.dates || {}).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
+    if (dates.length) lines.push(`Dates: ${dates.join('; ')}`);
+    return lines.length ? lines.join('\n') : 'No case details recorded yet — use the documents.';
+}
+
 router.post('/api/matters/:id/chat', async (req, res) => {
     try {
         const matter = await readMatter(req.params.id);
         const userMessage = req.body.message;
         if (!userMessage) return res.status(400).json({ error: 'Message is required' });
 
-        // Add user message to history
-        const userEntry = {
-            role: 'user',
-            content: userMessage,
-            timestamp: new Date().toISOString()
-        };
-        matter.chatHistory.push(userEntry);
-
-        // Build context for AI
-        const matterContext = buildMatterContext(matter);
-        const documentsContext = await buildDocumentsContext(matter.id);
+        matter.chatHistory.push({ role: 'user', content: userMessage, timestamp: new Date().toISOString() });
         const recentChat = matter.chatHistory.slice(-20); // Last 20 messages for context
 
-        const apiKey = process.env.GOOGLE_API_KEY;
         let assistantContent;
-
-        if (apiKey) {
-            const systemPrompt = `You are a legal case assistant for Wright Legal Group. You help manage collection cases for Kinecta Federal Credit Union.
+        if (!process.env.GOOGLE_API_KEY) {
+            assistantContent = 'AI chat is not configured (no GOOGLE_API_KEY).';
+        } else {
+            try {
+                const files = await getCaseFileParts(matter.id);
+                const systemPrompt = `You are a legal case assistant for Wright Legal Group, working on a debt collection case for Kinecta Federal Credit Union.
 
 Today's date is ${new Date().toISOString().slice(0, 10)}.
 
-You have access to the following case information:
+The uploaded case documents are attached to the user's message${files.included.length ? ` (${files.included.length}: ${files.included.join(', ')})` : ' — but this case has no readable documents yet'}.
+${files.skipped.length ? `These files could not be read by AI: ${files.skipped.join(', ')}.\n` : ''}
+SOURCE RULES:
+- Answer ONLY from the attached documents. Read them carefully, including dates, amounts, names and case numbers.
+- Name the document (file name) each fact comes from.
+- If the documents do not answer the question, say so plainly. Never invent facts, dates or amounts.
+- You may do date calculations and explain California collection procedure, but make clear which parts come from the documents.
 
-${matterContext}
-
-CASE DOCUMENTS (AI summaries of every file uploaded to this case — the source of truth):
-${documentsContext || 'No analyzed documents yet.'}
-
-SOURCES:
-- Base answers on the case documents above. When stating a fact, name the document it came from (file name).
-- If the documents do not contain the answer, say so plainly. Do not invent facts, dates or amounts.
+Previously extracted case facts (derived from these same documents; the documents win if they disagree):
+${buildCaseFactsContext(matter)}
 
 RESPONSE STYLE:
-- Be concise, direct, and professional. This tool is shown to supervisors.
-- Lead with the answer, not preamble. Do not repeat the question back.
-- When asked "what is the next [hearing/date/deadline]?" — give ONLY the single next one, cleanly formatted.
-- Use bold for key info (names, dates, amounts). Use bullet points for short lists.
-
-Your role:
-- Answer questions about this specific case
-- Summarize the case status and what's happening
-- Suggest next steps based on the workflow
-- Help with date calculations (e.g., response deadlines, service deadlines)
-- Provide guidance on California collection law procedures
-- Draft brief emails or notes when asked
-- If you don't know something, say so.`;
-
-            const chatMessages = recentChat.map(m => ({
-                role: m.role === 'user' ? 'user' : 'model',
-                parts: [{ text: m.content }]
-            }));
-
-            try {
-                const url = `${GEMINI_BASE}/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        systemInstruction: { parts: [{ text: systemPrompt }] },
-                        contents: chatMessages,
-                        generationConfig: { maxOutputTokens: 8192 }
-                    })
+- Concise, direct, professional. Lead with the answer; do not repeat the question.
+- When asked for the "next" hearing/date/deadline, give only the single next one.
+- Bold key info (names, dates, amounts). Bullet points for short lists.`;
+                const intro = 'CASE DOCUMENTS (the uploaded files for this case):';
+                const contents = buildChatContents(recentChat, files.parts, intro);
+                assistantContent = await callGeminiChat(systemPrompt, contents, async () => {
+                    const fresh = await getCaseFileParts(matter.id, { force: true });
+                    return buildChatContents(recentChat, fresh.parts, intro);
                 });
-
-                const result = await response.json();
-                assistantContent = result.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || 'I was unable to generate a response. Please try again.';
-            } catch (apiErr) {
-                assistantContent = `I'm unable to connect to the AI service right now. Here's what I know about this case:\n\n${matterContext}`;
+            } catch (err) {
+                console.error('[Chat] Failed:', err.message);
+                assistantContent = `I couldn't read the case documents right now (${err.message}). Please try again in a moment.`;
             }
-        } else {
-            assistantContent = `AI chat is not configured (no GOOGLE_API_KEY). Here's the current case summary:\n\n${matterContext}`;
         }
 
-        const assistantEntry = {
-            role: 'assistant',
-            content: assistantContent,
-            timestamp: new Date().toISOString()
-        };
-        matter.chatHistory.push(assistantEntry);
+        matter.chatHistory.push({ role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() });
         matter.updatedAt = new Date().toISOString();
-
-        // Keep chat history manageable (last 100 messages)
-        if (matter.chatHistory.length > 100) {
-            matter.chatHistory = matter.chatHistory.slice(-100);
-        }
+        if (matter.chatHistory.length > 100) matter.chatHistory = matter.chatHistory.slice(-100);
 
         await writeMatter(matter.id, matter);
-        res.json({ message: assistantEntry, matter });
+        res.json({ message: matter.chatHistory[matter.chatHistory.length - 1], matter });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
 
 // Text block describing every analyzed document of a matter, for AI chat context.
-// Pass `docs` (from listAllDocAnalyses) to avoid a lookup per matter.
+// Pass `docs` (already loaded) to avoid a lookup per matter.
 async function buildDocumentsContext(matterId, maxChars = 150000, docs = null) {
     if (!docs) {
         try {
@@ -1063,6 +1087,12 @@ router.post('/api/matters/:id/rebuild-from-documents', async (req, res) => {
         matter.updatedAt = now;
         matter.statusText = '';
         matter.colorCode = '';
+        // No firm/staff defaults — only what the documents say
+        matter.creditorName = '';
+        matter.clientMatter = '';
+        matter.attorney = '';
+        matter.attorneyEmail = '';
+        matter.secretary = '';
         matter.source = 'documents';
         matter.rebuiltFromDocumentsAt = now;
 
@@ -1133,86 +1163,6 @@ router.post('/api/matters/:id/rebuild-from-documents', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-
-function buildMatterContext(matter) {
-    const stageName = getStageLabel(matter.currentStage);
-    const totalTasks = Object.keys(matter.tasks).length;
-    const completedTasks = Object.values(matter.tasks).filter(t => t.completed).length;
-
-    // Find next pending tasks
-    const pendingTasks = [];
-    for (const stage of WORKFLOW_STAGES) {
-        for (const task of stage.tasks) {
-            if (matter.tasks[task.id] && !matter.tasks[task.id].completed) {
-                const assignee = TEAM_MEMBERS.find(m => m.id === matter.tasks[task.id].assignedTo);
-                pendingTasks.push({
-                    stage: stage.name,
-                    task: task.label,
-                    assignee: assignee ? assignee.name : 'Unassigned'
-                });
-            }
-        }
-    }
-
-    // Recent events
-    const recentEvents = (matter.events || [])
-        .sort((a, b) => new Date(b.date) - new Date(a.date))
-        .slice(0, 10)
-        .map(e => `- [${new Date(e.date).toLocaleDateString()}] ${e.title}: ${e.description}`)
-        .join('\n');
-
-    // Format dates
-    const dateEntries = Object.entries(matter.dates || {})
-        .filter(([, v]) => v)
-        .map(([k, v]) => `- ${k.replace(/([A-Z])/g, ' $1').trim()}: ${v}`)
-        .join('\n');
-
-    // Hearings (structured data from docket uploads)
-    const hearings = (matter.hearings || [])
-        .sort((a, b) => new Date(a.date) - new Date(b.date))
-        .map(h => {
-            const dept = h.department ? ` — Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
-            const time = h.time ? ` at ${h.time}` : '';
-            const status = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
-            return `- ${h.type}: ${h.date}${time}${dept}${status}`;
-        })
-        .join('\n');
-
-    return `CASE: ${matter.debtorName || 'Unknown Debtor'}
-Case Number: ${matter.caseNumber || 'Not yet assigned'}
-Client: ${matter.creditorName || 'Kinecta Federal Credit Union'}
-Client Matter: ${matter.clientMatter}
-Loan Type: ${matter.loanType || 'Not specified'}
-Demand Amount: ${matter.demandAmount ? '$' + Number(matter.demandAmount).toLocaleString() : 'Not set'}
-Judgment Amount: ${matter.judgmentAmount ? '$' + Number(matter.judgmentAmount).toLocaleString() : 'Not set'}
-Attorney: ${matter.attorney}
-Status: ${matter.status}
-Current Stage: ${stageName} (${completedTasks}/${totalTasks} tasks complete)
-Court: ${matter.courtName || 'Not determined'}
-Debtor Address: ${[matter.debtorAddress, matter.debtorCity, matter.debtorState, matter.debtorZip].filter(Boolean).join(', ') || 'Not set'}
-Status/Last Action: ${matter.statusText || 'Not set'}
-Service Type: ${matter.serviceType || 'Not set'}
-Defendant Response: ${matter.defendantResponse || 'Not set'}
-
-KEY DATES:
-${dateEntries || 'No dates recorded'}
-
-COURT HEARINGS (from docket):
-${hearings || 'No hearings on file'}
-
-DOCKET UPLOADS:
-${(matter.docketUploads || []).length > 0
-    ? (matter.docketUploads || []).map(u => `- ${new Date(u.uploadedAt).toLocaleString()}: ${u.hearingsExtracted} hearing(s), ${u.filingsExtracted} filing(s) extracted${u.hearingSummary ? ' — ' + u.hearingSummary : ''}`).join('\n')
-    : 'No dockets uploaded'}
-
-NEXT PENDING TASKS (first 5):
-${pendingTasks.slice(0, 5).map(t => `- [${t.stage}] ${t.task} (Assigned: ${t.assignee})`).join('\n') || 'All tasks complete'}
-
-RECENT ACTIVITY:
-${recentEvents || 'No events recorded'}
-
-NOTES: ${matter.notes || 'None'}`;
-}
 
 // ============================================================
 // NOTIFICATIONS
@@ -2760,17 +2710,32 @@ router.post('/api/chat/global', async (req, res) => {
 
         const matters = await listMatters();
         let allContext = buildAllMattersContext(matters);
-        // Add document summaries (budget shared across matters)
+
+        // Case documents: attach the real files when there are few enough, otherwise use stored summaries
         let docsByMatter = new Map();
-        try { docsByMatter = await listAllDocAnalyses(); } catch (e) { console.error('[Chat] Could not load document analyses:', e.message); }
-        let docBudget = 150000;
-        for (const m of matters) {
-            if (docBudget <= 0) break;
-            if (!docsByMatter.has(m.id)) continue;
-            const docsContext = await buildDocumentsContext(m.id, docBudget, docsByMatter.get(m.id));
-            if (!docsContext) continue;
-            allContext += `\n\n=== CASE DOCUMENTS: ${m.debtorName || 'Unnamed'}${m.caseNumber ? ` (${m.caseNumber})` : ''} ===\n${docsContext}`;
-            docBudget -= docsContext.length;
+        try { docsByMatter = await listAllDocs(); } catch (e) { console.error('[Chat] Could not load documents:', e.message); }
+        const caseLabel = m => `${m.debtorName || 'Unnamed'}${m.caseNumber ? ` (${m.caseNumber})` : ''}`;
+        const docMatters = matters.filter(m => docsByMatter.has(m.id));
+        const totalDocs = docMatters.reduce((n, m) => n + docsByMatter.get(m.id).length, 0);
+        const attachFiles = totalDocs > 0 && totalDocs <= GLOBAL_CHAT_FILE_LIMIT;
+        const buildGlobalFileParts = async (force = false) => {
+            const parts = [];
+            for (const m of docMatters) {
+                const r = await buildFileParts(docsByMatter.get(m.id), { force, labelPrefix: `Case ${caseLabel(m)} — ` });
+                parts.push(...r.parts);
+            }
+            return parts;
+        };
+        if (!attachFiles) {
+            let docBudget = 150000;
+            for (const m of docMatters) {
+                if (docBudget <= 0) break;
+                const docs = docsByMatter.get(m.id).map(d => ({ id: d.id, fileName: d.fileName, createdAt: d.createdAt, analysis: d.analysis || null }));
+                const docsContext = await buildDocumentsContext(m.id, docBudget, docs);
+                if (!docsContext) continue;
+                allContext += `\n\n=== CASE DOCUMENTS: ${caseLabel(m)} ===\n${docsContext}`;
+                docBudget -= docsContext.length;
+            }
         }
 
         const apiKey = process.env.GOOGLE_API_KEY;
@@ -2815,31 +2780,23 @@ Your role:
 - Provide workload summaries by team member when asked
 - Track docket uploads: each matter has a "Docket uploads" field showing when dockets were uploaded and what was extracted. When asked "which matters did I upload dockets for?" or "list all docket uploads", compile a list from the Docket uploads field across all matters.
 - When referencing cases, always mention the debtor name and case number if available.
-- "CASE DOCUMENTS" sections are AI summaries of the files uploaded to a case — treat them as the source of truth, name the file when citing a fact, and say so when the documents don't cover a question.`;
+- ${attachFiles
+    ? 'The uploaded case documents are attached to the user\'s message, each labelled with its case. They are the source of truth: answer from them, name the file for each fact, and say plainly when they do not cover a question. Never invent facts, dates or amounts.'
+    : '"CASE DOCUMENTS" sections are AI summaries of the files uploaded to a case — treat them as the source of truth, name the file when citing a fact, and say so when the documents don\'t cover a question.'}`;
 
             const fullHistory = await getGlobalChatHistory();
             const recentChat = fullHistory.slice(-20);
-            const chatMessages = recentChat.map(m => ({
-                role: m.role === 'user' ? 'user' : 'model',
-                parts: [{ text: m.content }]
-            }));
+            const intro = 'CASE DOCUMENTS (uploaded files, labelled by case):';
 
             try {
-                const url = `${GEMINI_BASE}/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        systemInstruction: { parts: [{ text: systemPrompt }] },
-                        contents: chatMessages,
-                        generationConfig: { maxOutputTokens: 8192 }
-                    })
-                });
-                const result = await response.json();
-                assistantContent = result.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || 'I was unable to generate a response. Please try again.';
+                const fileParts = attachFiles ? await buildGlobalFileParts() : [];
+                const contents = buildChatContents(recentChat, fileParts, intro);
+                assistantContent = await callGeminiChat(systemPrompt, contents, attachFiles
+                    ? async () => buildChatContents(recentChat, await buildGlobalFileParts(true), intro)
+                    : null);
             } catch (apiErr) {
-                console.error('Global chat API error:', apiErr);
-                assistantContent = `I'm unable to connect to the AI service right now. You have ${matters.length} active matters loaded.`;
+                console.error('Global chat API error:', apiErr.message);
+                assistantContent = `I couldn't reach the AI service or read the case documents right now (${apiErr.message}). Please try again in a moment.`;
             }
         } else {
             assistantContent = `AI chat is not configured (no GOOGLE_API_KEY). You have ${matters.length} matters in the system.\n\nSet GOOGLE_API_KEY to enable AI-powered chat.`;

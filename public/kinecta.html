@@ -368,6 +368,7 @@
         .docs-table td { vertical-align: middle; }
         .docs-name-link { color: var(--text-primary); cursor: pointer; text-decoration: none; word-break: break-all; }
         .docs-name-link:hover { color: var(--accent-primary); text-decoration: underline; }
+        .docs-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--accent-warning); background: var(--accent-warning-light); border-radius: 8px; font-size: 13px; }
         .docs-ai-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; padding: 12px 14px; background: var(--bg-secondary); border: 1px solid var(--border-primary); border-radius: 10px; }
         .docs-ai { font-size: 11px; white-space: nowrap; }
         .docs-ai.done { color: var(--accent-success); }
@@ -731,18 +732,24 @@
                             <div class="detail-meta">
                                 <span id="dCase">Case: -</span>
                                 <span id="dAmount">Amount: -</span>
-                                <span id="dAtty">Attorney: -</span>
                                 <span id="dCourt">Court: -</span>
                             </div>
                         </div>
                         <div style="display:flex;gap:6px;">
-                            <button class="btn btn-primary btn-sm" onclick="showDocumentsView(currentMatter.id)">
+                            <button class="btn btn-primary btn-sm" id="dRebuildBtn" onclick="rebuildFromCasePage()">Rebuild from documents</button>
+                            <button class="btn btn-secondary btn-sm" onclick="showDocumentsView(currentMatter.id)">
                                 <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
                                 Documents
                             </button>
                             <button class="btn btn-secondary btn-sm" onclick="openEditModal()">Edit</button>
                             <button class="btn btn-danger btn-sm" onclick="deleteMatter()">Delete</button>
                         </div>
+                    </div>
+
+                    <!-- Shown when the case data did not come from its documents -->
+                    <div id="dDocsBanner" class="docs-banner" style="display:none;">
+                        <span id="dDocsBannerText">This case shows old data, not information from its uploaded documents.</span>
+                        <button class="btn btn-primary btn-sm" onclick="rebuildFromCasePage()">Rebuild from documents</button>
                     </div>
 
                     <!-- Tabs -->
@@ -755,17 +762,10 @@
 
                     <!-- Overview Tab -->
                     <div id="tab-overview" class="tab-panel active">
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-                            <!-- Case Info -->
-                            <div class="info-card">
-                                <h3>Case Information</h3>
-                                <div id="caseInfoContent"></div>
-                            </div>
-                            <!-- Contacts -->
-                            <div class="info-card">
-                                <h3>Key Contacts</h3>
-                                <div id="contactsContent"></div>
-                            </div>
+                        <!-- Case Info -->
+                        <div class="info-card">
+                            <h3>Case Information</h3>
+                            <div id="caseInfoContent"></div>
                         </div>
                         <!-- Dates -->
                         <div class="info-card">
@@ -819,7 +819,7 @@
                         <div class="chat-wrap">
                             <div class="chat-messages" id="chatMessages">
                                 <div style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px;">
-                                    Ask anything about this case. The AI answers from the case data and the documents uploaded to this case.
+                                    Ask anything about this case. The AI reads this case's uploaded documents to answer.
                                 </div>
                             </div>
                             <div class="chat-input-row">
@@ -1232,6 +1232,7 @@ async function openMatter(id) {
 
     renderDetailHeader();
     switchTab('overview');
+    updateDocsBanner();
 }
 
 function showList() {
@@ -1258,7 +1259,6 @@ function renderDetailHeader() {
     document.getElementById('dTitle').textContent = m.debtorName || 'Unnamed';
     document.getElementById('dCase').textContent = 'Case: ' + (m.caseNumber || 'Pending');
     document.getElementById('dAmount').textContent = 'Amount: ' + (m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : '-');
-    document.getElementById('dAtty').textContent = 'Attorney: ' + (m.attorney || '-');
     document.getElementById('dCourt').textContent = 'Court: ' + (m.courtName || 'TBD');
 }
 
@@ -1290,7 +1290,6 @@ function renderOverview() {
         <div class="info-row"><span class="info-lbl">Debtor:</span><span class="info-val">${esc(m.debtorName)}</span></div>
         <div class="info-row"><span class="info-lbl">Address:</span><span class="info-val">${esc([m.debtorAddress, m.debtorCity, m.debtorState, m.debtorZip].filter(Boolean).join(', ') || '-')}</span></div>
         <div class="info-row"><span class="info-lbl">Client:</span><span class="info-val">${esc(m.creditorName)}</span></div>
-        <div class="info-row"><span class="info-lbl">Client Matter:</span><span class="info-val">${esc(m.clientMatter)}</span></div>
         <div class="info-row"><span class="info-lbl">Loan Type:</span><span class="info-val">${esc(m.loanType || '-')}</span></div>
         <div class="info-row"><span class="info-lbl">Account #:</span><span class="info-val">${esc(m.accountNumber || '-')}</span></div>
         <div class="info-row"><span class="info-lbl">Case Number:</span><span class="info-val">${esc(m.caseNumber || 'Pending')}</span></div>
@@ -1302,18 +1301,6 @@ function renderOverview() {
         ${m.serviceType ? `<div class="info-row"><span class="info-lbl">Service Type:</span><span class="info-val">${esc(m.serviceType)}</span></div>` : ''}
         ${m.defendantResponse ? `<div class="info-row"><span class="info-lbl">Def. Response:</span><span class="info-val">${esc(m.defendantResponse)}</span></div>` : ''}
         ${m.notes ? `<div class="info-row" style="align-items:flex-start"><span class="info-lbl">Notes:</span><span class="info-val" style="white-space:pre-wrap">${esc(m.notes)}</span></div>` : ''}
-    `;
-
-    // Contacts
-    const c = workflowConfig.contacts;
-    document.getElementById('contactsContent').innerHTML = `
-        <div class="info-row"><span class="info-lbl">Attorney:</span><span class="info-val">${esc(m.attorney)} — <a href="mailto:${m.attorneyEmail}">${m.attorneyEmail}</a></span></div>
-        <div class="info-row"><span class="info-lbl">Secretary:</span><span class="info-val">${esc(m.secretary)}</span></div>
-        <div class="info-row"><span class="info-lbl">Process Server:</span><span class="info-val">${esc(c.processServer.name)} — <a href="mailto:${c.processServer.email}">${c.processServer.email}</a></span></div>
-        <div class="info-row"><span class="info-lbl">Accounting:</span><span class="info-val">${esc(c.accounting.name)} — <a href="mailto:${c.accounting.email}">${c.accounting.email}</a></span></div>
-        <div class="info-row"><span class="info-lbl">Recording:</span><span class="info-val">${esc(c.recording.name)} — <a href="mailto:${c.recording.email}">${c.recording.email}</a></span></div>
-        <div class="info-row"><span class="info-lbl">Paralegal:</span><span class="info-val">${esc(c.paralegal.name)} — <a href="mailto:${c.paralegal.email}">${c.paralegal.email}</a></span></div>
-        <div class="info-row"><span class="info-lbl">Client Contact:</span><span class="info-val">${esc(c.clientContact.name)}</span></div>
     `;
 
     // Dates
@@ -1522,7 +1509,7 @@ function renderChat() {
 
     if (msgs.length === 0) {
         container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-tertiary);font-size:13px;">
-            Ask anything about this case. The AI answers from the case data and the documents uploaded to this case.
+            Ask anything about this case. The AI reads this case's uploaded documents to answer.
         </div>`;
         return;
     }
@@ -1550,6 +1537,7 @@ async function sendChat() {
 
     chatSending = true;
     document.getElementById('chatSendBtn').disabled = true;
+    document.getElementById('chatSendBtn').textContent = 'Reading documents…';
     input.value = '';
 
     // Add user message to UI immediately
@@ -1578,6 +1566,7 @@ async function sendChat() {
 
     chatSending = false;
     document.getElementById('chatSendBtn').disabled = false;
+    document.getElementById('chatSendBtn').textContent = 'Send';
 }
 
 // ============================================================
@@ -2625,11 +2614,24 @@ async function analyzePendingDocs() {
     return failures === 0;
 }
 
-async function rebuildCaseFromDocs() {
+function confirmRebuild(label, count) {
+    return confirm(`Rebuild "${label}" from its ${count} document(s)?\n\nThis ERASES all current case information — fields, dates, status, timeline, workflow tasks and case chat — and replaces it with what the documents show. Uploaded documents are kept.`);
+}
+
+async function postRebuild(matterId) {
+    const r = await authFetch(`/api/matters/${matterId}/rebuild-from-documents`, { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Rebuild failed');
+    return d;
+}
+
+// Documents page: read unread documents (updates the AI column), then rebuild.
+// ask=false is used right after uploads, so the case always reflects its documents.
+async function rebuildCaseFromDocs({ ask = true } = {}) {
     const matterId = docsMatterId;
     const matter = allMatters.find(m => m.id === matterId);
     if (!matterId || !docsList.length || docsAiBusy) return;
-    if (!confirm(`Rebuild "${matter ? docsCaseLabel(matter) : 'this case'}" from its ${docsList.length} document(s)?\n\nThis ERASES all current case information — fields, dates, status, timeline, workflow tasks and case chat — and replaces it with what the documents show. Uploaded documents are kept.`)) return;
+    if (ask && !confirmRebuild(matter ? docsCaseLabel(matter) : 'this case', docsList.length)) return;
 
     const btn = document.getElementById('docsRebuildBtn');
     const label = btn.textContent;
@@ -2643,9 +2645,7 @@ async function rebuildCaseFromDocs() {
         }
         docsAiBusy = true;
         renderDocsAiStatus('Building case info from all documents…');
-        const r = await authFetch(`/api/matters/${matterId}/rebuild-from-documents`, { method: 'POST' });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.error || 'Rebuild failed');
+        const d = await postRebuild(matterId);
         docsAiBusy = false;
         await loadMatters();
         if (matterId === docsMatterId) {
@@ -2665,6 +2665,69 @@ async function rebuildCaseFromDocs() {
         docsAiBusy = false;
         btn.textContent = label;
         btn.disabled = docsList.length === 0;
+    }
+}
+
+// ---- Case page: banner + "Rebuild from documents" ----
+async function updateDocsBanner() {
+    const banner = document.getElementById('dDocsBanner');
+    banner.style.display = 'none';
+    const m = currentMatter;
+    if (!m || m.source === 'documents') return;
+    try {
+        const r = await authFetch(`/api/matters/${m.id}/documents`);
+        const d = await r.json();
+        if (currentMatter !== m || !r.ok) return;
+        const n = (d.documents || []).length;
+        if (!n) return;
+        document.getElementById('dDocsBannerText').textContent = `This case shows old data, not information from its ${n} uploaded document(s).`;
+        banner.style.display = 'flex';
+    } catch (_) {}
+}
+
+let casePageRebuilding = false;
+async function rebuildFromCasePage() {
+    const m = currentMatter;
+    if (!m || casePageRebuilding) return;
+    const btn = document.getElementById('dRebuildBtn');
+    const label = btn.textContent;
+    const setStatus = t => { btn.textContent = t; };
+    try {
+        const r = await authFetch(`/api/matters/${m.id}/documents`);
+        const list = await r.json();
+        if (!r.ok) throw new Error(list.error || 'Could not load documents');
+        const docs = list.documents || [];
+        if (!docs.length) { showToast('Upload documents to this case first (Documents button).', true); return; }
+        if (!confirmRebuild(m.debtorName || 'this case', docs.length)) return;
+        casePageRebuilding = true;
+        btn.disabled = true;
+
+        const pending = docs.filter(d => d.analysisStatus === 'none' || d.analysisStatus === 'error');
+        const failed = [];
+        for (let i = 0; i < pending.length; i++) {
+            setStatus(`Reading ${i + 1}/${pending.length}…`);
+            const a = await authFetch(`/api/matters/${m.id}/documents/${pending[i].id}/analyze`, { method: 'POST' });
+            if (!a.ok) failed.push(`${pending[i].fileName}: ${(await a.json().catch(() => ({}))).error || 'failed'}`);
+        }
+        if (failed.length) throw new Error(`${failed.length} document(s) could not be read — ${failed[0]}`);
+
+        setStatus('Building case…');
+        const d = await postRebuild(m.id);
+        if (currentMatter && currentMatter.id === m.id) {
+            currentMatter = d.matter;
+            renderDetailHeader();
+            switchTab('overview');
+            updateDocsBanner();
+            document.getElementById('breadcrumb').innerHTML = `<a onclick="showList()">All Cases</a><span class="sep">/</span><span class="current">${esc(currentMatter.debtorName || 'Matter')}</span>`;
+        }
+        loadMatters();
+        showToast(`Case rebuilt from ${d.documentsUsed} document(s)`);
+    } catch (e) {
+        showToast(e.message, true);
+    } finally {
+        casePageRebuilding = false;
+        btn.disabled = false;
+        btn.textContent = label;
     }
 }
 
@@ -2748,13 +2811,7 @@ async function uploadDocsFiles(fileList) {
     if (uploaded) showToast(`Uploaded ${uploaded} file(s)`);
     if (matterId !== docsMatterId) return;
     await loadDocs();
-    if (uploaded && !docsAiBusy) {
-        const ok = await analyzePendingDocs();
-        if (ok && matterId === docsMatterId) {
-            renderDocsAiStatus();
-            document.getElementById('docsAiStatus').textContent += ' New documents read — click "Rebuild case from documents" to update the case info.';
-        }
-    }
+    if (uploaded && !docsAiBusy) await rebuildCaseFromDocs({ ask: false });
 }
 
 // Drag & drop: the whole Documents view is a drop target once a case is selected
