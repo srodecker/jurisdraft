@@ -418,6 +418,41 @@ async function buildFileParts(docs, { force = false, labelPrefix = '' } = {}) {
 }
 
 
+// ---- Generated forms (filled PDFs/DOCX made by the case manager) ----
+// Stored in the same private bucket under generated/<matterId>/<formId>/<file>
+async function saveGeneratedFile(matterId, formId, fileName, buffer, contentType) {
+    const storagePath = `generated/${matterId}/${formId}/${storageSafeName(fileName)}`;
+    if (useSupabase) {
+        await ensureBucket();
+        const { error } = await supabase.storage.from(BUCKET).upload(storagePath, buffer, { contentType, upsert: true });
+        if (error) throw new Error(`Could not save generated form: ${error.message}`);
+    } else {
+        const dest = path.join(DOCS_DIR, storagePath);
+        await fs.mkdir(path.dirname(dest), { recursive: true });
+        await fs.writeFile(dest, buffer);
+    }
+    return storagePath;
+}
+
+// Supabase: { url } (signed, 5 min). File mode: { buffer }.
+async function getGeneratedFile(storagePath, fileName, { inline = false } = {}) {
+    if (useSupabase) {
+        const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(storagePath, 300, inline ? undefined : { download: fileName });
+        if (error) throw new Error(error.message);
+        return { url: data.signedUrl };
+    }
+    return { buffer: await fs.readFile(path.join(DOCS_DIR, storagePath)) };
+}
+
+async function deleteGeneratedFile(storagePath) {
+    if (useSupabase) {
+        const { error } = await supabase.storage.from(BUCKET).remove([storagePath]);
+        if (error) console.error('[Documents] Could not delete generated form:', error.message);
+        return;
+    }
+    await fs.rm(path.dirname(path.join(DOCS_DIR, storagePath)), { recursive: true, force: true });
+}
+
 // ---- Stored full text: each document is read once; chat uses the saved text ----
 async function saveText(doc, text) {
     if (useSupabase) {
@@ -792,4 +827,4 @@ router.delete('/api/matters/:id/documents/:docId', async (req, res) => {
     }
 });
 
-module.exports = { router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, buildFileParts, buildTextContext };
+module.exports = { router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, buildFileParts, buildTextContext, saveGeneratedFile, getGeneratedFile, deleteGeneratedFile, publicDoc };

@@ -4,47 +4,17 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
-const { deleteAllDocuments, listDocs, listDocAnalyses, listAllDocs, buildFileParts, buildTextContext } = require('./documents');
-const { GEMINI_BASE, GEMINI_MODEL, generateJson, fetchWithRetry } = require('../lib/gemini');
+const { deleteAllDocuments, listDocs, buildTextContext } = require('./documents');
+const { generateJson } = require('../lib/gemini');
+const { FORM_VARIABLES } = require('../lib/case-intel');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-// ============================================================
-// STORAGE LAYER — Supabase (persistent) or file-based (fallback)
-// ============================================================
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-const useSupabase = !!(SUPABASE_URL && SUPABASE_KEY);
-
-let supabase = null;
-if (useSupabase) {
-    const { createClient } = require('@supabase/supabase-js');
-    supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    console.log('[Kinecta] Using Supabase for persistent storage | URL:', SUPABASE_URL);
-} else {
-    console.log('[Kinecta] *** NO SUPABASE *** SUPABASE_URL=' + (SUPABASE_URL ? 'set' : 'MISSING') + ' SUPABASE_KEY=' + (SUPABASE_KEY ? 'set' : 'MISSING'));
-    console.log('[Kinecta] Falling back to file storage — DATA WILL BE LOST on Vercel!');
-}
-
-// File-based fallback paths
-const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
-const MATTERS_DIR = isServerless
-    ? path.join('/tmp', 'matters')
-    : path.join(__dirname, '..', 'matters');
-const NOTIFICATIONS_FILE = isServerless
-    ? path.join('/tmp', 'notifications.json')
-    : path.join(__dirname, '..', 'data', 'notifications.json');
-
-// Ensure directories exist (file-based only)
-if (!useSupabase) {
-    (async () => {
-        try { await fs.mkdir(MATTERS_DIR, { recursive: true }); } catch (_) {}
-        if (!isServerless) {
-            try { await fs.mkdir(path.join(__dirname, '..', 'data'), { recursive: true }); } catch (_) {}
-        }
-    })();
-}
+const {
+    supabase, useSupabase, MATTERS_DIR, NOTIFICATIONS_FILE,
+    readMatter, writeMatter, deleteMatterById, listMatters
+} = require('../lib/matter-store');
 
 // ============================================================
 // TEAM MEMBERS
@@ -289,79 +259,6 @@ const EVENT_TYPES = [
 // STORAGE HELPERS (Supabase or file-based)
 // ============================================================
 
-async function readMatter(id) {
-    let matter;
-    if (useSupabase) {
-        const { data, error } = await supabase
-            .from('matters')
-            .select('data')
-            .eq('id', id)
-            .single();
-        if (error) throw new Error('Matter not found');
-        matter = data.data;
-    } else {
-        const filePath = path.join(MATTERS_DIR, `${id}.json`);
-        const raw = await fs.readFile(filePath, 'utf-8');
-        matter = JSON.parse(raw);
-    }
-    // Backward compat: ensure arrays exist
-    if (!matter.hearings) matter.hearings = [];
-    if (!matter.docketUploads) matter.docketUploads = [];
-    return matter;
-}
-
-async function writeMatter(id, matter) {
-    if (useSupabase) {
-        const { error } = await supabase
-            .from('matters')
-            .upsert({
-                id,
-                data: matter,
-                updated_at: new Date().toISOString()
-            });
-        if (error) throw new Error('Failed to save matter: ' + error.message);
-        return;
-    }
-    const filePath = path.join(MATTERS_DIR, `${id}.json`);
-    await fs.writeFile(filePath, JSON.stringify(matter, null, 2));
-}
-
-async function deleteMatterById(id) {
-    await deleteAllDocuments(id);
-    if (useSupabase) {
-        const { error } = await supabase.from('matters').delete().eq('id', id);
-        if (error) throw new Error('Failed to delete: ' + error.message);
-        return;
-    }
-    const filePath = path.join(MATTERS_DIR, `${id}.json`);
-    await fs.unlink(filePath);
-}
-
-async function listMatters() {
-    if (useSupabase) {
-        const { data, error } = await supabase
-            .from('matters')
-            .select('data')
-            .order('updated_at', { ascending: false });
-        if (error) return [];
-        return (data || []).map(row => row.data);
-    }
-    try {
-        const files = await fs.readdir(MATTERS_DIR);
-        const matters = [];
-        for (const file of files) {
-            if (!file.endsWith('.json')) continue;
-            try {
-                const raw = await fs.readFile(path.join(MATTERS_DIR, file), 'utf-8');
-                matters.push(JSON.parse(raw));
-            } catch (_) {}
-        }
-        return matters.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
-    } catch (_) {
-        return [];
-    }
-}
-
 async function readNotifications() {
     if (useSupabase) {
         const { data, error } = await supabase
@@ -465,8 +362,10 @@ function createMatterObject(data) {
             serviceType: null, // 'personal' or 'substituted'
             answerDue: null,
             answerReceived: null,
+            defaultRequested: null,
             defaultEntered: null,
             judgmentEntered: null,
+            judgmentRenewed: null,
             abstractFiled: null,
             abstractRecorded: null,
             writIssued: null,
@@ -872,349 +771,167 @@ router.delete('/api/matters/:id/events/:eventId', async (req, res) => {
 });
 
 // ============================================================
-// CHAT (AI-powered per-matter assistant)
-// ============================================================
-
-// Global chat attaches every case's files when the total number of documents is at most this;
-// otherwise only the files of the case(s) the question is about
-const GLOBAL_CHAT_FILE_LIMIT = Number(process.env.GLOBAL_CHAT_FILE_LIMIT) || 40;
-
-// Which cases' files to attach to a global chat question:
-// cases named in the question (or recent questions), else the only case with documents,
-// else all cases when the total document count is small.
-function pickChatMatters(docMatters, docsByMatter, message, recentText) {
-    const words = text => new Set(String(text || '').toLowerCase().match(/[a-z0-9-]{3,}/g) || []);
-    const nameTokens = m => (String(m.debtorName || '').toLowerCase().match(/[a-z]{3,}/g) || []);
-    const mentions = (m, w) => nameTokens(m).some(t => w.has(t)) || (m.caseNumber && w.has(String(m.caseNumber).toLowerCase()));
-    const now = words(message);
-    let picked = docMatters.filter(m => mentions(m, now));
-    if (!picked.length) {
-        const recent = words(recentText);
-        picked = docMatters.filter(m => mentions(m, recent));
-    }
-    if (!picked.length && docMatters.length === 1) picked = docMatters;
-    if (!picked.length) {
-        const total = docMatters.reduce((n, m) => n + docsByMatter.get(m.id).length, 0);
-        if (total <= GLOBAL_CHAT_FILE_LIMIT) picked = docMatters;
-    }
-    return picked;
-}
-
-// Call Gemini chat. If Google reports an uploaded file is gone, re-upload once via `refreshContents`.
-async function callGeminiChat(systemPrompt, contents, refreshContents) {
-    const apiKey = process.env.GOOGLE_API_KEY;
-    const url = `${GEMINI_BASE}/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-        const response = await fetchWithRetry(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-                contents,
-                generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 1024 } }
-            })
-        });
-        if (response.ok) {
-            const result = await response.json();
-            return result.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || 'I was unable to generate a response. Please try again.';
-        }
-        const errText = await response.text();
-        const fileGone = /file|permission|not found|expired/i.test(errText) && (response.status === 400 || response.status === 403 || response.status === 404);
-        if (attempt === 1 && fileGone && refreshContents) {
-            console.log('[Chat] Gemini file reference rejected, re-uploading documents');
-            contents = await refreshContents();
-            continue;
-        }
-        throw new Error(`AI service error (HTTP ${response.status}): ${errText.slice(0, 200)}`);
-    }
-}
-
-// Documents for chat: stored full text goes in the system prompt; documents not read yet
-// are attached as files (slower) until they are read once on the Documents page.
-async function prepareChatDocuments(docs, { labelPrefix = '', maxChars } = {}) {
-    const ctx = await buildTextContext(docs, { labelPrefix, maxChars });
-    let files = { parts: [], included: [], skipped: [] };
-    if (ctx.unread.length) {
-        try {
-            files = await buildFileParts(ctx.unread, { labelPrefix });
-        } catch (e) {
-            if (!ctx.included) throw e;
-            files.skipped = ctx.unread.map(d => `${d.fileName} (${String(e.message).slice(0, 120)})`);
-        }
-    }
-    const refresh = async () => (ctx.unread.length ? (await buildFileParts(ctx.unread, { labelPrefix, force: true })).parts : []);
-    return { ctx, files, refresh };
-}
-
-function unreadDocsNote(unread) {
-    return unread.length
-        ? `\n\n**Note:** ${unread.length} document(s) haven't been read into the case yet, so this answer was slower. Open Documents and click "Rebuild case from documents" to read them once.`
-        : '';
-}
-
-// Note appended to an answer when some documents could not be read, so the user sees why
-function unreadFilesNote(skipped) {
-    const unread = skipped.filter(x => !/file type not readable/.test(x));
-    return unread.length ? `\n\n**Note:** ${unread.length} document(s) could not be read for this answer: ${unread.join("; ")}` : '';
-}
-
-// Chat history → Gemini contents, with the case files attached to the latest user turn
-function buildChatContents(recentChat, fileParts, intro) {
-    const contents = recentChat.map(m => ({
-        role: m.role === 'user' ? 'user' : 'model',
-        parts: [{ text: m.content }]
-    }));
-    const last = contents[contents.length - 1];
-    if (last && last.role === 'user' && fileParts.length) {
-        last.parts = [{ text: intro }, ...fileParts, { text: `QUESTION: ${last.parts[0].text}` }];
-    }
-    return contents;
-}
-
-// Case facts already derived from documents (no workflow, staff or spreadsheet-only fields)
-function buildCaseFactsContext(matter) {
-    const lines = [
-        ['Debtor', matter.debtorName],
-        ['Debtor address', [matter.debtorAddress, matter.debtorCity, matter.debtorState, matter.debtorZip].filter(Boolean).join(', ')],
-        ['Case number', matter.caseNumber],
-        ['Court', matter.courtName],
-        ['County', matter.courtCounty],
-        ['Creditor', matter.creditorName],
-        ['Demand amount', matter.demandAmount],
-        ['Judgment amount', matter.judgmentAmount],
-        ['Loan type', matter.loanType],
-        ['Account number', matter.accountNumber],
-        ['Status / last action', matter.statusText],
-        ['Defendant response', matter.defendantResponse]
-    ].filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
-    const dates = Object.entries(matter.dates || {}).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`);
-    if (dates.length) lines.push(`Dates: ${dates.join('; ')}`);
-    return lines.length ? lines.join('\n') : 'No case details recorded yet — use the documents.';
-}
-
-router.post('/api/matters/:id/chat', async (req, res) => {
-    try {
-        const matter = await readMatter(req.params.id);
-        const userMessage = req.body.message;
-        if (!userMessage) return res.status(400).json({ error: 'Message is required' });
-
-        matter.chatHistory.push({ role: 'user', content: userMessage, timestamp: new Date().toISOString() });
-        const recentChat = matter.chatHistory.slice(-20); // Last 20 messages for context
-
-        let assistantContent;
-        if (!process.env.GOOGLE_API_KEY) {
-            assistantContent = 'AI chat is not configured (no GOOGLE_API_KEY).';
-        } else {
-            try {
-                const { ctx, files, refresh } = await prepareChatDocuments(await listDocs(matter.id));
-                const notReadable = [...ctx.unsupported, ...files.skipped];
-                const systemPrompt = `You are a legal case assistant for Wright Legal Group, working on a debt collection case for Kinecta Federal Credit Union.
-
-Today's date is ${new Date().toISOString().slice(0, 10)}.
-
-The case documents are provided below as full text${files.included.length ? `, plus ${files.included.length} file(s) attached to the user's message` : ''}.${!ctx.included && !files.included.length ? ' This case has no readable documents yet.' : ''}
-${notReadable.length ? `These files could not be read: ${notReadable.join(', ')}.\n` : ''}
-SOURCE RULES:
-- Answer ONLY from the case documents. Read them carefully, including dates, amounts, names and case numbers.
-- Name the document (file name) each fact comes from.
-- If the documents do not answer the question, say so plainly. Never invent facts, dates or amounts.
-- You may do date calculations and explain California collection procedure, but make clear which parts come from the documents.
-
-Previously extracted case facts (derived from these same documents; the documents win if they disagree):
-${buildCaseFactsContext(matter)}
-
-RESPONSE STYLE:
-- Concise, direct, professional. Lead with the answer; do not repeat the question.
-- When asked for the "next" hearing/date/deadline, give only the single next one.
-- Bold key info (names, dates, amounts). Bullet points for short lists.
-
-CASE DOCUMENTS (full text of every uploaded file, oldest first):
-${ctx.text || '(none)'}`;
-                const intro = 'MORE CASE DOCUMENTS (files not yet read into text):';
-                const contents = buildChatContents(recentChat, files.parts, intro);
-                assistantContent = await callGeminiChat(systemPrompt, contents, files.parts.length
-                    ? async () => buildChatContents(recentChat, await refresh(), intro)
-                    : null) + unreadFilesNote(files.skipped) + unreadDocsNote(ctx.unread);
-            } catch (err) {
-                console.error('[Chat] Failed:', err.message);
-                assistantContent = `I couldn't read the case documents right now (${err.message}). Please try again in a moment.`;
-            }
-        }
-
-        matter.chatHistory.push({ role: 'assistant', content: assistantContent, timestamp: new Date().toISOString() });
-        matter.updatedAt = new Date().toISOString();
-        if (matter.chatHistory.length > 100) matter.chatHistory = matter.chatHistory.slice(-100);
-
-        await writeMatter(matter.id, matter);
-        res.json({ message: matter.chatHistory[matter.chatHistory.length - 1], matter });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Text block describing every analyzed document of a matter, for AI chat context.
-// Pass `docs` (already loaded) to avoid a lookup per matter.
-async function buildDocumentsContext(matterId, maxChars = 150000, docs = null) {
-    if (!docs) {
-        try {
-            docs = await listDocAnalyses(matterId);
-        } catch (e) {
-            console.error('[Chat] Could not load document analyses:', e.message);
-            return '';
-        }
-    }
-    const blocks = [];
-    let total = 0;
-    const done = docs.filter(d => d.analysis && d.analysis.status === 'done')
-        .sort((a, b) => String(a.analysis.documentDate || '').localeCompare(String(b.analysis.documentDate || '')));
-    for (const d of done) {
-        const a = d.analysis;
-        const facts = Array.isArray(a.keyFacts) && a.keyFacts.length ? '\nKey facts:\n' + a.keyFacts.map(f => `- ${f}`).join('\n') : '';
-        const block = `### ${d.fileName} — ${a.documentType || 'Document'}${a.documentDate ? ` (${a.documentDate})` : ''}\n${a.summary || ''}${facts}`;
-        if (total + block.length > maxChars) {
-            blocks.push(`[${done.length - blocks.length} more document(s) omitted for length]`);
-            break;
-        }
-        blocks.push(block);
-        total += block.length;
-    }
-    const pending = docs.filter(d => !d.analysis || d.analysis.status !== 'done');
-    if (pending.length) blocks.push(`Not yet readable by AI: ${pending.map(d => d.fileName).join(', ')}`);
-    return blocks.join('\n\n');
-}
-
-// ============================================================
 // REBUILD CASE FROM DOCUMENTS
 // Wipes all case data (fields, dates, status, tasks, timeline, chat) and rebuilds
 // it solely from the AI analyses of the case's uploaded documents.
 // ============================================================
-const REBUILD_PROMPT = `You are a legal case analyst. Below are AI analyses of every document in ONE debt collection case.
-Combine them into a single, accurate case record. Use only facts from these analyses.
+const REBUILD_PROMPT = `You are a senior litigation paralegal for a California collections law firm (Wright Legal Group) representing Kinecta Federal Credit Union in consumer-loan collection cases (limited civil).
+Below is the full text of every document in ONE case. Build a single, accurate case record from them. Use only facts from the documents — never guess.
 
 Conflict rules:
-- Prefer court-filed and court-issued documents over letters and notes.
-- For contact details (address) prefer the most recent document.
-- demandAmount = amount demanded/owed before judgment; judgmentAmount only if a judgment was entered.
-- Merge duplicate events/hearings (same date and substance) into one.
-- A hearing that a later document shows as continued, vacated or held must reflect that status.
+- Prefer court-filed and court-issued documents over drafts, letters, emails and notes. Files named "draft" are unfiled drafts.
+- For the debtor's address prefer the most recent document (service address on a proof of service is strong evidence).
+- demandAmount = amount demanded in the complaint; judgmentAmount only if a judgment was entered.
+- Merge duplicate events/hearings. A hearing that a later document shows as continued, vacated or held must reflect that.
+- dates.served is the date service was completed on the defendant (personal) or the substituted-service delivery date; serviceType is personal or substituted.
+- dates.defaultRequested = date the request for entry of default (CIV-100) was filed; dates.defaultEntered = date the clerk entered default.
 
 Return ONE JSON object (omit unknown values):
 {
-  "fields": { "debtorName": "", "debtorAddress": "", "debtorCity": "", "debtorState": "", "debtorZip": "", "caseNumber": "", "courtName": "", "courtCounty": "", "demandAmount": "", "judgmentAmount": "", "loanType": "", "accountNumber": "", "creditorName": "", "serviceType": "personal | substituted", "defendantResponse": "e.g. Answer filed / No response / Default" },
-  "dates": { "dvnSent": "", "responseDue": "", "complaintFiled": "", "served": "", "answerDue": "", "answerReceived": "", "defaultEntered": "", "judgmentEntered": "", "abstractFiled": "", "abstractRecorded": "", "writIssued": "", "closed": "" },
+  "summary": "3-6 sentence plain-English summary of the case and where it stands now",
+  "keyFacts": ["short factual statements a paralegal needs, each citing its file in parentheses"],
+  "fields": { "debtorName": "", "debtorAddress": "street only", "debtorCity": "", "debtorState": "", "debtorZip": "", "caseNumber": "", "courtName": "e.g. Superior Court of California, County of Kern", "courtBranch": "courthouse name", "courtAddress": "courthouse street, city, zip", "courtCounty": "", "demandAmount": "", "judgmentAmount": "", "loanType": "", "accountNumber": "", "creditorName": "", "serviceType": "personal | substituted", "servedBy": "process server / registered process server name", "serviceAddress": "where served", "defendantResponse": "e.g. No response / Answer filed" },
+  "dates": { "dvnSent": "", "responseDue": "", "complaintFiled": "", "served": "", "answerDue": "", "answerReceived": "", "defaultRequested": "", "defaultEntered": "", "judgmentEntered": "", "abstractFiled": "", "abstractRecorded": "", "writIssued": "", "closed": "" },
   "events": [{ "type": "filing|hearing|service|correspondence|minute_order|court_order|payment|note", "title": "", "date": "YYYY-MM-DD", "description": "", "source": "file name" }],
   "hearings": [{ "type": "", "date": "YYYY-MM-DD", "time": "", "department": "", "judge": "", "description": "", "status": "Scheduled | Continued | Vacated | Held", "source": "file name" }],
-  "statusText": "one line: the latest action/status of the case, e.g. 'Default judgment entered 2025-02-03'",
-  "notes": "short case overview (3-6 sentences)",
+  "statusText": "one line: the latest action/status of the case",
+  "formData": { FORM_VARIABLES_PLACEHOLDER },
   "sources": { "fieldName": "file name the value came from" }
 }
-Dates in YYYY-MM-DD. Amounts as plain numbers.`;
+Dates in "dates", "events" and "hearings": YYYY-MM-DD. Amounts as plain numbers.
+
+"formData" holds the values used to fill Judicial Council forms. Use these exact bracket keys and these rules:
+FORM_RULES_PLACEHOLDER`;
+
+// The extraction rules (attorney/creditor/address logic) used by the Doc Generator, reused for formData
+const FORM_RULES = (() => {
+    try {
+        const p = require('fs').readFileSync(require('path').join(__dirname, '..', 'Prompts', 'Extraction_Prompt.txt'), 'utf8');
+        return p.slice(0, p.indexOf('INPUT FORMAT')).replace(/Date Signed: Use the CURRENT_DATE_CONTEXT provided\.?/i, 'Leave [DATE_SIGNED] empty.');
+    } catch (_) { return ''; }
+})();
 
 const REBUILD_FIELDS = ['debtorName', 'debtorAddress', 'debtorCity', 'debtorState', 'debtorZip',
-    'caseNumber', 'courtName', 'courtCounty', 'demandAmount', 'judgmentAmount',
-    'loanType', 'accountNumber', 'creditorName', 'serviceType', 'defendantResponse'];
+    'caseNumber', 'courtName', 'courtBranch', 'courtAddress', 'courtCounty', 'demandAmount', 'judgmentAmount',
+    'loanType', 'accountNumber', 'creditorName', 'serviceType', 'servedBy', 'serviceAddress', 'defendantResponse'];
+
+// Rebuild a case from its documents. Document-derived data is replaced; manual work is kept:
+// fact overrides (re-applied on top), custom deadlines, generated forms, chat, workflow checklist, manual events.
+async function rebuildMatterFromDocuments(matterId) {
+    const existing = await readMatter(matterId);
+    const docs = await listDocs(existing.id);
+    if (docs.length === 0) throw Object.assign(new Error('This case has no uploaded documents.'), { status: 400 });
+
+    const unanalyzed = docs.filter(d => !d.analysis || d.analysis.status === 'error');
+    if (unanalyzed.length) {
+        throw Object.assign(new Error('Some documents have not been read by AI yet.'), { status: 409, pending: unanalyzed.map(d => ({ id: d.id, fileName: d.fileName })) });
+    }
+    const usable = docs.filter(d => d.analysis.status === 'done');
+    if (usable.length === 0) throw Object.assign(new Error('None of the documents could be read by AI.'), { status: 400 });
+
+    // Full stored text of every document (summaries for any beyond the budget / not yet stored as text)
+    const ctx = await buildTextContext(usable, { maxChars: 1200000 });
+    const withoutText = usable.filter(d => !d.textChars && d.analysis && d.analysis.summary)
+        .map(d => `=== Document (summary only): ${d.fileName} ===\n${d.analysis.summary}\nKey facts: ${(d.analysis.keyFacts || []).join('; ')}`);
+    const prompt = REBUILD_PROMPT
+        .replace('FORM_VARIABLES_PLACEHOLDER', FORM_VARIABLES.map(v => `"${v}": ""`).join(', '))
+        .replace('FORM_RULES_PLACEHOLDER', FORM_RULES);
+    const synthesized = await generateJson([{ text: `${prompt}\n\nCASE DOCUMENTS:\n${[ctx.text, ...withoutText].join('\n\n')}` }], { maxOutputTokens: 32768 });
+
+    const now = new Date().toISOString();
+    const matter = createMatterObject({});
+    matter.id = existing.id;
+    matter.createdAt = existing.createdAt || now;
+    matter.updatedAt = now;
+    matter.statusText = '';
+    matter.colorCode = '';
+    matter.creditorName = '';
+    matter.clientMatter = '';
+    matter.attorney = '';
+    matter.attorneyEmail = '';
+    matter.secretary = '';
+    matter.source = 'documents';
+    matter.rebuiltFromDocumentsAt = now;
+    // Manual work carried over
+    matter.tasks = existing.tasks || matter.tasks;
+    matter.chatHistory = existing.chatHistory || [];
+    matter.customDeadlines = existing.customDeadlines || [];
+    matter.generatedForms = existing.generatedForms || [];
+    matter.factOverrides = existing.factOverrides || {};
+    matter.status = existing.status === 'closed' ? 'closed' : 'active';
+
+    const fields = synthesized.fields || {};
+    for (const f of REBUILD_FIELDS) {
+        if (fields[f] !== undefined && fields[f] !== null && String(fields[f]).trim() !== '') matter[f] = String(fields[f]).trim();
+    }
+    if (!matter.debtorName) matter.debtorName = existing.debtorName || '';
+
+    const dates = synthesized.dates || {};
+    for (const key of Object.keys(matter.dates)) {
+        if (key === 'serviceType') continue;
+        const d = normalizeDate(dates[key]);
+        if (d) matter.dates[key] = d;
+    }
+    if (/^(personal|substituted)/i.test(matter.serviceType || '')) matter.dates.serviceType = /^sub/i.test(matter.serviceType) ? 'substituted' : 'personal';
+
+    if (synthesized.statusText) matter.statusText = String(synthesized.statusText);
+    matter.summary = synthesized.summary ? String(synthesized.summary) : '';
+    matter.notes = matter.summary;
+    matter.summaryUpdatedAt = now;
+    matter.keyFacts = Array.isArray(synthesized.keyFacts) ? synthesized.keyFacts.map(String) : [];
+    matter.fieldSources = synthesized.sources && typeof synthesized.sources === 'object' ? synthesized.sources : {};
+    matter.formData = {};
+    for (const [k, v] of Object.entries(synthesized.formData || {})) {
+        if (/^\[[A-Z0-9_]+\]$/.test(k) && v !== null && v !== undefined && String(v).trim() !== '' && v !== false) matter.formData[k] = v;
+    }
+
+    for (const h of Array.isArray(synthesized.hearings) ? synthesized.hearings : []) {
+        const date = normalizeDate(h.date);
+        if (!date) continue;
+        matter.hearings.push({
+            id: crypto.randomUUID(), type: h.type || 'Hearing', date, time: h.time || null,
+            department: h.department || null, judge: h.judge || null,
+            description: h.description || h.type || 'Hearing', status: h.status || 'Scheduled',
+            source: h.source ? `document: ${h.source}` : 'documents', uploadedAt: now
+        });
+    }
+
+    const validTypes = new Set(EVENT_TYPES.map(t => t.id));
+    for (const e of Array.isArray(synthesized.events) ? synthesized.events : []) {
+        const date = normalizeDate(e.date);
+        if (!date) continue;
+        matter.events.push({
+            id: crypto.randomUUID(), type: validTypes.has(e.type) ? e.type : 'note',
+            title: e.title || 'Document event', description: e.description || '', source: e.source || null,
+            date, addedBy: 'documents', createdAt: now
+        });
+    }
+    // Keep events added by people or the assistant
+    for (const e of existing.events || []) {
+        if (!['documents', 'system', 'extraction'].includes(e.addedBy)) matter.events.push(e);
+    }
+
+    applyFactOverrides(matter);
+    await writeMatter(matter.id, matter);
+    return { matter, documentsUsed: usable.length, skipped: docs.filter(d => d.analysis.status === 'unsupported').map(d => d.fileName) };
+}
+
+// Manual corrections (from the case page or the assistant) win over document-derived values
+function applyFactOverrides(matter) {
+    for (const [key, value] of Object.entries(matter.factOverrides || {})) {
+        if (key.startsWith('dates.')) matter.dates[key.slice(6)] = value;
+        else if (/^\[[A-Z0-9_]+\]$/.test(key)) { matter.formData = matter.formData || {}; matter.formData[key] = value; }
+        else matter[key] = value;
+    }
+}
 
 router.post('/api/matters/:id/rebuild-from-documents', async (req, res) => {
     try {
-        const existing = await readMatter(req.params.id);
-        const docs = await listDocAnalyses(existing.id);
-        if (docs.length === 0) return res.status(400).json({ error: 'This case has no uploaded documents.' });
-
-        const unanalyzed = docs.filter(d => !d.analysis || d.analysis.status === 'error');
-        if (unanalyzed.length) {
-            return res.status(409).json({ error: 'Some documents have not been read by AI yet.', pending: unanalyzed.map(d => ({ id: d.id, fileName: d.fileName })) });
-        }
-        const usable = docs.filter(d => d.analysis.status === 'done');
-        if (usable.length === 0) return res.status(400).json({ error: 'None of the documents could be read by AI.' });
-
-        const payload = usable.map(d => {
-            const { status, ...analysis } = d.analysis;
-            return { fileName: d.fileName, ...analysis };
-        });
-        const synthesized = await generateJson([{ text: `${REBUILD_PROMPT}\n\nDOCUMENT ANALYSES:\n${JSON.stringify(payload, null, 1)}` }]);
-
-        // Fresh record: same id/createdAt, everything else from documents only
-        const now = new Date().toISOString();
-        const matter = createMatterObject({});
-        matter.id = existing.id;
-        matter.createdAt = existing.createdAt || now;
-        matter.updatedAt = now;
-        matter.statusText = '';
-        matter.colorCode = '';
-        // No firm/staff defaults — only what the documents say
-        matter.creditorName = '';
-        matter.clientMatter = '';
-        matter.attorney = '';
-        matter.attorneyEmail = '';
-        matter.secretary = '';
-        matter.source = 'documents';
-        matter.rebuiltFromDocumentsAt = now;
-
-        const fields = synthesized.fields || {};
-        for (const f of REBUILD_FIELDS) {
-            if (fields[f] !== undefined && fields[f] !== null && String(fields[f]).trim() !== '') matter[f] = String(fields[f]).trim();
-        }
-        if (!matter.debtorName) matter.debtorName = existing.debtorName || '';
-
-        const dates = synthesized.dates || {};
-        for (const key of Object.keys(matter.dates)) {
-            if (key === 'serviceType') continue;
-            const d = normalizeDate(dates[key]);
-            if (d) matter.dates[key] = d;
-        }
-        if (/^(personal|substituted)$/i.test(matter.serviceType || '')) matter.dates.serviceType = matter.serviceType.toLowerCase();
-
-        if (synthesized.statusText) matter.statusText = String(synthesized.statusText);
-        if (synthesized.notes) matter.notes = String(synthesized.notes);
-        matter.fieldSources = synthesized.sources && typeof synthesized.sources === 'object' ? synthesized.sources : {};
-
-        for (const h of Array.isArray(synthesized.hearings) ? synthesized.hearings : []) {
-            const date = normalizeDate(h.date);
-            if (!date) continue;
-            matter.hearings.push({
-                id: crypto.randomUUID(),
-                type: h.type || 'Hearing',
-                date,
-                time: h.time || null,
-                department: h.department || null,
-                judge: h.judge || null,
-                description: h.description || h.type || 'Hearing',
-                status: h.status || 'Scheduled',
-                source: h.source ? `document: ${h.source}` : 'documents',
-                uploadedAt: now
-            });
-        }
-
-        const validTypes = new Set(EVENT_TYPES.map(t => t.id));
-        for (const e of Array.isArray(synthesized.events) ? synthesized.events : []) {
-            const date = normalizeDate(e.date);
-            if (!date) continue;
-            matter.events.push({
-                id: crypto.randomUUID(),
-                type: validTypes.has(e.type) ? e.type : 'note',
-                title: e.title || 'Document event',
-                description: [e.description, e.source ? `Source: ${e.source}` : ''].filter(Boolean).join(' — '),
-                date,
-                addedBy: 'documents',
-                createdAt: now
-            });
-        }
-        matter.events.push({
-            id: crypto.randomUUID(),
-            type: 'status_change',
-            title: 'Case rebuilt from documents',
-            description: `All case information was cleared and rebuilt from ${usable.length} document(s): ${usable.map(d => d.fileName).join(', ')}`,
-            date: now,
-            addedBy: 'system',
-            createdAt: now
-        });
-
-        await writeMatter(matter.id, matter);
-        const skipped = docs.filter(d => d.analysis.status === 'unsupported').map(d => d.fileName);
-        res.json({ success: true, matter, documentsUsed: usable.length, skipped });
+        const result = await rebuildMatterFromDocuments(req.params.id);
+        res.json({ success: true, ...result });
     } catch (err) {
         console.error('[Rebuild] Failed:', err.message);
-        res.status(500).json({ error: err.message });
+        res.status(err.status || 500).json({ error: err.message, pending: err.pending });
     }
 });
 
@@ -2651,267 +2368,10 @@ router.get('/api/docket/uploads', async (req, res) => {
     }
 });
 
-// ============================================================
-// GLOBAL CHAT (cross-matter AI assistant)
-// ============================================================
-
-// In-memory fallback for global chat (used when no Supabase)
-let globalChatHistory = [];
-
-async function getGlobalChatHistory() {
-    if (useSupabase) {
-        const { data } = await supabase
-            .from('global_chat')
-            .select('role, content, timestamp')
-            .order('id', { ascending: true })
-            .limit(100);
-        return (data || []).map(r => ({ role: r.role, content: r.content, timestamp: r.timestamp }));
-    }
-    return globalChatHistory;
-}
-
-async function appendGlobalChat(entry) {
-    if (useSupabase) {
-        await supabase.from('global_chat').insert({
-            role: entry.role,
-            content: entry.content,
-            timestamp: entry.timestamp
-        });
-        return;
-    }
-    globalChatHistory.push(entry);
-    if (globalChatHistory.length > 100) globalChatHistory = globalChatHistory.slice(-100);
-}
-
-async function clearGlobalChatHistory() {
-    if (useSupabase) {
-        await supabase.from('global_chat').delete().neq('id', 0);
-        return;
-    }
-    globalChatHistory = [];
-}
-
-// docMatterIds: cases with uploaded documents — their workflow checklist is left out so answers
-// come from the documents, not from internal task tracking
-function buildAllMattersContext(matters, docMatterIds = new Set()) {
-    if (matters.length === 0) return 'No matters loaded yet.';
-
-    return matters.map(m => {
-        const stageName = getStageLabel(m.currentStage);
-        const totalTasks = Object.keys(m.tasks).length;
-        const completedTasks = Object.values(m.tasks).filter(t => t.completed).length;
-
-        // Pending tasks (first 3)
-        const pendingTasks = [];
-        for (const stage of WORKFLOW_STAGES) {
-            for (const task of stage.tasks) {
-                if (m.tasks[task.id] && !m.tasks[task.id].completed) {
-                    const assignee = TEAM_MEMBERS.find(tm => tm.id === m.tasks[task.id].assignedTo);
-                    pendingTasks.push(`${task.label} (${assignee ? assignee.name : 'Unassigned'})`);
-                }
-            }
-            if (pendingTasks.length >= 3) break;
-        }
-
-        const dateEntries = Object.entries(m.dates || {})
-            .filter(([, v]) => v)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join(', ');
-
-        const recentEvents = (m.events || [])
-            .sort((a, b) => new Date(b.date) - new Date(a.date))
-            .slice(0, 3)
-            .map(e => `${e.title} (${new Date(e.date).toLocaleDateString()})`)
-            .join('; ');
-
-        // Include hearings in global context
-        const hearingsSummary = (m.hearings || [])
-            .sort((a, b) => new Date(a.date) - new Date(b.date))
-            .map(h => {
-                const dept = h.department ? ` Dept ${h.department.replace(/^Dept\.?\s*/i, '')}` : '';
-                const status = h.status && h.status !== 'Scheduled' ? ` [${h.status}]` : '';
-                return `${h.type}: ${h.date}${dept}${status}`;
-            })
-            .join('; ');
-
-        // Docket upload log
-        const docketLog = (m.docketUploads || [])
-            .map(u => `${new Date(u.uploadedAt).toLocaleDateString()} (${u.hearingsExtracted}h/${u.filingsExtracted}f)`)
-            .join('; ');
-
-        const hasDocs = docMatterIds.has(m.id);
-        return `--- ${m.debtorName || 'Unknown'}${hasDocs ? ' (has uploaded case documents)' : ''} ---
-Case#: ${m.caseNumber || 'Pending'}${hasDocs ? '' : ` | Stage: ${stageName} (${completedTasks}/${totalTasks})`} | Amount: ${m.demandAmount ? '$' + Number(m.demandAmount).toLocaleString() : 'N/A'}
-Loan: ${m.loanType || '?'} | Court: ${m.courtName || 'TBD'} | Status: ${m.status}${m.statusText ? ' - ' + m.statusText : ''}
-Account: ${m.accountNumber || '?'} | Service: ${m.serviceType || '?'} | Def. Response: ${m.defendantResponse || '?'}
-Dates: ${dateEntries || 'None'}
-Hearings: ${hearingsSummary || 'None on file'}
-Docket uploads: ${docketLog || 'None'}
-${hasDocs ? '' : `Next tasks: ${pendingTasks.slice(0, 3).join(' → ') || 'All complete'}\n`}Recent: ${recentEvents || 'No events'}
-Notes: ${m.notes || 'None'}`;
-    }).join('\n\n');
-}
-
-router.post('/api/chat/global', async (req, res) => {
-    try {
-        const userMessage = req.body.message;
-        if (!userMessage) return res.status(400).json({ error: 'Message is required' });
-
-        const userEntry = {
-            role: 'user',
-            content: userMessage,
-            timestamp: new Date().toISOString()
-        };
-        await appendGlobalChat(userEntry);
-
-        const matters = await listMatters();
-
-        // Case documents: the full stored text of the case(s) being asked about is included;
-        // other cases are represented by their stored summaries.
-        let docsByMatter = new Map();
-        try { docsByMatter = await listAllDocs(); } catch (e) { console.error('[Chat] Could not load documents:', e.message); }
-        const caseLabel = m => `${m.debtorName || 'Unnamed'}${m.caseNumber ? ` (${m.caseNumber})` : ''}`;
-        const docMatters = matters.filter(m => docsByMatter.has(m.id));
-        let allContext = buildAllMattersContext(matters, new Set(docMatters.map(m => m.id)));
-        const recentUserText = (await getGlobalChatHistory()).filter(h => h.role === 'user').slice(-4).map(h => h.content).join(' ');
-        const fileMatters = pickChatMatters(docMatters, docsByMatter, userMessage, recentUserText);
-        const attachFiles = fileMatters.length > 0;
-        const summariesFor = async list => {
-            let text = '';
-            let docBudget = 150000;
-            for (const m of list) {
-                if (docBudget <= 0) break;
-                const docs = docsByMatter.get(m.id).map(d => ({ id: d.id, fileName: d.fileName, createdAt: d.createdAt, analysis: d.analysis || null }));
-                const docsContext = await buildDocumentsContext(m.id, docBudget, docs);
-                if (!docsContext) continue;
-                text += `\n\n=== CASE DOCUMENTS (summaries): ${caseLabel(m)} ===\n${docsContext}`;
-                docBudget -= docsContext.length;
-            }
-            return text;
-        };
-        allContext += await summariesFor(docMatters.filter(m => !fileMatters.includes(m)));
-
-        const apiKey = process.env.GOOGLE_API_KEY;
-        let assistantContent;
-
-        if (apiKey) {
-            const systemPrompt = `You are a legal case management assistant for Wright Legal Group, managing debt collection cases for Kinecta Federal Credit Union.
-
-Today's date is ${new Date().toISOString().slice(0, 10)}.
-
-You have access to ALL ${matters.length} active cases. Here is the full case database:
-
-${allContext}
-
-TEAM MEMBERS:
-${TEAM_MEMBERS.map(m => `- ${m.name} (${m.role})`).join('\n')}
-
-WORKFLOW STAGES:
-${WORKFLOW_STAGES.map(s => `${s.number}. ${s.name}`).join('\n')}
-
-RESPONSE STYLE:
-- Be concise, direct, and professional. This tool is shown to supervisors and clients.
-- Use clean formatting: bold for names/dates, bullet points for short lists.
-- CRITICAL: When the user asks "what is the NEXT [hearing/CMC/trial/deadline]?" — give them ONLY THE SINGLE NEXT ONE. Not a list of all upcoming ones. Just the soonest one after today's date. Format it cleanly like:
-  **Debtor Name** (Case# XXXXX)
-  CMC — April 14, 2026 at 8:30 AM
-  Dept 19, [Court Name]
-- Only list multiple items when the user asks "all", "list", "upcoming", or "what CMCs do we have?"
-- When asked about a specific case, lead with the most important facts. For cases with uploaded documents, take every fact from the documents; never answer from workflow stages or task lists.
-- When multiple items share the same soonest date, include all of them.
-- Always sort chronologically when listing dates.
-- Do not repeat back the question. Just answer it.
-
-Your role:
-- Answer questions about ANY case or across ALL cases
-- Compare cases, find patterns, summarize status
-- Tell the user what's going on with a specific debtor by name
-- Identify which cases need attention (deadlines, pending tasks, stalled)
-- Suggest next steps for specific cases
-- Help with date calculations and California collection law
-- When asked about a specific person/debtor, search through all cases to find them (use partial name matching)
-- Provide workload summaries by team member when asked
-- Track docket uploads: each matter has a "Docket uploads" field showing when dockets were uploaded and what was extracted. When asked "which matters did I upload dockets for?" or "list all docket uploads", compile a list from the Docket uploads field across all matters.
-- When referencing cases, always mention the debtor name and case number if available.
-- ${attachFiles
-    ? `The full text of the uploaded documents for ${fileMatters.map(caseLabel).join(', ')} is at the end of these instructions ("CASE DOCUMENTS (full text)"), each labelled with its case; any files not yet read into text are attached to the user's message. Read them carefully — they are the source of truth: answer from them, name the file for each fact, and say plainly when they do not cover a question. Never invent facts, dates or amounts.`
-    : 'No case documents are included for this question.'}
-- "CASE DOCUMENTS (summaries)" sections are AI summaries of other cases' files. If a question needs detail a summary lacks, say which case and suggest asking about that case by name so its documents are read.`;
-
-            const fullHistory = await getGlobalChatHistory();
-            const recentChat = fullHistory.slice(-20);
-            const intro = 'MORE CASE DOCUMENTS (files not yet read into text, labelled by case):';
-
-            try {
-                let docBlock = '';
-                let budget = 2400000;
-                const fileParts = [];
-                const refreshers = [];
-                const skipped = [];
-                const unread = [];
-                for (const m of fileMatters) {
-                    const p = await prepareChatDocuments(docsByMatter.get(m.id), { labelPrefix: `Case ${caseLabel(m)} — `, maxChars: Math.max(budget, 0) });
-                    if (p.ctx.text) {
-                        docBlock += `\n\n=== CASE DOCUMENTS (full text): ${caseLabel(m)} ===\n${p.ctx.text}`;
-                        budget -= p.ctx.text.length;
-                    }
-                    fileParts.push(...p.files.parts);
-                    refreshers.push(p.refresh);
-                    skipped.push(...p.files.skipped);
-                    unread.push(...p.ctx.unread);
-                }
-                const contents = buildChatContents(recentChat, fileParts, intro);
-                try {
-                    assistantContent = await callGeminiChat(systemPrompt + docBlock, contents, fileParts.length
-                        ? async () => buildChatContents(recentChat, (await Promise.all(refreshers.map(f => f()))).flat(), intro)
-                        : null) + unreadFilesNote(skipped) + unreadDocsNote(unread);
-                } catch (err) {
-                    // Too much to read in one request → answer from summaries instead
-                    if (!attachFiles || !/token|too large|exceed|limit/i.test(err.message)) throw err;
-                    console.error('[Chat] Documents too large for one request, using summaries:', err.message);
-                    const fallbackPrompt = `${systemPrompt}\n\nNOTE: the case documents were too large to include in full for this question. Answer from these summaries and say if a detail is missing:${await summariesFor(fileMatters)}`;
-                    assistantContent = await callGeminiChat(fallbackPrompt, buildChatContents(recentChat, [], intro), null);
-                }
-            } catch (apiErr) {
-                console.error('Global chat API error:', apiErr.message);
-                assistantContent = `I couldn't reach the AI service or read the case documents right now (${apiErr.message}). Please try again in a moment.`;
-            }
-        } else {
-            assistantContent = `AI chat is not configured (no GOOGLE_API_KEY). You have ${matters.length} matters in the system.\n\nSet GOOGLE_API_KEY to enable AI-powered chat.`;
-        }
-
-        const assistantEntry = {
-            role: 'assistant',
-            content: assistantContent,
-            timestamp: new Date().toISOString()
-        };
-        await appendGlobalChat(assistantEntry);
-
-        res.json({ message: assistantEntry, matterCount: matters.length });
-    } catch (err) {
-        console.error('Global chat error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Get global chat history
-router.get('/api/chat/global/history', async (req, res) => {
-    try {
-        const history = await getGlobalChatHistory();
-        res.json(history);
-    } catch (err) {
-        res.json([]);
-    }
-});
-
-// Clear global chat history
-router.delete('/api/chat/global/history', async (req, res) => {
-    try {
-        await clearGlobalChatHistory();
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 module.exports = router;
+module.exports.rebuildMatterFromDocuments = rebuildMatterFromDocuments;
+module.exports.applyFactOverrides = applyFactOverrides;
+module.exports.createMatterObject = createMatterObject;
+module.exports.EVENT_TYPES = EVENT_TYPES;
+module.exports.WORKFLOW_STAGES = WORKFLOW_STAGES;
+module.exports.TEAM_MEMBERS = TEAM_MEMBERS;

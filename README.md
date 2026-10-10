@@ -64,21 +64,65 @@ A sample form (`sample-form.pdf`) is included in the templates folder with these
 - country
 - comments
 
-## Case Documents (/kinecta → Documents)
+## Kinecta Case Manager (/kinecta)
 
-Upload files to a case: pick a case from the dropdown (or add a new one), then drag files onto the page or click the drop zone. Click **Edit** to rename or remove uploaded files. Up to 50 MB per file.
+A case manager for consumer-loan collections, built from each case's own documents.
 
-- **Supabase**: run `supabase-schema.sql` to create the `case_documents` table. Files go to the private Storage bucket `case-documents` (created automatically). Requires `SUPABASE_SERVICE_KEY`. Browsers upload directly to Storage via signed URLs, so the serverless request size limit does not apply.
+- **Today**: overdue and upcoming deadlines across all cases, upcoming hearings, a pipeline by stage, recent documents, and a quick-ask box for the Assistant.
+- **Cases**: create a case with just the debtor name, then drop its documents in. Everything else comes from the documents.
+- **Case page**:
+  - Overview: AI summary, parties and court, service, default and judgment dates, deadlines, prepared forms
+  - Documents: drag and drop anywhere on the page; rename or remove
+  - Timeline
+  - Forms
+  - Ask AI
+- **Edit facts**: corrections are kept when the case is refreshed from documents.
+- **Deadlines** are computed from California rules:
+  - CRC 3.110(b): serve within 60 days
+  - CCP 412.20 / 415.20: 30 days to respond (+10 days after substituted service)
+  - CRC 3.110(g): request default within 10 days
+  - CRC 3.110(h): judgment within 45 days
+  - CCP 683.020: renew the judgment before 10 years
+  
+  Hearings and custom reminders are included.
+- **Forms** are filled from the case and the signed-in user's firm profile, stored on the case, and listed with the values used and any blank key fields:
+  - SUM-100
+  - CM-010
+  - LACIV 109
+  - CIV-100 (request for default, request for court judgment)
+  - POS by mail
+  - EJ-001
+  - CIV-110
+- **Assistant**:
+  - global, or scoped to one case
+  - answers from the stored text of every document
+  - can update case facts, add timeline entries and reminders, list what needs attention, and prepare forms (e.g. "prepare the request for default for Acevedo with costs of $435")
+
+### Documents
+- **Supabase**: run `supabase-schema.sql` once. Uploaded files go to the private Storage bucket `case-documents`, which is created automatically, and generated forms go under `generated/` in the same bucket. Requires `SUPABASE_SERVICE_KEY`. Browsers upload directly to Storage via signed URLs, so the serverless request size limit doesn't apply. Up to 50 MB per file.
 - **No Supabase**: files are stored under `case-documents/` on local disk.
 
-Deleting a case deletes its documents.
-
 **AI reading (once per document):** each upload is turned into plain text and stored with the document (`case_documents.full_text`):
-- digital PDFs → text layer; scanned PDFs, PDFs with filled form fields and images → AI transcription (Gemini, 20 pages per request)
-- .docx → text; .eml / .msg → headers, body and the text of PDF/Word/email attachments
-- then a summary, key facts, dates and events are generated from that text
+- Digital PDFs: text layer.
+- Scanned PDFs, PDFs with filled form fields, and images: AI transcription (Gemini, 20 pages per request).
+- .docx: text.
+- .eml / .msg: headers, body, and the text of PDF/Word/email attachments.
 
-**Rebuild case from documents** erases the case's fields, dates, status, tasks, timeline and chat and rebuilds them from those readings. Case chat and AI Chat answer from the stored full text — no files are re-sent per question. Documents not read yet are attached as files until they are read. Requires `GOOGLE_API_KEY`.
+A summary, key facts, dates and events are then generated from that text.
+
+**Refresh from documents** rebuilds the case's facts, dates, timeline, hearings and form data from all of its documents. Kept as they are: your fact corrections, reminders, prepared forms and chat history. Requires `GOOGLE_API_KEY`.
+
+API:
+- `GET /api/dashboard/today`
+- `GET|POST /api/cases`
+- `GET /api/cases/:id`
+- `PATCH /api/cases/:id/facts`
+- `POST|PATCH|DELETE /api/cases/:id/deadlines`
+- `GET /api/forms`
+- `POST /api/cases/:id/forms`
+- `GET /api/cases/:id/forms/:formId/download`
+- `POST /api/assistant`
+- `GET|DELETE /api/assistant/history`
 
 ## Technical Details
 
