@@ -549,12 +549,19 @@ app.use('/api/dashboard', requireAuth);
 app.use('/api/matters-export', requireAuth);
 app.use(mattersRouter);
 app.use('/api/documents', requireAuth);
+// Background jobs: a signed-in user, or a scheduler presenting CRON_SECRET
+app.use('/api/jobs', (req, res, next) => {
+    const secret = process.env.CRON_SECRET;
+    if (secret && req.get('x-cron-secret') === secret) return next();
+    return requireAuth(req, res, next);
+});
 app.use(require('./routes/documents').router);
 // Case manager: case overviews, deadlines, forms, Today dashboard, AI assistant
 app.use('/api/cases', requireAuth);
 app.use('/api/forms', requireAuth);
 app.use('/api/assistant', requireAuth);
 app.use(require('./routes/casework'));
+app.use(require('./routes/jobs'));
 app.use(require('./routes/assistant'));
 
 // ============================================================

@@ -82,19 +82,56 @@ function docToRow(doc) {
     };
 }
 
+// Pipeline state of a document (stored in analysis JSONB):
+//   queued → reading → done | error | unsupported.  No analysis yet = queued.
+function docStatus(doc) {
+    const a = doc.analysis;
+    if (!a) return 'queued';
+    if (a.status === 'done' && !doc.textChars) return 'queued';   // read before full text was stored
+    if (a.status === 'reading' && a.lockedUntil && new Date(a.lockedUntil) < new Date()) return 'queued';
+    return a.status || 'queued';
+}
+
 // Client-facing shape: no storage path, analysis reduced to status + type
 function publicDoc(doc) {
     const { storagePath, analysis, geminiFileUri, geminiFileExpiresAt, fullText, ...rest } = doc;
-    let status = analysis ? analysis.status : 'none';
-    // Read before full text was stored (or summary still pending) → needs reading
-    if (status === 'done' && !doc.textChars) status = 'none';
+    const status = docStatus(doc);
     return {
         ...rest,
         analysisStatus: status,
-        analysisError: analysis && analysis.status !== 'done' ? analysis.error || null : null,
+        analysisError: analysis && status !== 'done' ? analysis.error || analysis.lastError || null : null,
+        attempts: analysis && analysis.attempts ? analysis.attempts : 0,
         documentType: analysis && analysis.documentType ? analysis.documentType : null,
-        documentDate: analysis && analysis.documentDate ? analysis.documentDate : null
+        documentDate: analysis && analysis.documentDate ? analysis.documentDate : null,
+        isDraft: !!(analysis && analysis.isDraft),
+        analysisVersion: analysis && analysis.status === 'done' ? analysis.v || 1 : null
     };
+}
+
+// Claim a document for processing: only succeeds if nobody changed it since it was read
+async function claimDoc(doc, analysis) {
+    const analyzedAt = new Date().toISOString();
+    if (useSupabase) {
+        let q = supabase.from(TABLE).update({ analysis, analyzed_at: analyzedAt }).eq('id', doc.id);
+        q = doc.analyzedAt ? q.eq('analyzed_at', doc.analyzedAt) : q.is('analyzed_at', null);
+        const { data, error } = await q.select('id');
+        if (error) throw new Error(friendlyDbError(error));
+        if (!data || !data.length) return false;
+    } else {
+        let ok = false;
+        await updateIndex(doc.matterId, docs => {
+            const target = docs.find(d => d.id === doc.id);
+            if (target && (target.analyzedAt || null) === (doc.analyzedAt || null)) {
+                target.analysis = analysis;
+                target.analyzedAt = analyzedAt;
+                ok = true;
+            }
+        });
+        if (!ok) return false;
+    }
+    doc.analysis = analysis;
+    doc.analyzedAt = analyzedAt;
+    return true;
 }
 
 const SCHEMA_FIX_SQL = "ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS full_text TEXT, ADD COLUMN IF NOT EXISTS text_chars INTEGER; NOTIFY pgrst, 'reload schema';";
@@ -329,6 +366,8 @@ const MISSING_FILE_MESSAGE = 'The stored file is missing — remove this documen
 
 async function saveAnalysis(doc, analysis) {
     const analyzedAt = new Date().toISOString();
+    doc.analysis = analysis;
+    doc.analyzedAt = analyzedAt;
     if (useSupabase) {
         const { error } = await supabase.from(TABLE).update({ analysis, analyzed_at: analyzedAt }).eq('id', doc.id);
         if (error) throw new Error(friendlyDbError(error));
@@ -542,32 +581,39 @@ async function listAllDocs() {
     return byMatter;
 }
 
-const ANALYSIS_PROMPT = `You are a legal document analyst for a California debt collection law firm (client: Kinecta Federal Credit Union).
-Read the case document below completely and return ONE JSON object describing it. Use only information actually in the document — never guess. Omit fields you cannot find.
+const ANALYSIS_VERSION = 2;
+const ANALYSIS_PROMPT = `You are a senior litigation paralegal at a California debt collection law firm (client: Kinecta Federal Credit Union, consumer loan collections in limited civil court).
+Read the case document below completely and return ONE JSON object describing it. Use only information actually in this document — never guess, never use outside knowledge. Omit any key you cannot find.
 
 {
-  "documentType": "short type, e.g. Complaint, Summons, Proof of Service, Demand Letter / DVN, Default Judgment, Minute Order, Notice of Hearing, Answer, Correspondence, Account Statement, Loan Agreement, Writ, Abstract of Judgment",
-  "documentDate": "YYYY-MM-DD — the date the document was signed, filed or issued",
-  "summary": "detailed factual summary (300-600 words): who, what, when, amounts, court, case number, deadlines, rulings, and anything a paralegal would need to know",
-  "keyFacts": ["short factual statements, each self-contained, e.g. 'Complaint filed 2024-03-12 in LASC, case 24STLC01234'"],
+  "documentType": "short type, e.g. Complaint, Summons, Proof of Service of Summons, Declaration of Diligence, Request for Entry of Default, Default Judgment, Notice of Entry of Judgment, Minute Order, Notice of Hearing, Order to Show Cause, Answer, Email, Letter, eFiling Confirmation, Account Statement, Payoff Statement, Transaction History, Loan Agreement, Security Agreement, Membership Application, Credit Report, ID, Abstract of Judgment, Writ of Execution",
+  "documentDate": "YYYY-MM-DD — the date the document was filed, issued, signed or sent",
+  "isDraft": true if this is an unfiled draft, blank template or unsigned shell (e.g. no file stamp, placeholder text, empty fields), else false,
+  "filedWithCourt": true only if it bears a court file stamp / endorsement or was issued by the court (or is an eFiling acceptance for it),
+  "summary": "factual summary (150-400 words): who, what, when, amounts, court, case number, deadlines, rulings — what a paralegal needs",
+  "keyFacts": ["short self-contained facts, e.g. 'Complaint filed 2025-10-28 in Kern County Superior Court, case 25CLB01343'"],
   "fields": {
-    "debtorName": "full name of debtor/defendant/borrower",
-    "debtorAddress": "street address", "debtorCity": "city", "debtorState": "2-letter state", "debtorZip": "zip",
-    "caseNumber": "court case number", "courtName": "court name", "courtCounty": "county",
-    "demandAmount": "amount owed/demanded, number only", "judgmentAmount": "judgment amount, number only",
-    "loanType": "type of loan", "accountNumber": "account or loan number", "creditorName": "creditor/plaintiff"
+    "debtorName": "defendant/borrower full name", "debtorAddress": "street address only", "debtorCity": "", "debtorState": "2-letter", "debtorZip": "",
+    "caseNumber": "court case number", "courtName": "e.g. Superior Court of California, County of Kern", "courtBranch": "courthouse / division name", "courtAddress": "courthouse street, city, zip", "courtCounty": "county",
+    "creditorName": "plaintiff/creditor", "loanType": "e.g. auto loan, personal loan, credit card", "accountNumber": "loan/account number",
+    "demandAmount": "amount demanded in the complaint", "judgmentAmount": "total judgment entered",
+    "principal": "principal balance", "interestAmount": "accrued interest", "interestRate": "e.g. 7.99%", "payoffBalance": "payoff / balance due",
+    "lastPaymentAmount": "", "lastPaymentDate": "YYYY-MM-DD", "contractDate": "YYYY-MM-DD loan/contract date", "chargeOffDate": "YYYY-MM-DD",
+    "costs": "court costs claimed", "attorneyFees": "attorney fees claimed",
+    "serviceType": "personal | substituted | mail | publication", "servedBy": "process server name and company", "serviceAddress": "address where served",
+    "defendantResponse": "e.g. No response, Answer filed, Default entered"
   },
   "dates": {
-    "dvnSent": "YYYY-MM-DD", "responseDue": "YYYY-MM-DD", "complaintFiled": "YYYY-MM-DD", "served": "YYYY-MM-DD",
-    "serviceType": "personal | substituted", "answerDue": "YYYY-MM-DD", "answerReceived": "YYYY-MM-DD",
-    "defaultEntered": "YYYY-MM-DD", "judgmentEntered": "YYYY-MM-DD", "abstractFiled": "YYYY-MM-DD",
-    "abstractRecorded": "YYYY-MM-DD", "writIssued": "YYYY-MM-DD", "closed": "YYYY-MM-DD"
+    "dvnSent": "", "responseDue": "", "complaintFiled": "date the complaint was filed", "served": "date service on the defendant was completed",
+    "answerReceived": "", "defaultRequested": "date the request for entry of default was filed", "defaultEntered": "date the clerk entered default",
+    "judgmentEntered": "", "abstractFiled": "", "abstractRecorded": "", "writIssued": "", "closed": ""
   },
+  "evidence": { "<field or dates.key>": "short exact quote (max 200 chars) from the document that proves the value" },
   "events": [{ "type": "filing|hearing|service|correspondence|minute_order|court_order|payment|note", "title": "brief title", "date": "YYYY-MM-DD", "description": "details" }],
-  "hearings": [{ "type": "e.g. Case Management Conference, Trial, OSC", "date": "YYYY-MM-DD", "time": "e.g. 8:30 AM", "department": "e.g. Dept. 25", "location": "courthouse", "status": "scheduled | continued | vacated | held" }]
+  "hearings": [{ "type": "e.g. OSC re: Default Judgment, Case Management Conference, Trial", "date": "YYYY-MM-DD", "time": "e.g. 8:30 AM", "department": "e.g. Dept. 12", "location": "courthouse", "status": "Scheduled | Continued | Vacated | Held" }]
 }
 
-Rules: dates in YYYY-MM-DD; amounts as plain numbers (no $ or commas); include every date, deadline and event mentioned.`;
+Rules: dates YYYY-MM-DD; amounts as plain numbers (no $ or commas); give an "evidence" quote for every field and date you fill; a draft/template must not be treated as proof that something was filed or happened.`;
 
 // Remove every stored file + metadata row for a matter (called when a matter is deleted).
 // Pass no matterId to remove all documents for all matters.
@@ -746,52 +792,17 @@ router.get('/api/matters/:id/documents/:docId/download', async (req, res) => {
     }
 });
 
-// AI analysis of one document (one per request keeps each call inside serverless time limits)
+// Read one document now (the pipeline normally does this in the background)
 router.post('/api/matters/:id/documents/:docId/analyze', async (req, res) => {
-    let doc;
     try {
-        const started = Date.now();
-        doc = await getDoc(req.params.id, req.params.docId);
+        const doc = await getDoc(req.params.id, req.params.docId);
         if (!doc) return res.status(404).json({ error: 'Document not found' });
-
-        // Step 1 (once): turn the file into text and store it
-        let text = null;
-        let method = doc.analysis && doc.analysis.method;
-        if (!doc.textChars || req.query.reread === '1') {
-            const buffer = await readDocBuffer(doc);
-            let extracted;
-            try {
-                extracted = await extractDocumentText(buffer, doc.mimeType, doc.fileName);
-            } catch (e) {
-                if (!(e instanceof UnsupportedFileError)) throw e;
-                const analysis = { status: 'unsupported', error: e.message };
-                await saveAnalysis(doc, analysis);
-                return res.json(publicDoc({ ...doc, analysis }));
-            }
-            text = extracted.text || '(no readable text found)';
-            method = extracted.method;
-            await saveText(doc, text);
-            // Long transcriptions: finish the summary in a second request to stay within time limits
-            if (Date.now() - started > 25000) {
-                return res.json({ ...publicDoc({ ...doc, analysis: null }), continue: true });
-            }
-        }
-        if (text === null) text = (await getDocTexts([doc])).get(doc.id) || '';
-
-        // Step 2: summary, key facts, dates and events from the stored text
-        const result = await generateJson([
-            { text: `${ANALYSIS_PROMPT}\n\nFile name: ${doc.fileName}\n\nDOCUMENT TEXT:\n${text.slice(0, 1500000)}` }
-        ]);
-        const analysis = { status: 'done', method, ...result };
-        await saveAnalysis(doc, analysis);
-        res.json(publicDoc({ ...doc, analysis }));
+        const pipeline = require('../lib/doc-pipeline');
+        const r = await pipeline.processDoc(doc);
+        const fresh = await getDoc(req.params.id, req.params.docId);
+        res.json({ ...publicDoc(fresh || doc), result: r.result, continue: r.result === 'partial' || r.result === 'retry' });
     } catch (err) {
-        console.error('[Documents] Analysis failed:', err.message);
-        // Record the failure so the UI can show it; ignore errors while recording
-        const message = err.missing ? MISSING_FILE_MESSAGE : err.message;
-        if (doc && !/GOOGLE_API_KEY|AI columns/.test(err.message)) {
-            try { await saveAnalysis(doc, { status: 'error', error: message }); } catch (_) {}
-        }
+        const message = err.message;
         if (isSchemaError(message)) return res.status(500).json({ error: message, code: 'SCHEMA', sql: SCHEMA_FIX_SQL });
         res.status(500).json({ error: message });
     }
@@ -842,4 +853,10 @@ router.delete('/api/matters/:id/documents/:docId', async (req, res) => {
     }
 });
 
-module.exports = { router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, buildFileParts, buildTextContext, saveGeneratedFile, getGeneratedFile, deleteGeneratedFile, publicDoc };
+module.exports = {
+    router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, buildFileParts, buildTextContext,
+    saveGeneratedFile, getGeneratedFile, deleteGeneratedFile, publicDoc, docStatus,
+    // used by lib/doc-pipeline
+    getDoc, claimDoc, saveAnalysis, saveText, getDocTexts, readDocBuffer,
+    ANALYSIS_PROMPT, ANALYSIS_VERSION, MISSING_FILE_MESSAGE, isSchemaError, SCHEMA_FIX_SQL
+};

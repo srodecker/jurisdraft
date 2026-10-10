@@ -80,10 +80,17 @@ function factsBlock(m) {
         ['Plaintiff / creditor', m.creditorName], ['Case number', m.caseNumber], ['Court', [m.courtName, m.courtBranch].filter(Boolean).join(' — ')],
         ['Court address', m.courtAddress], ['County', m.courtCounty], ['Demand', m.demandAmount], ['Judgment', m.judgmentAmount],
         ['Loan', m.loanType], ['Account', m.accountNumber], ['Service', [m.serviceType, m.servedBy && `by ${m.servedBy}`, m.serviceAddress && `at ${m.serviceAddress}`].filter(Boolean).join(' ')],
-        ['Defendant response', m.defendantResponse], ['Status', m.statusText]
+        ['Defendant response', m.defendantResponse], ['Status', m.statusText], ['Next step', m.nextStep],
+        ['Principal', m.principal], ['Interest', m.interestAmount], ['Interest rate', m.interestRate], ['Payoff balance', m.payoffBalance],
+        ['Costs', m.costs], ['Attorney fees', m.attorneyFees], ['Contract date', m.contractDate], ['Charge-off date', m.chargeOffDate],
+        ['Last payment', [m.lastPaymentAmount, m.lastPaymentDate].filter(Boolean).join(' on ')]
     ].filter(([, v]) => v);
     const dates = Object.entries(d).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('; ');
-    return rows.map(([k, v]) => `${k}: ${v}`).join('\n') + (dates ? `\nDates: ${dates}` : '');
+    const conflicts = (m.factConflicts || []).map(c => `- ${c.label}: documents disagree (${c.options.map(o => `${o.value} per ${o.sources.map(s => s.fileName).join(', ')}`).join(' vs ')}); using ${c.chosen}`).join('\n');
+    const skipped = (m.docsSkipped || []).filter(x => x.status === 'error').map(x => `- ${x.fileName}: ${x.error || 'could not be read'}`).join('\n');
+    return rows.map(([k, v]) => `${k}: ${v}`).join('\n') + (dates ? `\nDates: ${dates}` : '')
+        + (conflicts ? `\nUnresolved conflicts (ask the user which is right before relying on them):\n${conflicts}` : '')
+        + (skipped ? `\nDocuments that could not be read:\n${skipped}` : '');
 }
 
 function caseRecordText(m, docs) {

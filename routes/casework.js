@@ -10,7 +10,7 @@ const PizZip = require('pizzip');
 const { PDFDocument } = require('pdf-lib');
 
 const { readMatter, writeMatter, listMatters } = require('../lib/matter-store');
-const { listDocs, listAllDocs, saveGeneratedFile, getGeneratedFile, deleteGeneratedFile, publicDoc } = require('./documents');
+const { listDocs, listAllDocs, saveGeneratedFile, getGeneratedFile, deleteGeneratedFile, publicDoc, docStatus } = require('./documents');
 const intel = require('../lib/case-intel');
 const services = require('../lib/services');
 const { applyFactOverrides, createMatterObject } = require('./matters');
@@ -43,7 +43,10 @@ function caseSummary(m, docs = [], today = intel.todayLA()) {
         nextDeadline: open[0] || null,
         overdueCount: open.filter(d => d.status === 'overdue').length,
         docCount: docs.length,
-        unreadDocCount: docs.length - readDocs.length - docs.filter(d => d.analysis && d.analysis.status === 'unsupported').length,
+        unreadDocCount: docs.filter(d => { const st = docStatus(d); return st === 'queued' || st === 'reading'; }).length,
+        failedDocCount: docs.filter(d => docStatus(d) === 'error').length,
+        conflictCount: (m.factConflicts || []).length,
+        nextStep: m.nextStep || '',
         lastDocAt: lastDoc,
         updatedAt: m.updatedAt,
         fromDocuments: m.source === 'documents'
@@ -88,7 +91,8 @@ function resolveCase(matters, ref) {
 const EDITABLE_FIELDS = ['debtorName', 'debtorAddress', 'debtorCity', 'debtorState', 'debtorZip', 'caseNumber',
     'courtName', 'courtBranch', 'courtAddress', 'courtCounty', 'demandAmount', 'judgmentAmount', 'loanType',
     'accountNumber', 'creditorName', 'serviceType', 'servedBy', 'serviceAddress', 'defendantResponse',
-    'statusText', 'summary', 'status'];
+    'statusText', 'summary', 'status', 'nextStep', 'reportNote', 'principal', 'interestAmount', 'interestRate',
+    'payoffBalance', 'lastPaymentAmount', 'lastPaymentDate', 'contractDate', 'chargeOffDate', 'costs', 'attorneyFees'];
 
 const DATE_KEYS = Object.keys(createMatterObject({}).dates);
 
@@ -121,6 +125,9 @@ function updateFacts(matter, updates, by = 'user') {
     }
     if (changed.length) {
         applyFactOverrides(matter);
+        // A fact the user set is no longer in dispute
+        const set = new Set(changed.map(c => c.field));
+        matter.factConflicts = (matter.factConflicts || []).filter(c => !set.has(c.field));
         const now = new Date().toISOString();
         matter.updatedAt = now;
         matter.events = matter.events || [];
