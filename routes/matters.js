@@ -4,7 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
-const { deleteAllDocuments, listDocAnalyses, listAllDocs, getCaseFileParts, buildFileParts } = require('./documents');
+const { deleteAllDocuments, listDocs, listDocAnalyses, listAllDocs, buildFileParts, buildTextContext } = require('./documents');
 const { GEMINI_BASE, GEMINI_MODEL, generateJson, fetchWithRetry } = require('../lib/gemini');
 
 const router = express.Router();
@@ -911,7 +911,7 @@ async function callGeminiChat(systemPrompt, contents, refreshContents) {
             body: JSON.stringify({
                 systemInstruction: { parts: [{ text: systemPrompt }] },
                 contents,
-                generationConfig: { maxOutputTokens: 8192 }
+                generationConfig: { maxOutputTokens: 8192, thinkingConfig: { thinkingBudget: 1024 } }
             })
         });
         if (response.ok) {
@@ -927,6 +927,29 @@ async function callGeminiChat(systemPrompt, contents, refreshContents) {
         }
         throw new Error(`AI service error (HTTP ${response.status}): ${errText.slice(0, 200)}`);
     }
+}
+
+// Documents for chat: stored full text goes in the system prompt; documents not read yet
+// are attached as files (slower) until they are read once on the Documents page.
+async function prepareChatDocuments(docs, { labelPrefix = '', maxChars } = {}) {
+    const ctx = await buildTextContext(docs, { labelPrefix, maxChars });
+    let files = { parts: [], included: [], skipped: [] };
+    if (ctx.unread.length) {
+        try {
+            files = await buildFileParts(ctx.unread, { labelPrefix });
+        } catch (e) {
+            if (!ctx.included) throw e;
+            files.skipped = ctx.unread.map(d => `${d.fileName} (${String(e.message).slice(0, 120)})`);
+        }
+    }
+    const refresh = async () => (ctx.unread.length ? (await buildFileParts(ctx.unread, { labelPrefix, force: true })).parts : []);
+    return { ctx, files, refresh };
+}
+
+function unreadDocsNote(unread) {
+    return unread.length
+        ? `\n\n**Note:** ${unread.length} document(s) haven't been read into the case yet, so this answer was slower. Open Documents and click "Rebuild case from documents" to read them once.`
+        : '';
 }
 
 // Note appended to an answer when some documents could not be read, so the user sees why
@@ -983,15 +1006,16 @@ router.post('/api/matters/:id/chat', async (req, res) => {
             assistantContent = 'AI chat is not configured (no GOOGLE_API_KEY).';
         } else {
             try {
-                const files = await getCaseFileParts(matter.id);
+                const { ctx, files, refresh } = await prepareChatDocuments(await listDocs(matter.id));
+                const notReadable = [...ctx.unsupported, ...files.skipped];
                 const systemPrompt = `You are a legal case assistant for Wright Legal Group, working on a debt collection case for Kinecta Federal Credit Union.
 
 Today's date is ${new Date().toISOString().slice(0, 10)}.
 
-The uploaded case documents are attached to the user's message${files.included.length ? ` (${files.included.length}: ${files.included.join(', ')})` : ' — but this case has no readable documents yet'}.
-${files.skipped.length ? `These files could not be read by AI: ${files.skipped.join(', ')}.\n` : ''}
+The case documents are provided below as full text${files.included.length ? `, plus ${files.included.length} file(s) attached to the user's message` : ''}.${!ctx.included && !files.included.length ? ' This case has no readable documents yet.' : ''}
+${notReadable.length ? `These files could not be read: ${notReadable.join(', ')}.\n` : ''}
 SOURCE RULES:
-- Answer ONLY from the attached documents. Read them carefully, including dates, amounts, names and case numbers.
+- Answer ONLY from the case documents. Read them carefully, including dates, amounts, names and case numbers.
 - Name the document (file name) each fact comes from.
 - If the documents do not answer the question, say so plainly. Never invent facts, dates or amounts.
 - You may do date calculations and explain California collection procedure, but make clear which parts come from the documents.
@@ -1002,13 +1026,15 @@ ${buildCaseFactsContext(matter)}
 RESPONSE STYLE:
 - Concise, direct, professional. Lead with the answer; do not repeat the question.
 - When asked for the "next" hearing/date/deadline, give only the single next one.
-- Bold key info (names, dates, amounts). Bullet points for short lists.`;
-                const intro = 'CASE DOCUMENTS (the uploaded files for this case):';
+- Bold key info (names, dates, amounts). Bullet points for short lists.
+
+CASE DOCUMENTS (full text of every uploaded file, oldest first):
+${ctx.text || '(none)'}`;
+                const intro = 'MORE CASE DOCUMENTS (files not yet read into text):';
                 const contents = buildChatContents(recentChat, files.parts, intro);
-                assistantContent = await callGeminiChat(systemPrompt, contents, async () => {
-                    const fresh = await getCaseFileParts(matter.id, { force: true });
-                    return buildChatContents(recentChat, fresh.parts, intro);
-                }) + unreadFilesNote(files.skipped);
+                assistantContent = await callGeminiChat(systemPrompt, contents, files.parts.length
+                    ? async () => buildChatContents(recentChat, await refresh(), intro)
+                    : null) + unreadFilesNote(files.skipped) + unreadDocsNote(ctx.unread);
             } catch (err) {
                 console.error('[Chat] Failed:', err.message);
                 assistantContent = `I couldn't read the case documents right now (${err.message}). Please try again in a moment.`;
@@ -2740,7 +2766,7 @@ router.post('/api/chat/global', async (req, res) => {
 
         const matters = await listMatters();
 
-        // Case documents: the real files of the case(s) being asked about are attached;
+        // Case documents: the full stored text of the case(s) being asked about is included;
         // other cases are represented by their stored summaries.
         let docsByMatter = new Map();
         try { docsByMatter = await listAllDocs(); } catch (e) { console.error('[Chat] Could not load documents:', e.message); }
@@ -2749,18 +2775,7 @@ router.post('/api/chat/global', async (req, res) => {
         let allContext = buildAllMattersContext(matters, new Set(docMatters.map(m => m.id)));
         const recentUserText = (await getGlobalChatHistory()).filter(h => h.role === 'user').slice(-4).map(h => h.content).join(' ');
         const fileMatters = pickChatMatters(docMatters, docsByMatter, userMessage, recentUserText);
-        let attachFiles = fileMatters.length > 0;
-        let globalSkipped = [];
-        const buildGlobalFileParts = async (force = false) => {
-            const parts = [];
-            globalSkipped = [];
-            for (const m of fileMatters) {
-                const r = await buildFileParts(docsByMatter.get(m.id), { force, labelPrefix: `Case ${caseLabel(m)} — ` });
-                parts.push(...r.parts);
-                globalSkipped.push(...r.skipped);
-            }
-            return parts;
-        };
+        const attachFiles = fileMatters.length > 0;
         const summariesFor = async list => {
             let text = '';
             let docBudget = 150000;
@@ -2819,26 +2834,42 @@ Your role:
 - Track docket uploads: each matter has a "Docket uploads" field showing when dockets were uploaded and what was extracted. When asked "which matters did I upload dockets for?" or "list all docket uploads", compile a list from the Docket uploads field across all matters.
 - When referencing cases, always mention the debtor name and case number if available.
 - ${attachFiles
-    ? `The actual uploaded documents for ${fileMatters.map(caseLabel).join(', ')} are attached to the user's message, each labelled with its case. Read them carefully — they are the source of truth: answer from them, name the file for each fact, and say plainly when they do not cover a question. Never invent facts, dates or amounts.`
-    : 'No document files are attached for this question.'}
+    ? `The full text of the uploaded documents for ${fileMatters.map(caseLabel).join(', ')} is at the end of these instructions ("CASE DOCUMENTS (full text)"), each labelled with its case; any files not yet read into text are attached to the user's message. Read them carefully — they are the source of truth: answer from them, name the file for each fact, and say plainly when they do not cover a question. Never invent facts, dates or amounts.`
+    : 'No case documents are included for this question.'}
 - "CASE DOCUMENTS (summaries)" sections are AI summaries of other cases' files. If a question needs detail a summary lacks, say which case and suggest asking about that case by name so its documents are read.`;
 
             const fullHistory = await getGlobalChatHistory();
             const recentChat = fullHistory.slice(-20);
-            const intro = 'CASE DOCUMENTS (uploaded files, labelled by case):';
+            const intro = 'MORE CASE DOCUMENTS (files not yet read into text, labelled by case):';
 
             try {
-                const fileParts = attachFiles ? await buildGlobalFileParts() : [];
+                let docBlock = '';
+                let budget = 2400000;
+                const fileParts = [];
+                const refreshers = [];
+                const skipped = [];
+                const unread = [];
+                for (const m of fileMatters) {
+                    const p = await prepareChatDocuments(docsByMatter.get(m.id), { labelPrefix: `Case ${caseLabel(m)} — `, maxChars: Math.max(budget, 0) });
+                    if (p.ctx.text) {
+                        docBlock += `\n\n=== CASE DOCUMENTS (full text): ${caseLabel(m)} ===\n${p.ctx.text}`;
+                        budget -= p.ctx.text.length;
+                    }
+                    fileParts.push(...p.files.parts);
+                    refreshers.push(p.refresh);
+                    skipped.push(...p.files.skipped);
+                    unread.push(...p.ctx.unread);
+                }
                 const contents = buildChatContents(recentChat, fileParts, intro);
                 try {
-                    assistantContent = await callGeminiChat(systemPrompt, contents, attachFiles
-                        ? async () => buildChatContents(recentChat, await buildGlobalFileParts(true), intro)
-                        : null) + unreadFilesNote(globalSkipped);
+                    assistantContent = await callGeminiChat(systemPrompt + docBlock, contents, fileParts.length
+                        ? async () => buildChatContents(recentChat, (await Promise.all(refreshers.map(f => f()))).flat(), intro)
+                        : null) + unreadFilesNote(skipped) + unreadDocsNote(unread);
                 } catch (err) {
                     // Too much to read in one request → answer from summaries instead
                     if (!attachFiles || !/token|too large|exceed|limit/i.test(err.message)) throw err;
                     console.error('[Chat] Documents too large for one request, using summaries:', err.message);
-                    const fallbackPrompt = `${systemPrompt}\n\nNOTE: the document files were too large to attach for this question. Answer from these summaries and say if a detail is missing:${await summariesFor(fileMatters)}`;
+                    const fallbackPrompt = `${systemPrompt}\n\nNOTE: the case documents were too large to include in full for this question. Answer from these summaries and say if a detail is missing:${await summariesFor(fileMatters)}`;
                     assistantContent = await callGeminiChat(fallbackPrompt, buildChatContents(recentChat, [], intro), null);
                 }
             } catch (apiErr) {

@@ -2580,6 +2580,17 @@ function renderDocsAiStatus(text) {
         : 'Upload documents to build this case.';
 }
 
+// Read one document into stored text + summary. Long scans finish in a second request.
+async function readDocumentOnce(matterId, docId) {
+    for (let step = 0; step < 4; step++) {
+        const r = await authFetch(`/api/matters/${matterId}/documents/${docId}/analyze`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Reading failed');
+        if (!d.continue) return d;
+    }
+    throw new Error('Reading did not finish');
+}
+
 // Read every document not yet read (or that failed). One request per document.
 async function analyzePendingDocs() {
     const matterId = docsMatterId;
@@ -2595,10 +2606,7 @@ async function analyzePendingDocs() {
             renderDocsTable();
             renderDocsAiStatus(`Reading ${i + 1} of ${pending.length}: ${doc.fileName}…`);
             try {
-                const r = await authFetch(`/api/matters/${matterId}/documents/${doc.id}/analyze`, { method: 'POST' });
-                const d = await r.json();
-                if (!r.ok) throw new Error(d.error || 'Analysis failed');
-                Object.assign(doc, d);
+                Object.assign(doc, await readDocumentOnce(matterId, doc.id));
             } catch (e) {
                 failures++;
                 doc.analysisStatus = 'error';
@@ -2707,8 +2715,8 @@ async function rebuildFromCasePage() {
         const failed = [];
         for (let i = 0; i < pending.length; i++) {
             setStatus(`Reading ${i + 1}/${pending.length}…`);
-            const a = await authFetch(`/api/matters/${m.id}/documents/${pending[i].id}/analyze`, { method: 'POST' });
-            if (!a.ok) failed.push(`${pending[i].fileName}: ${(await a.json().catch(() => ({}))).error || 'failed'}`);
+            try { await readDocumentOnce(m.id, pending[i].id); }
+            catch (e) { failed.push(`${pending[i].fileName}: ${e.message}`); }
         }
         if (failed.length) throw new Error(`${failed.length} document(s) could not be read — ${failed[0]}`);
 
