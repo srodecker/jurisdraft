@@ -66,63 +66,65 @@ A sample form (`sample-form.pdf`) is included in the templates folder with these
 
 ## Kinecta Case Manager (/kinecta)
 
-A case manager for consumer-loan collections, built from each case's own documents.
+A case manager for consumer-loan collections in California courts, built from each case's own documents.
 
-- **Today**: overdue and upcoming deadlines across all cases, upcoming hearings, a pipeline by stage, recent documents, and a quick-ask box for the Assistant.
-- **Cases**: create a case with just the debtor name, then drop its documents in. Everything else comes from the documents.
-- **Case page**:
-  - Overview: AI summary, parties and court, service, default and judgment dates, deadlines, prepared forms
-  - Documents: drag and drop anywhere on the page; rename or remove
-  - Timeline
-  - Forms
-  - Ask AI
-- **Edit facts**: corrections are kept when the case is refreshed from documents.
-- **Deadlines** are computed from California rules:
-  - CRC 3.110(b): serve within 60 days
-  - CCP 412.20 / 415.20: 30 days to respond (+10 days after substituted service)
-  - CRC 3.110(g): request default within 10 days
-  - CRC 3.110(h): judgment within 45 days
-  - CCP 683.020: renew the judgment before 10 years
-  
-  Hearings and custom reminders are included.
-- **Forms** are filled from the case and the signed-in user's firm profile, stored on the case, and listed with the values used and any blank key fields:
-  - SUM-100
-  - CM-010
-  - LACIV 109
-  - CIV-100 (request for default, request for court judgment)
-  - POS by mail
-  - EJ-001
-  - CIV-110
-- **Assistant**:
-  - global, or scoped to one case
-  - answers from the stored text of every document
-  - can update case facts, add timeline entries and reminders, list what needs attention, and prepare forms (e.g. "prepare the request for default for Acevedo with costs of $435")
+**Pages**
 
-### Documents
-- **Supabase**: run `supabase-schema.sql` once. Uploaded files go to the private Storage bucket `case-documents`, which is created automatically, and generated forms go under `generated/` in the same bucket. Requires `SUPABASE_SERVICE_KEY`. Browsers upload directly to Storage via signed URLs, so the serverless request size limit doesn't apply. Up to 50 MB per file.
-- **No Supabase**: files are stored under `case-documents/` on local disk.
+| Page | What it does |
+|---|---|
+| Today | Overdue and due-soon deadlines with one-click **Prepare**, hearings, cases needing review, pipeline, recent documents. |
+| Cases | Search, filter by stage, sort. |
+| Case | Next step, conflicts to resolve, facts (each with its source document and quote), deadlines, prepared forms. Tabs: Documents (preview plus "what the AI read"), Timeline, Forms, Notes. The AI case assistant stays open beside it. |
+| Calendar | Month and agenda views. **Add to Outlook / Google** gives a private ICS link. |
+| Client report | Every case's stage, key dates, amounts, status and next step. Optional "activity since" date. Print/PDF or Excel. |
+| Assistant | Questions across all cases. It can update facts, add reminders and timeline entries, and prepare forms or whole packages. |
+| Settings | Firm and attorneys (filled into every form) and system status. |
 
-**AI reading (once per document):** each upload is turned into plain text and stored with the document (`case_documents.full_text`):
-- Digital PDFs: text layer.
-- Scanned PDFs, PDFs with filled form fields, and images: AI transcription (Gemini, 20 pages per request).
-- .docx: text.
-- .eml / .msg: headers, body, and the text of PDF/Word/email attachments.
+Press **Ctrl/⌘+K** anywhere to jump to a case or page, or to ask the assistant.
 
-A summary, key facts, dates and events are then generated from that text.
+**How documents become a case**
+1. **Upload.** Files go straight to the private Supabase bucket `case-documents` (up to 50 MB each).
+2. **Reading.** A server-side queue (`lib/doc-pipeline.js`, `POST /api/jobs/tick`) reads each file once into plain text:
+   - PDF text layer; AI transcription for scans; .docx; .msg/.eml including attachments.
+   - It then extracts a summary, facts with evidence quotes, events and hearings.
+   - Failures retry 3 times and are then shown with the reason and a Retry button.
+   - The queue state lives in `case_documents.analysis`. Any open page drives it. Closing the tab only pauses it.
+   - For reading with no page open, see `supabase/migrations/002_background_reading_cron.sql`.
+3. **Merging facts** (`lib/fact-merge.js`). Case facts are merged from every reading by source credibility:
+   - Filed court papers and proofs of service count for more than drafts and emails.
+   - A draft never proves a filing.
+   - Addresses and balances come from the newest document.
+   - Where credible documents disagree, the case shows a conflict to resolve once.
+4. **Summary.** One small AI call writes the summary, status, next step and form data.
 
-**Refresh from documents** rebuilds the case's facts, dates, timeline, hearings and form data from all of its documents. Kept as they are: your fact corrections, reminders, prepared forms and chat history. Requires `GOOGLE_API_KEY`.
+   A failed document never blocks the case. Your corrections (Edit facts, resolved conflicts, form edits) always win.
 
-API:
-- `GET /api/dashboard/today`
-- `GET|POST /api/cases`
-- `GET /api/cases/:id`
-- `PATCH /api/cases/:id/facts`
-- `POST|PATCH|DELETE /api/cases/:id/deadlines`
-- `GET /api/forms`
-- `POST /api/cases/:id/forms`
-- `GET /api/cases/:id/forms/:formId/download`
-- `POST /api/assistant`
-- `GET|DELETE /api/assistant/history`
+**Deadlines.** Computed from California rules:
+- CRC 3.110(b): serve within 60 days
+- CCP 412.20 / 415.20: 30 days to respond, +10 days for substituted service
+- CRC 3.110(g): request default within 10 days
+- CRC 3.110(h): judgment within 45 days
+- CCP 683.020: renew the judgment before 10 years
+
+Hearings from the documents and your own reminders are added.
+
+**Forms.** SUM-100, CM-010, LACIV 109, CIV-100 (request for default, and request for court judgment), POS by mail, EJ-001, CIV-110.
+- Packages prepare a whole step in one go: new filing, request for default, default judgment, abstract.
+- Each prepared form keeps the values it used. Edit them and **Regenerate**, or open the package as one combined PDF.
+- Review every form before filing.
+
+**Setup**
+- Supabase:
+  - Run `supabase-schema.sql` once, or `supabase/migrations/*.sql` for upgrades.
+  - Set `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`.
+  - Settings are stored as JSON in the same bucket (`settings/`), so no extra tables are needed.
+- AI: `GOOGLE_API_KEY` (Gemini).
+- Optional: `CRON_SECRET` lets a scheduler call `/api/jobs/tick`.
+- Without Supabase, everything is stored on local disk (`matters/`, `case-documents/`, `settings/`). Set `JD_DATA_DIR` to put it elsewhere.
+
+**Tests.** `npm test` runs:
+- unit tests: fact merging, deadlines, form data
+- an end-to-end run of the server against `test/mock-gemini.js`: upload → read → facts → conflicts → forms/packages → calendar/ICS → report/Excel → assistant
 
 ## Technical Details
 

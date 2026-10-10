@@ -59,7 +59,15 @@ function createToken(username, passwordHash) {
 }
 
 // Helper: read a profile from disk, or from environment variable if not found
+const settingsStore = require('./lib/settings-store');
+
+// Profile from disk (or env var) with the user's saved settings (firm, attorneys) on top
 async function readProfile(username) {
+    const base = await readBaseProfile(username);
+    try { return await settingsStore.overlayProfile(username, base); } catch (_) { return base; }
+}
+
+async function readBaseProfile(username) {
     const filePath = path.join(PROFILES_DIR, `${username}.json`);
     try {
         const raw = await fs.readFile(filePath, 'utf-8');
@@ -562,6 +570,8 @@ app.use('/api/forms', requireAuth);
 app.use('/api/assistant', requireAuth);
 app.use(require('./routes/casework'));
 app.use(require('./routes/jobs'));
+app.use('/api/calendar', requireAuth); app.use('/api/reports', requireAuth); app.use('/api/system', requireAuth);
+app.use(require('./routes/reports'));
 app.use(require('./routes/assistant'));
 
 // ============================================================
@@ -650,8 +660,15 @@ app.put('/api/profile', async (req, res) => {
     if (updates.attorneys) profile.attorneys = updates.attorneys;
     if (updates.signature) profile.signature = { ...profile.signature, ...updates.signature };
     if (updates.privateTemplates) profile.privateTemplates = updates.privateTemplates;
-    // Save to disk and update session
-    await writeProfile(session.username, profile);
+    // Firm and attorneys persist in the settings store (works on serverless); the profile file is best effort
+    try {
+        const current = await settingsStore.getSettings(session.username);
+        await settingsStore.saveSettings(session.username, { ...current, firm: profile.firm || {}, attorneys: profile.attorneys || [], updatedAt: new Date().toISOString() });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+    // Keep an existing local profile file in sync (never create one — profiles hold password hashes)
+    try { await fs.access(path.join(PROFILES_DIR, `${session.username}.json`)); await writeProfile(session.username, profile); } catch (_) {}
     session.profile = profile;
     const { passwordHash, ...safe } = profile;
     res.json(safe);

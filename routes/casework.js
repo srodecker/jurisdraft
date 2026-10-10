@@ -10,8 +10,9 @@ const PizZip = require('pizzip');
 const { PDFDocument } = require('pdf-lib');
 
 const { readMatter, writeMatter, listMatters } = require('../lib/matter-store');
-const { listDocs, listAllDocs, saveGeneratedFile, getGeneratedFile, deleteGeneratedFile, publicDoc, docStatus } = require('./documents');
+const { listDocs, listAllDocs, saveGeneratedFile, getGeneratedFile, readGeneratedFile, deleteGeneratedFile, publicDoc, docStatus } = require('./documents');
 const intel = require('../lib/case-intel');
+const { candidatesFrom, LABELS } = require('../lib/fact-merge');
 const services = require('../lib/services');
 const { applyFactOverrides, createMatterObject } = require('./matters');
 
@@ -63,11 +64,17 @@ async function loadCaseView(id) {
         stage: intel.computeStage(matter, today),
         stages: intel.STAGES,
         deadlines: intel.computeDeadlines(matter, today),
-        documents: docs.map(d => ({
-            ...publicDoc(d),
-            summary: d.analysis && d.analysis.status === 'done' ? d.analysis.summary || '' : '',
-            keyFacts: d.analysis && d.analysis.status === 'done' ? d.analysis.keyFacts || [] : []
-        }))
+        documents: docs.map(d => {
+            const done = d.analysis && d.analysis.status === 'done';
+            return {
+                ...publicDoc(d),
+                summary: done ? d.analysis.summary || '' : '',
+                keyFacts: done ? d.analysis.keyFacts || [] : [],
+                extracted: done ? candidatesFrom(d).map(c => ({ key: c.key, label: LABELS[c.key] || c.key, value: c.value, quote: c.quote })) : [],
+                filedWithCourt: !!(done && d.analysis.filedWithCourt),
+                textChars: d.textChars || 0
+            };
+        })
     };
 }
 
@@ -132,7 +139,7 @@ function updateFacts(matter, updates, by = 'user') {
         matter.updatedAt = now;
         matter.events = matter.events || [];
         matter.events.push({
-            id: crypto.randomUUID(), type: 'note', title: 'Case facts updated',
+            id: crypto.randomUUID(), type: 'status_change', title: 'Case facts updated',
             description: changed.map(c => `${c.field} → ${c.value || '(cleared)'}`).join('; '),
             date: now, addedBy: by, createdAt: now
         });
@@ -331,6 +338,60 @@ router.get('/api/forms', async (req, res) => {
     res.json(intel.FORM_CATALOG);
 });
 
+// Filing packages: the forms that go together for one step, prepared in one click
+const PACKAGES = [
+    { id: 'complaint', title: 'New filing package', stage: 'intake', purpose: 'Summons, civil case cover sheet and (LA County) addendum for a new complaint.', forms: ['SUM-100.pdf', 'CM-010.pdf', 'LASC.pdf'] },
+    { id: 'default', title: 'Request for entry of default', stage: 'default_window', purpose: 'Clerk\'s entry of default after the response time has run (CRC 3.110(g)).', forms: ['CIV-100 (R4D).pdf'] },
+    { id: 'judgment', title: 'Default judgment package', stage: 'default_entered', purpose: 'Request for court judgment, dismissal of Does, and proof of service by mail (CRC 3.110(h), 3.1800).', forms: ['CIV-100.pdf', 'CIV-110 (Dismissal).pdf', 'POS_Def_Package.docx'] },
+    { id: 'abstract', title: 'Abstract of judgment', stage: 'judgment', purpose: 'Abstract to record a judgment lien on real property.', forms: ['EJ-001.pdf'] }
+];
+
+router.get('/api/forms/packages', async (req, res) => {
+    res.json(PACKAGES.map(p => ({ ...p, forms: p.forms.map(f => intel.findForm(f)).filter(Boolean).map(f => ({ file: f.file, code: f.code, title: f.title })) })));
+});
+
+router.post('/api/cases/:id/packages', async (req, res) => {
+    try {
+        const pkg = PACKAGES.find(p => p.id === req.body.package);
+        if (!pkg) return res.status(400).json({ error: 'Unknown package' });
+        const matter = await readMatter(req.params.id);
+        const by = req.session ? req.session.username : 'user';
+        const records = [];
+        const errors = [];
+        for (const file of pkg.forms) {
+            try { records.push(await generateForm(matter, file, req.body.values || {}, req.session, by)); }
+            catch (e) { errors.push(`${file}: ${e.message}`); }
+        }
+        await writeMatter(matter.id, matter);
+        res.status(201).json({ package: pkg.id, title: pkg.title, records, errors });
+    } catch (err) {
+        res.status(err.status || 500).json({ error: err.message });
+    }
+});
+
+// One PDF of several prepared forms (Word files are skipped), for printing or e-filing review
+router.get('/api/cases/:id/forms-merged', async (req, res) => {
+    try {
+        const matter = await readMatter(req.params.id);
+        const ids = String(req.query.ids || '').split(',').filter(Boolean);
+        const recs = ids.map(id => (matter.generatedForms || []).find(f => f.id === id)).filter(r => r && /pdf/.test(r.contentType || ''));
+        if (!recs.length) return res.status(400).json({ error: 'No PDF forms to combine' });
+        const out = await PDFDocument.create();
+        for (const r of recs) {
+            const src = await PDFDocument.load(await readGeneratedFile(r.storagePath), { ignoreEncryption: true });
+            try { src.getForm().flatten(); } catch (_) {}
+            const pages = await out.copyPages(src, src.getPageIndices());
+            pages.forEach(p => out.addPage(p));
+        }
+        const name = `${matter.debtorName || 'case'} - forms ${intel.isoDate(intel.todayLA())}.pdf`.replace(/[\\/:*?"<>|]+/g, ' ');
+        res.set('Content-Type', 'application/pdf');
+        res.set('Content-Disposition', `${req.query.inline === '1' ? 'inline' : 'attachment'}; filename="${name}"`);
+        res.send(Buffer.from(await out.save()));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 router.post('/api/cases/:id/forms', async (req, res) => {
     try {
         const matter = await readMatter(req.params.id);
@@ -414,4 +475,4 @@ router.get('/api/dashboard/today', async (req, res) => {
 });
 
 module.exports = router;
-Object.assign(module.exports, { caseLabel, caseSummary, loadCaseView, resolveCase, updateFacts, addDeadline, addEvent, formVariables, generateForm, attentionItems, EDITABLE_FIELDS });
+Object.assign(module.exports, { PACKAGES, caseLabel, caseSummary, loadCaseView, resolveCase, updateFacts, addDeadline, addEvent, formVariables, generateForm, attentionItems, EDITABLE_FIELDS });

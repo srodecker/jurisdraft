@@ -31,8 +31,9 @@ if (useSupabase) {
 }
 
 const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
-const MATTERS_DIR = isServerless ? path.join('/tmp', 'matters') : path.join(__dirname, '..', 'matters');
-const DOCS_DIR = isServerless ? path.join('/tmp', 'case-documents') : path.join(__dirname, '..', 'case-documents');
+const DATA_DIR = process.env.JD_DATA_DIR || null;
+const MATTERS_DIR = DATA_DIR ? path.join(DATA_DIR, 'matters') : isServerless ? path.join('/tmp', 'matters') : path.join(__dirname, '..', 'matters');
+const DOCS_DIR = DATA_DIR ? path.join(DATA_DIR, 'case-documents') : isServerless ? path.join('/tmp', 'case-documents') : path.join(__dirname, '..', 'case-documents');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -486,6 +487,15 @@ async function getGeneratedFile(storagePath, fileName, { inline = false } = {}) 
     return { buffer: await fs.readFile(path.join(DOCS_DIR, storagePath)) };
 }
 
+async function readGeneratedFile(storagePath) {
+    if (useSupabase) {
+        const { data, error } = await supabase.storage.from(BUCKET).download(storagePath);
+        if (error) throw new Error(`Could not read generated form: ${error.message}`);
+        return Buffer.from(await data.arrayBuffer());
+    }
+    return fs.readFile(path.join(DOCS_DIR, storagePath));
+}
+
 async function deleteGeneratedFile(storagePath) {
     if (useSupabase) {
         const { error } = await supabase.storage.from(BUCKET).remove([storagePath]);
@@ -779,14 +789,28 @@ router.get('/api/matters/:id/documents/:docId/download', async (req, res) => {
         if (useSupabase) {
             const { data: exists } = await supabase.storage.from(BUCKET).exists(doc.storagePath);
             if (!exists) await relinkIfMoved(doc);
-            const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(doc.storagePath, 60, { download: doc.fileName });
+            const inline = req.query.inline === '1';
+            const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(doc.storagePath, inline ? 600 : 60, inline ? undefined : { download: doc.fileName });
             if (error) throw new Error(error.message);
-            return res.json({ url: data.signedUrl });
+            return res.json({ url: data.signedUrl, mimeType: doc.mimeType });
         }
         res.set('Content-Type', doc.mimeType || 'application/octet-stream');
         res.set('X-Content-Type-Options', 'nosniff');
-        res.attachment(doc.fileName);
+        if (req.query.inline === '1') res.set('Content-Disposition', `inline; filename="${encodeURIComponent(doc.fileName)}"`);
+        else res.attachment(doc.fileName);
         res.send(await readDocBuffer(doc));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// The text the AI read from a document (for "what the AI read" and quote highlighting)
+router.get('/api/matters/:id/documents/:docId/text', async (req, res) => {
+    try {
+        const doc = await getDoc(req.params.id, req.params.docId);
+        if (!doc) return res.status(404).json({ error: 'Document not found' });
+        const text = doc.textChars ? (await getDocTexts([doc])).get(doc.id) || '' : '';
+        res.json({ text: text.slice(0, 400000), chars: text.length, truncated: text.length > 400000 });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -855,7 +879,7 @@ router.delete('/api/matters/:id/documents/:docId', async (req, res) => {
 
 module.exports = {
     router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, buildFileParts, buildTextContext,
-    saveGeneratedFile, getGeneratedFile, deleteGeneratedFile, publicDoc, docStatus,
+    saveGeneratedFile, getGeneratedFile, readGeneratedFile, deleteGeneratedFile, publicDoc, docStatus,
     // used by lib/doc-pipeline
     getDoc, claimDoc, saveAnalysis, saveText, getDocTexts, readDocBuffer,
     ANALYSIS_PROMPT, ANALYSIS_VERSION, MISSING_FILE_MESSAGE, isSchemaError, SCHEMA_FIX_SQL
