@@ -97,13 +97,16 @@ function publicDoc(doc) {
     };
 }
 
+const SCHEMA_FIX_SQL = "ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS full_text TEXT, ADD COLUMN IF NOT EXISTS text_chars INTEGER; NOTIFY pgrst, 'reload schema';";
+const isSchemaError = msg => /needs the AI columns/.test(String(msg || ''));
+
 function friendlyDbError(error) {
     const msg = error && error.message ? error.message : String(error);
     if (/relation .*case_documents.* does not exist|Could not find the table/i.test(msg)) {
         return 'Documents table missing. Run supabase-schema.sql in the Supabase SQL Editor.';
     }
     if (/analy[sz]ed?_at|column .*analysis|gemini_file|full_text|text_chars/i.test(msg)) {
-        return 'Documents table needs the AI columns. Run in the Supabase SQL Editor: ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS full_text TEXT, ADD COLUMN IF NOT EXISTS text_chars INTEGER;';
+        return `Documents table needs the AI columns. Run in the Supabase SQL Editor: ${SCHEMA_FIX_SQL} (Supabase: ${msg})`;
     }
     return msg;
 }
@@ -789,8 +792,20 @@ router.post('/api/matters/:id/documents/:docId/analyze', async (req, res) => {
         if (doc && !/GOOGLE_API_KEY|AI columns/.test(err.message)) {
             try { await saveAnalysis(doc, { status: 'error', error: message }); } catch (_) {}
         }
+        if (isSchemaError(message)) return res.status(500).json({ error: message, code: 'SCHEMA', sql: SCHEMA_FIX_SQL });
         res.status(500).json({ error: message });
     }
+});
+
+// Is the documents table ready for AI reading? (columns exist and the API sees them)
+router.get('/api/documents/health', async (req, res) => {
+    if (!useSupabase) return res.json({ ok: true });
+    const { error } = await supabase.from(TABLE).select('id, analysis, analyzed_at, gemini_file_uri, gemini_file_expires_at, full_text, text_chars').limit(1);
+    if (!error) {
+        textColumnsMissing = false;
+        return res.json({ ok: true });
+    }
+    res.json({ ok: false, error: error.message, sql: SCHEMA_FIX_SQL });
 });
 
 // Rename

@@ -127,6 +127,9 @@
     .doc-body { padding: 0 12px 12px 50px; font-size: 12.5px; line-height: 1.6; color: var(--text-secondary); }
     .doc-icon { width: 30px; height: 30px; border-radius: 7px; background: var(--bg-tertiary); display: flex; align-items: center; justify-content: center; font-size: 9px; font-weight: 700; color: var(--text-secondary); flex-shrink: 0; }
     .progress { background: var(--bg-secondary); border: 1px solid var(--accent-primary); border-radius: 9px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; display: flex; align-items: center; gap: 10px; }
+    .schema-banner { background: var(--accent-error-light); border: 1px solid var(--accent-error); border-radius: 9px; padding: 12px 14px; margin-bottom: 12px; font-size: 12.5px; }
+    .schema-banner ol { margin: 6px 0 8px; padding-left: 20px; line-height: 1.6; }
+    .schema-banner pre { background: var(--bg-primary); border-radius: 6px; padding: 8px 10px; font-size: 11px; white-space: pre-wrap; word-break: break-all; margin: 0 0 8px; }
     .spin { width: 14px; height: 14px; border: 2px solid var(--border-primary); border-top-color: var(--accent-primary); border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -570,6 +573,7 @@ async function showCase(id, tab) {
         state.caseView = null;
         view.innerHTML = `<div class="empty">Loading case…</div>`;
         try { await loadCaseView(id); } catch (e) { view.innerHTML = `<div class="empty">Case not found. <a href="#/cases">Back to cases</a></div>`; return; }
+        if (state.caseView.documents.some(d => d.analysisStatus === 'none' || d.analysisStatus === 'error')) checkSchema();
     }
     state.tab = TABS.some(t => t[0] === tab) ? tab : 'overview';
     view.innerHTML = `<div id="caseHeader"></div><div id="caseProgress"></div><div id="tabBody"></div>`;
@@ -848,7 +852,14 @@ window.addEventListener('drop', e => {
 function setProgress(html) { state.progress = html || ''; renderProgress(); }
 function renderProgress() {
     const el = document.getElementById('caseProgress');
-    if (el) el.innerHTML = state.progress ? `<div class="progress"><div class="spin"></div><div>${state.progress}</div></div>` : '';
+    if (!el) return;
+    const p = state.schemaProblem;
+    el.innerHTML = (p ? `<div class="schema-banner"><b>Documents can't be read yet — the database needs a one-time update.</b>
+            <ol><li>Open Supabase → <b>SQL Editor</b> → New query</li><li>Paste the SQL below and click <b>Run</b></li><li>Come back and click <b>Refresh from documents</b></li></ol>
+            <pre>${esc(p.sql)}</pre>
+            <div style="display:flex;gap:8px;align-items:center"><button class="btn btn-primary btn-sm" onclick="copySchemaSql()">Copy SQL</button><button class="btn btn-secondary btn-sm" onclick="refreshFromDocuments()">I ran it — try again</button>
+            ${p.detail ? `<span class="muted" style="font-size:11px" title="${attr(p.detail)}">Details: ${esc(String(p.detail).replace(/^.*\(Supabase: /, '').replace(/\)$/, '').slice(0, 160))}</span>` : ''}</div></div>` : '')
+        + (state.progress ? `<div class="progress"><div class="spin"></div><div>${state.progress}</div></div>` : '');
 }
 
 function xhrSend(method, url, body, headers, onProgress) {
@@ -916,13 +927,22 @@ async function readAndRefresh(caseId) {
     try {
         const docs = state.caseView && state.caseId === caseId ? state.caseView.documents : (await api(`/api/cases/${caseId}`)).documents;
         const pending = docs.filter(d => d.analysisStatus === 'none' || d.analysisStatus === 'error');
+        if (pending.length && !(await checkSchema())) return;
+        const failed = [];
         for (let i = 0; i < pending.length; i++) {
             state.busy[pending[i].id] = true;
             setProgress(`Reading ${i + 1} of ${pending.length}: <b>${esc(pending[i].fileName)}</b> — scanned pages take longer`);
             if (state.tab === 'documents' && state.caseId === caseId) renderTab();
-            try { await readDocumentOnce(caseId, pending[i].id); } catch (e) { toast(`${pending[i].fileName}: ${e.message}`, true); }
+            try { await readDocumentOnce(caseId, pending[i].id); }
+            catch (e) {
+                delete state.busy[pending[i].id];
+                // Database not set up: every document would fail the same way, so stop and say so once
+                if (e.data && e.data.code === 'SCHEMA') { showSchemaBanner(e.data.error, e.data.sql); return; }
+                failed.push(pending[i].fileName);
+            }
             delete state.busy[pending[i].id];
         }
+        if (failed.length) toast(`${failed.length} of ${pending.length} document${pending.length === 1 ? '' : 's'} couldn't be read — see the Documents tab for the reason`, true);
         setProgress('Updating the case from all documents — facts, dates, deadlines and form data…');
         try {
             await api(`/api/matters/${caseId}/rebuild-from-documents`, { method: 'POST' });
@@ -937,6 +957,24 @@ async function readAndRefresh(caseId) {
         setProgress('');
         await reloadCase(caseId);
     }
+}
+// The documents table must have the AI columns before anything can be read
+const SCHEMA_SQL_FALLBACK = "ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS full_text TEXT, ADD COLUMN IF NOT EXISTS text_chars INTEGER; NOTIFY pgrst, 'reload schema';";
+async function checkSchema() {
+    try {
+        const h = await api('/api/documents/health');
+        if (h.ok) { state.schemaProblem = null; renderProgress(); return true; }
+        showSchemaBanner(h.error, h.sql);
+        return false;
+    } catch (_) { return true; }
+}
+function showSchemaBanner(detail, sql) {
+    state.schemaProblem = { detail: detail || '', sql: sql || SCHEMA_SQL_FALLBACK };
+    renderProgress();
+}
+function copySchemaSql() {
+    const sql = (state.schemaProblem && state.schemaProblem.sql) || SCHEMA_SQL_FALLBACK;
+    (navigator.clipboard ? navigator.clipboard.writeText(sql) : Promise.reject()).then(() => toast('SQL copied — paste it into the Supabase SQL Editor and click Run'), () => prompt('Copy this SQL:', sql));
 }
 function refreshFromDocuments() {
     if (!state.caseView || !state.caseView.documents.length) return toast('Upload documents first', true);

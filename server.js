@@ -548,6 +548,7 @@ app.use('/api/team', requireAuth);
 app.use('/api/dashboard', requireAuth);
 app.use('/api/matters-export', requireAuth);
 app.use(mattersRouter);
+app.use('/api/documents', requireAuth);
 app.use(require('./routes/documents').router);
 // Case manager: case overviews, deadlines, forms, Today dashboard, AI assistant
 app.use('/api/cases', requireAuth);
