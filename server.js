@@ -532,6 +532,12 @@ async function requireAuth(req, res, next) {
 const extractRouter = require('./routes/extract');
 app.use('/api', extractRouter);
 
+// Shared services used by the case manager routes (form filling, firm profile)
+const services = require('./lib/services');
+services.fillPdfTemplate = fillPdfTemplate;
+services.fillDocxTemplate = fillDocxTemplate;
+services.readProfile = readProfile;
+
 const mattersRouter = require('./routes/matters');
 // Protect all matter/workflow/notification/chat/import endpoints
 app.use('/api/matters', requireAuth);
@@ -543,6 +549,12 @@ app.use('/api/dashboard', requireAuth);
 app.use('/api/matters-export', requireAuth);
 app.use(mattersRouter);
 app.use(require('./routes/documents').router);
+// Case manager: case overviews, deadlines, forms, Today dashboard, AI assistant
+app.use('/api/cases', requireAuth);
+app.use('/api/forms', requireAuth);
+app.use('/api/assistant', requireAuth);
+app.use(require('./routes/casework'));
+app.use(require('./routes/assistant'));
 
 // ============================================================
 // AUTH ENDPOINTS — profile-based
@@ -695,8 +707,10 @@ function sanitizeQuotes(value) {
         .replace(/\u0443/g, 'y') // Cyrillic y (lowercase)
         // Replace em/en dashes with hyphens
         .replace(/[\u2013\u2014]/g, '-')
-        // Remove any remaining characters outside WinAnsi range (keep basic Latin + common symbols)
-        .replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+        // Remove any remaining characters outside WinAnsi range (keep basic Latin + common symbols).
+        // Line breaks stay: multi-line fields (name + mailing address blocks) depend on them.
+        .replace(/\r\n?/g, '\n')
+        .replace(/[^\x20-\x7E\xA0-\xFF\n]/g, '');
 }
 
 /**
@@ -1070,8 +1084,9 @@ async function processDynamicVariables(data) {
         data['[VAR_DEFENDANT_SERVICE_ADDRESS]'] = serviceAddressParts.join(' ');
     }
     
-    // Handle VAR_COURTHOUSE and VAR_COURT_INFO based on debtor ZIP code
-    if (debtorZip) {
+    // Handle VAR_COURTHOUSE and VAR_COURT_INFO based on debtor ZIP code.
+    // [USE_CASE_COURT] (set by the case manager for filed cases) keeps the court from the case documents.
+    if (debtorZip && !(data['[USE_CASE_COURT]'] && data['[COURT_STREET_ADDRESS]'])) {
         console.log('=== ENTERING ZIP LOOKUP ===');
         try {
             // Get demand amount for case type determination
@@ -1124,6 +1139,12 @@ async function processDynamicVariables(data) {
         }
     }
     
+    // Court taken from the case (no ZIP lookup): still provide the combined summons fields
+    if (!data['[VAR_COURTHOUSE]'] && data['[COURT_BRANCH_NAME]']) data['[VAR_COURTHOUSE]'] = data['[COURT_BRANCH_NAME]'];
+    if (!data['[VAR_COURT_INFO]'] && data['[COURT_STREET_ADDRESS]']) {
+        data['[VAR_COURT_INFO]'] = [data['[COURT_STREET_ADDRESS]'], data['[COURT_CITY_ZIP]']].filter(Boolean).join(', ');
+    }
+
     // --- LOGIC: COURT MAILING ADDRESS ---
     // If mailing address is missing OR matches the street address, set specific text.
     const courtStreet = (data['[COURT_STREET_ADDRESS]'] || '').toLowerCase().trim();
@@ -1829,6 +1850,36 @@ function normalizeDocxData(data) {
 }
 
 // Fill DOCX with provided JSON data
+// Fill a .docx template with variable data. Returns { buffer, filledCount, processedData }.
+async function fillDocxTemplate(templateName, jsonData, session) {
+    if (!templateName || /[\\/]|\.\./.test(templateName)) throw httpError(400, 'Invalid template name');
+    let data = { ...jsonData };
+    data = injectProfileData(data, session);
+    data = sanitizeAllValues(data);
+    data = await processDynamicVariables(data);
+
+    // Normalize keys: support both "[VAR]" and "VAR" formats
+    const normalizedData = normalizeDocxData(data);
+    const content = await fs.readFile(path.join(__dirname, 'templates', templateName));
+
+    // Strip quotes around quoted variables ("[VAR]" → [VAR]); unquoted [PROPOSED]/[X] stay untouched
+    const zip = repairDocxZip(new PizZip(content));
+    const doc = new Docxtemplater(zip, {
+        paragraphLoop: true,
+        linebreaks: true,
+        delimiters: { start: '[', end: ']' },
+        // Missing variables keep their original tag
+        nullGetter: function(part) {
+            if (part.module === 'loop') return [];
+            return '[' + part.value + ']';
+        }
+    });
+    doc.render(normalizedData);
+    const buffer = doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+    const filledCount = Object.keys(data).filter(k => data[k] && data[k] !== '').length;
+    return { buffer, filledCount, processedData: data };
+}
+
 app.post('/api/fill-docx', async (req, res) => {
     try {
         const { templateName, jsonData } = req.body;
@@ -1850,70 +1901,9 @@ app.post('/api/fill-docx', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
-        // === INSERTED LOGIC START ===
-        // 0. Inject profile attorney/firm data (logged-in user's own firm info)
-        data = injectProfileData(data, getSession(req));
-
-        // 1. Sanitize all values
-        data = sanitizeAllValues(data);
-
-        // 2. Process computed variables (e.g. VAR_ATTY_EMAIL, VAR_CITY_STATE_ZIP)
-        // This generates the combined fields needed for the template
-        data = await processDynamicVariables(data);
-        // === INSERTED LOGIC END ===
-
-        // Normalize keys: support both "[VAR]" and "VAR" formats
-        const normalizedData = normalizeDocxData(data);
-        
-        const filePath = path.join(__dirname, 'templates', templateName);
-        const content = await fs.readFile(filePath);
-        
-        // Load the docx file using PizZip
-        let zip = new PizZip(content);
-        
-        // ============================================================
-        // CRUCIAL PRE-PROCESSING STEP
-        // ============================================================
-        // Run the STRICT repair: strips quotes from quoted variables ONLY
-        // - "[VAR]" becomes [VAR] (ready for Docxtemplater)
-        // - [PROPOSED] stays [PROPOSED] (no quotes, untouched)
-        zip = repairDocxZip(zip);
-        
-        // Initialize Docxtemplater with SQUARE BRACKET delimiters
-        const doc = new Docxtemplater(zip, {
-            paragraphLoop: true,
-            linebreaks: true,
-            // Use square bracket delimiters to match [VAR_NAME] format
-            delimiters: { start: '[', end: ']' },
-            // nullGetter: Return the raw tag if variable is missing
-            // This preserves unquoted brackets like [PROPOSED] and [X]
-            // Since [PROPOSED] has no data, it will be returned as "[PROPOSED]"
-            nullGetter: function(part, scopeManager) {
-                if (!part.module) {
-                    // Return the original tag wrapped in brackets
-                    return '[' + part.value + ']';
-                }
-                if (part.module === 'loop') {
-                    return [];
-                }
-                return '[' + part.value + ']';
-            }
-        });
-        
-        // Render the document with normalized data
-        doc.render(normalizedData);
-        
-        // Generate the filled document as a buffer
-        const filledBuffer = doc.getZip().generate({
-            type: 'nodebuffer',
-            compression: 'DEFLATE'
-        });
-        
-        // Return as base64 for preview/download
+ 
+        const { buffer: filledBuffer, filledCount } = await fillDocxTemplate(templateName, data, getSession(req));
         const base64Doc = filledBuffer.toString('base64');
-        
-        // Count how many variables were actually filled
-        const filledCount = Object.keys(data).filter(k => data[k] && data[k] !== '').length;
         
         console.log(`Filled DOCX template: ${templateName} (${filledCount} variables with values)`);
         
@@ -1925,6 +1915,7 @@ app.post('/api/fill-docx', async (req, res) => {
         });
     } catch (error) {
         console.error('Error filling DOCX:', error);
+        if (error.status) return res.status(error.status).json({ error: error.message });
         
         // Handle docxtemplater-specific errors
         if (error.properties && error.properties.errors) {
@@ -1936,11 +1927,404 @@ app.post('/api/fill-docx', async (req, res) => {
     }
 });
 
+// Fill a PDF template with variable data ([VAR] keys). Used by /api/fill-pdf and by the case
+// manager (AI assistant + Forms tab). Returns the editable and flattened PDF bytes.
+function httpError(status, message) {
+    const err = new Error(message);
+    err.status = status;
+    return err;
+}
+
+async function fillPdfTemplate(templateName, jsonData, session) {
+    if (!templateName || /[\\/]|\.\./.test(templateName)) throw httpError(400, 'Invalid template name');
+    let data = { ...jsonData };
+    // ============================================================
+    // SANITIZATION BLOCK: Anti-Double-Esq
+    // ============================================================
+    // The AI sometimes puts "Esq." in the name. We MUST remove it 
+    // because our template logic adds it back manually.
+    const keysToClean = ['[ATTY_NAME]', '[ATTY_NAME2]', 'ATTY_NAME', 'ATTY_NAME2'];
+    
+    keysToClean.forEach(key => {
+        if (data[key] && typeof data[key] === 'string') {
+            // 1. Trim whitespace
+            let val = data[key].trim();
+            // 2. Remove ", Esq." or " Esq" or ", Esq" or "Esq." at the end
+            // Regex explanation:
+            // (,\s*)?   -> Optional comma and whitespace
+            // Esq       -> Literal "Esq" (case insensitive flag 'i')
+            // \.?       -> Optional dot
+            // $         -> End of string
+            val = val.replace(/(,\s*)?Esq\.?$/i, '');
+            
+            // 3. Final trim to remove any trailing comma left behind
+            data[key] = val.trim().replace(/,$/, '');
+        }
+    });
+    // ============================================================
+
+    // Inject profile attorney/firm data (logged-in user's own firm info)
+    data = injectProfileData(data, session);
+
+    // Sanitize all values (replace curly quotes / Cyrillic lookalikes with ASCII)
+    data = sanitizeAllValues(data);
+
+    // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
+    // NOTE: processDynamicVariables introduces NEW fields (court data, composed strings)
+    // that weren't present when sanitizeAllValues ran above, so sanitize again after.
+    data = await processDynamicVariables(data);
+    data = sanitizeAllValues(data);
+
+    const templatePath = path.join(__dirname, 'templates', templateName);
+
+    // Check if file exists
+    try {
+        await fs.access(templatePath);
+    } catch (error) {
+        console.error('Template access error:', error);
+        throw httpError(404, 'Template not found');
+    }
+
+    // Read the PDF template
+    const existingPdfBytes = await fs.readFile(templatePath);
+    
+    // Validate PDF file (check for PDF magic bytes)
+    if (existingPdfBytes.length < 4 || existingPdfBytes[0] !== 0x25 || existingPdfBytes[1] !== 0x50 || existingPdfBytes[2] !== 0x44 || existingPdfBytes[3] !== 0x46) {
+        throw httpError(400, 'Invalid PDF file: File does not appear to be a valid PDF');
+    }
+    
+    // Load the PDF with error handling
+    let pdfDoc;
+    try {
+        // Try loading normally first
+        pdfDoc = await PDFDocument.load(existingPdfBytes);
+    } catch (loadError) {
+        // If normal load fails, try with ignoreEncryption option
+        try {
+            console.log('Normal load failed, trying with ignoreEncryption option...');
+            pdfDoc = await PDFDocument.load(existingPdfBytes, { ignoreEncryption: true });
+        } catch (retryError) {
+            console.error('PDF load error details:', {
+                error: loadError.message,
+                retryError: retryError.message,
+                stack: loadError.stack,
+                templateName: templateName,
+                fileSize: existingPdfBytes.length,
+                firstBytes: Array.from(existingPdfBytes.slice(0, 20))
+            });
+            throw httpError(400, `Failed to load PDF: ${loadError.message}. The PDF file may be corrupted or invalid. Please verify the file is a valid PDF.`);
+        }
+    }
+    
+    // Get the form from the PDF
+    let form;
+    let fields;
+    try {
+        form = pdfDoc.getForm();
+        fields = form.getFields();
+    } catch (formError) {
+        console.error('PDF form error:', formError);
+        throw httpError(400, `Failed to access PDF form: ${formError.message}. The PDF may not contain form fields.`);
+    }
+    
+    // Field info for debugging / returned to client
+    const fieldInfo = fields.map(field => ({
+        name: field.getName(),
+        type: field.constructor ? field.constructor.name : typeof field
+    }));
+
+    // Strip "Rich Text" flag from fields to prevent pdf-lib crash on .save()
+    // Check both the field's own dictionary and each widget's dictionary
+    const { PDFName, PDFNumber } = require('pdf-lib');
+    fields.forEach(field => {
+        try {
+            // First, check the field's own acroField dictionary
+            const acroField = field.acroField;
+            if (acroField && acroField.dict) {
+                const fieldDict = acroField.dict;
+                if (fieldDict.has(PDFName.of('Ff'))) {
+                    const flags = fieldDict.get(PDFName.of('Ff')).asNumber();
+                    // Bitwise remove the 26th bit (0x2000000) - Rich Text flag
+                    fieldDict.set(PDFName.of('Ff'), PDFNumber.of(flags & ~0x2000000));
+                }
+            }
+            
+            // Also check each widget's dictionary
+            const widgets = field.getWidgets();
+            widgets.forEach(widget => {
+                const dict = widget.dict;
+                // PDF spec: Bit 26 of the Ff (Field Flags) entry is for Rich Text
+                // We want to ensure it is off so pdf-lib doesn't crash on .save()
+                if (dict.has(PDFName.of('Ff'))) {
+                    const flags = dict.get(PDFName.of('Ff')).asNumber();
+                    // Bitwise remove the 26th bit (0x2000000)
+                    dict.set(PDFName.of('Ff'), PDFNumber.of(flags & ~0x2000000));
+                }
+            });
+        } catch (e) {
+            // Skip fields that don't support this
+            console.log(`Could not strip Rich Text flag from field: ${e.message}`);
+        }
+    });
+
+    // Build a lookup map for exact and case-insensitive names
+    const fieldMap = {};
+    fields.forEach(f => {
+        const name = f.getName();
+        fieldMap[name] = f;
+        fieldMap[name.toLowerCase()] = f;
+    });
+
+    // Embed fonts before filling loop
+    const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+    // Fill the form fields with data from JSON (try flexible matching)
+    let filledCount = 0;
+    for (const [key, value] of Object.entries(data)) {
+        let field = fieldMap[key] || fieldMap[String(key).toLowerCase()];
+        if (!field) {
+            // Try partial match (suffix / contains) if exact not found
+            field = fields.find(f => {
+                const n = f.getName();
+                return n === key || n.endsWith(key) || n.toLowerCase().includes(String(key).toLowerCase());
+            });
+        }
+        if (!field) {
+            console.log(`No field matched for JSON key: '${key}'`);
+            continue;
+        }
+
+        try {
+            // Prefer calling available methods rather than relying on constructor name
+            if (typeof field.setText === 'function') {
+                field.setText(String(value));
+                
+                // Apply font based on field type
+                if (key === '[VAR_COURT_COUNTY]') {
+                    field.updateAppearances(helveticaBold);
+                } else {
+                    field.updateAppearances(helvetica);
+                }
+                
+                filledCount++;
+            } else if (typeof field.check === 'function' || typeof field.uncheck === 'function') {
+                // Treat truthy values as checked
+                const shouldCheck = value === true || value === 'true' || value === '1' || value === 1;
+                if (shouldCheck && typeof field.check === 'function') {
+                    field.check();
+                    filledCount++;
+                } else if (!shouldCheck && typeof field.uncheck === 'function') {
+                    field.uncheck();
+                }
+            } else if (typeof field.select === 'function') {
+                field.select(String(value));
+                filledCount++;
+            } else {
+                console.log(`Unsupported field methods for '${field.getName()}'`);
+            }
+        } catch (err) {
+            console.log(`Error filling field '${field.getName()}' (json key '${key}'): ${err.message}`);
+        }
+    }
+
+    // ============================================================
+    // SIGNATURE BLOCK — only runs for authenticated attorney sessions
+    // ============================================================
+    console.log('--- STARTING SIGNATURE LOGIC ---');
+
+    let signatureImage = null;
+    if (session) {
+        // 1. Check for the Image — use profile's signature file
+        const sigFile = (session.profile.signature && session.profile.signature.file) || '';
+        const signaturePath = sigFile ? path.join(__dirname, 'signatures', sigFile) : '';
+        console.log(`Checking for signature at: ${signaturePath || '(none configured)'}`);
+        try {
+            if (!sigFile) throw new Error('No signature file configured in profile');
+            await fs.access(signaturePath);
+            console.log('SUCCESS: Signature file found.');
+            const sigBytes = await fs.readFile(signaturePath);
+            signatureImage = await pdfDoc.embedJpg(sigBytes);
+            console.log('SUCCESS: Signature image embedded.');
+        } catch (e) {
+            console.error(`FAILURE: Signature file NOT found or could not be loaded. Error: ${e.message}`);
+        }
+    } else {
+        console.log('Signature skipped — unauthenticated request.');
+    }
+
+    // 2. Check for the Field
+    if (signatureImage) {
+        console.log('Looking for field: [ATTORNEY_SIGNATURE]...');
+        let sigField = null;
+        try { sigField = form.getField('[ATTORNEY_SIGNATURE]'); } catch (_) {}
+        
+        if (!sigField) {
+            console.log('...Not found with brackets. Trying without: ATTORNEY_SIGNATURE...');
+            try { sigField = form.getField('ATTORNEY_SIGNATURE'); } catch (_) {}
+        }
+
+        if (sigField) {
+            console.log('SUCCESS: Signature field found!');
+            
+            try {
+                const widgets = sigField.acroField.getWidgets();
+                const widget = widgets[0];
+                const rect = widget.getRectangle();
+                console.log(`Target Box: x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}`);
+                
+                // ============================================================
+                // 1. FAIL-PROOF PAGE LOOKUP (Dictionary Match)
+                // ============================================================
+                let pageIndex = -1;
+                const pages = pdfDoc.getPages();
+                
+                // We need the underlying dictionary of our widget to compare identity
+                const widgetDict = widget.dict;
+                
+                console.log('Starting Dictionary-Based Page Search...');
+                
+                pageLoop:
+                for (let i = 0; i < pages.length; i++) {
+                    const page = pages[i];
+                    
+                    // Get the raw 'Annots' array from the page
+                    const annots = page.node.Annots && page.node.Annots();
+                    
+                    if (annots) {
+                        const size = annots.size();
+                        for (let j = 0; j < size; j++) {
+                            // Get the raw annotation reference or object
+                            const annotRef = annots.get(j);
+                            
+                            // Lookup the actual dictionary object (dereference it)
+                            const annotDict = pdfDoc.context.lookup(annotRef);
+                            
+                            // EXACT OBJECT COMPARISON
+                            if (annotDict === widgetDict) {
+                                pageIndex = i;
+                                console.log(`MATCH FOUND: Widget belongs to Page ${i + 1} (Index ${i})`);
+                                break pageLoop;
+                            }
+                        }
+                    }
+                }
+                
+                if (pageIndex === -1) {
+                    console.error('CRITICAL FAILURE: Could not find widget on ANY page even with dictionary match. Defaulting to 0.');
+                    pageIndex = 0;
+                }
+                
+                // ============================================================
+                // 2. DRAWING LOGIC
+                // ============================================================
+                console.log(`Drawing signature on Page Index: ${pageIndex}`);
+                const page = pages[pageIndex];
+                
+                // Scale & Position
+                const { width: imgW, height: imgH } = signatureImage.scale(1);
+                
+                // 1. Make it Bigger (Target Height 65 instead of 45)
+                let targetH = rect.height;
+                if (targetH < 20) targetH = 65; // Increased size
+                
+                // Calculate scale to fit width/height
+                const scaleX = rect.width / imgW;
+                const scaleY = targetH / imgH; // Use targetH instead of rect.height for the Y scale
+                
+                // Use the smaller scale to ensure it fits, but prioritize our new target height
+                // We allow it to slightly overflow the tiny box height if needed (since it's a signature)
+                const scale = Math.min(scaleX, scaleY);
+                
+                const drawW = imgW * scale;
+                const drawH = imgH * scale;
+                
+                // 2. Move to Left (Left Align instead of Center)
+                const drawX = rect.x; // Left align
+                // const drawX = rect.x + (rect.width - drawW) / 2; // OLD: Center
+                
+                // Keep Vertical Center
+                const drawY = rect.y + (rect.height - drawH) / 2;
+                
+                page.drawImage(signatureImage, {
+                    x: drawX,
+                    y: drawY,
+                    width: drawW,
+                    height: drawH
+                });
+                console.log(`SUCCESS: Image drawn at (${drawX}, ${drawY}) size (${drawW}x${drawH})`);
+                
+                // Clear the text field so it doesn't show through
+                sigField.setText('');
+                
+            } catch (drawErr) {
+                console.error('FAILURE: Error during drawing calculation:', drawErr);
+            }
+        } else {
+            console.log('Signature field [ATTORNEY_SIGNATURE] not found in this PDF.');
+        }
+    } else {
+        console.log('Skipping stamping because image was not loaded.');
+    }
+    console.log('--- END SIGNATURE LOGIC ---');
+    // ============================================================
+
+    // Save the filled PDF (keep form fields editable - don't flatten)
+    let pdfBytes;
+    try {
+        pdfBytes = await pdfDoc.save();
+    } catch (saveError) {
+        console.error('PDF save error details:', {
+            error: saveError.message,
+            stack: saveError.stack,
+            templateName: templateName
+        });
+        
+        // Check if this is the specific corruption error
+        if (saveError.message.includes('Expected instance of PDFDict') || 
+            saveError.message.includes('but got instance of undefined')) {
+            throw httpError(400, `PDF file appears to be corrupted or has invalid internal references. The PDF needs to be repaired before it can be filled. ` +
+                       `Try opening and re-saving the PDF in Adobe Acrobat or another PDF editor, or use a PDF repair tool. ` +
+                       `Original error: ${saveError.message}`);
+        }
+        
+        throw httpError(500, `Failed to save PDF: ${saveError.message}`);
+    }
+    
+
+    // Flattened court-ready copy (form fields burned in)
+    let flattenedPdfBytes;
+    try {
+        form.flatten();
+        flattenedPdfBytes = await pdfDoc.save();
+    } catch (flattenError) {
+        console.error('PDF flatten error:', flattenError);
+        flattenedPdfBytes = pdfBytes;
+    }
+
+    // Template fields that stayed empty (data fields only, not buttons/checkboxes)
+    const emptyFields = fields
+        .filter(f => typeof f.getText === 'function')
+        .map(f => f.getName().replace(/^.*\./, ''))
+        .filter(n => /^\[[A-Z0-9_]+\]$/.test(n) && !/PRINT|SAVE|CLEAR/.test(n))
+        .filter(n => { const v = data[n]; return v === undefined || v === null || String(v).trim() === ''; });
+
+    return {
+        pdfBytes: Buffer.from(pdfBytes),
+        flattenedBytes: Buffer.from(flattenedPdfBytes),
+        filledCount,
+        totalFields: fields.length,
+        fieldInfo,
+        emptyFields: [...new Set(emptyFields)],
+        processedData: data
+    };
+}
+
 // Fill PDF with provided JSON data
 app.post('/api/fill-pdf', async (req, res) => {
     try {
         const { templateName, jsonData } = req.body;
-        
+
         if (!templateName || !jsonData) {
             return res.status(400).json({ error: 'Template name and JSON data are required' });
         }
@@ -1953,397 +2337,24 @@ app.post('/api/fill-pdf', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
-        // ============================================================
-        // SANITIZATION BLOCK: Anti-Double-Esq
-        // ============================================================
-        // The AI sometimes puts "Esq." in the name. We MUST remove it 
-        // because our template logic adds it back manually.
-        const keysToClean = ['[ATTY_NAME]', '[ATTY_NAME2]', 'ATTY_NAME', 'ATTY_NAME2'];
-        
-        keysToClean.forEach(key => {
-            if (data[key] && typeof data[key] === 'string') {
-                // 1. Trim whitespace
-                let val = data[key].trim();
-                // 2. Remove ", Esq." or " Esq" or ", Esq" or "Esq." at the end
-                // Regex explanation:
-                // (,\s*)?   -> Optional comma and whitespace
-                // Esq       -> Literal "Esq" (case insensitive flag 'i')
-                // \.?       -> Optional dot
-                // $         -> End of string
-                val = val.replace(/(,\s*)?Esq\.?$/i, '');
-                
-                // 3. Final trim to remove any trailing comma left behind
-                data[key] = val.trim().replace(/,$/, '');
-            }
-        });
-        // ============================================================
+        const result = await fillPdfTemplate(templateName, data, getSession(req));
 
-        // Inject profile attorney/firm data (logged-in user's own firm info)
-        data = injectProfileData(data, getSession(req));
-
-        // Sanitize all values (replace curly quotes / Cyrillic lookalikes with ASCII)
-        data = sanitizeAllValues(data);
-
-        // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
-        // NOTE: processDynamicVariables introduces NEW fields (court data, composed strings)
-        // that weren't present when sanitizeAllValues ran above, so sanitize again after.
-        data = await processDynamicVariables(data);
-        data = sanitizeAllValues(data);
-
-        const templatePath = path.join(__dirname, 'templates', templateName);
-
-        // Check if file exists
-        try {
-            await fs.access(templatePath);
-        } catch (error) {
-            console.error('Template access error:', error);
-            return res.status(404).json({ error: 'Template not found' });
-        }
-
-        // Read the PDF template
-        const existingPdfBytes = await fs.readFile(templatePath);
-        
-        // Validate PDF file (check for PDF magic bytes)
-        if (existingPdfBytes.length < 4 || existingPdfBytes[0] !== 0x25 || existingPdfBytes[1] !== 0x50 || existingPdfBytes[2] !== 0x44 || existingPdfBytes[3] !== 0x46) {
-            return res.status(400).json({ error: 'Invalid PDF file: File does not appear to be a valid PDF' });
-        }
-        
-        // Load the PDF with error handling
-        let pdfDoc;
-        try {
-            // Try loading normally first
-            pdfDoc = await PDFDocument.load(existingPdfBytes);
-        } catch (loadError) {
-            // If normal load fails, try with ignoreEncryption option
-            try {
-                console.log('Normal load failed, trying with ignoreEncryption option...');
-                pdfDoc = await PDFDocument.load(existingPdfBytes, { ignoreEncryption: true });
-            } catch (retryError) {
-                console.error('PDF load error details:', {
-                    error: loadError.message,
-                    retryError: retryError.message,
-                    stack: loadError.stack,
-                    templateName: templateName,
-                    fileSize: existingPdfBytes.length,
-                    firstBytes: Array.from(existingPdfBytes.slice(0, 20))
-                });
-                return res.status(400).json({ 
-                    error: `Failed to load PDF: ${loadError.message}. The PDF file may be corrupted or invalid. Please verify the file is a valid PDF.` 
-                });
-            }
-        }
-        
-        // Get the form from the PDF
-        let form;
-        let fields;
-        try {
-            form = pdfDoc.getForm();
-            fields = form.getFields();
-        } catch (formError) {
-            console.error('PDF form error:', formError);
-            return res.status(400).json({ 
-                error: `Failed to access PDF form: ${formError.message}. The PDF may not contain form fields.` 
-            });
-        }
-        
-        // Field info for debugging / returned to client
-        const fieldInfo = fields.map(field => ({
-            name: field.getName(),
-            type: field.constructor ? field.constructor.name : typeof field
-        }));
-
-        // Strip "Rich Text" flag from fields to prevent pdf-lib crash on .save()
-        // Check both the field's own dictionary and each widget's dictionary
-        const { PDFName, PDFNumber } = require('pdf-lib');
-        fields.forEach(field => {
-            try {
-                // First, check the field's own acroField dictionary
-                const acroField = field.acroField;
-                if (acroField && acroField.dict) {
-                    const fieldDict = acroField.dict;
-                    if (fieldDict.has(PDFName.of('Ff'))) {
-                        const flags = fieldDict.get(PDFName.of('Ff')).asNumber();
-                        // Bitwise remove the 26th bit (0x2000000) - Rich Text flag
-                        fieldDict.set(PDFName.of('Ff'), PDFNumber.of(flags & ~0x2000000));
-                    }
-                }
-                
-                // Also check each widget's dictionary
-                const widgets = field.getWidgets();
-                widgets.forEach(widget => {
-                    const dict = widget.dict;
-                    // PDF spec: Bit 26 of the Ff (Field Flags) entry is for Rich Text
-                    // We want to ensure it is off so pdf-lib doesn't crash on .save()
-                    if (dict.has(PDFName.of('Ff'))) {
-                        const flags = dict.get(PDFName.of('Ff')).asNumber();
-                        // Bitwise remove the 26th bit (0x2000000)
-                        dict.set(PDFName.of('Ff'), PDFNumber.of(flags & ~0x2000000));
-                    }
-                });
-            } catch (e) {
-                // Skip fields that don't support this
-                console.log(`Could not strip Rich Text flag from field: ${e.message}`);
-            }
-        });
-
-        // Build a lookup map for exact and case-insensitive names
-        const fieldMap = {};
-        fields.forEach(f => {
-            const name = f.getName();
-            fieldMap[name] = f;
-            fieldMap[name.toLowerCase()] = f;
-        });
-
-        // Embed fonts before filling loop
-        const helvetica = await pdfDoc.embedFont(StandardFonts.Helvetica);
-        const helveticaBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-        // Fill the form fields with data from JSON (try flexible matching)
-        let filledCount = 0;
-        for (const [key, value] of Object.entries(data)) {
-            let field = fieldMap[key] || fieldMap[String(key).toLowerCase()];
-            if (!field) {
-                // Try partial match (suffix / contains) if exact not found
-                field = fields.find(f => {
-                    const n = f.getName();
-                    return n === key || n.endsWith(key) || n.toLowerCase().includes(String(key).toLowerCase());
-                });
-            }
-            if (!field) {
-                console.log(`No field matched for JSON key: '${key}'`);
-                continue;
-            }
-
-            try {
-                // Prefer calling available methods rather than relying on constructor name
-                if (typeof field.setText === 'function') {
-                    field.setText(String(value));
-                    
-                    // Apply font based on field type
-                    if (key === '[VAR_COURT_COUNTY]') {
-                        field.updateAppearances(helveticaBold);
-                    } else {
-                        field.updateAppearances(helvetica);
-                    }
-                    
-                    filledCount++;
-                } else if (typeof field.check === 'function' || typeof field.uncheck === 'function') {
-                    // Treat truthy values as checked
-                    const shouldCheck = value === true || value === 'true' || value === '1' || value === 1;
-                    if (shouldCheck && typeof field.check === 'function') {
-                        field.check();
-                        filledCount++;
-                    } else if (!shouldCheck && typeof field.uncheck === 'function') {
-                        field.uncheck();
-                    }
-                } else if (typeof field.select === 'function') {
-                    field.select(String(value));
-                    filledCount++;
-                } else {
-                    console.log(`Unsupported field methods for '${field.getName()}'`);
-                }
-            } catch (err) {
-                console.log(`Error filling field '${field.getName()}' (json key '${key}'): ${err.message}`);
-            }
-        }
-
-        // ============================================================
-        // SIGNATURE BLOCK — only runs for authenticated attorney sessions
-        // ============================================================
-        console.log('--- STARTING SIGNATURE LOGIC ---');
-
-        let signatureImage = null;
-        const session = getSession(req);
-        if (session) {
-            // 1. Check for the Image — use profile's signature file
-            const sigFile = (session.profile.signature && session.profile.signature.file) || '';
-            const signaturePath = sigFile ? path.join(__dirname, 'signatures', sigFile) : '';
-            console.log(`Checking for signature at: ${signaturePath || '(none configured)'}`);
-            try {
-                if (!sigFile) throw new Error('No signature file configured in profile');
-                await fs.access(signaturePath);
-                console.log('SUCCESS: Signature file found.');
-                const sigBytes = await fs.readFile(signaturePath);
-                signatureImage = await pdfDoc.embedJpg(sigBytes);
-                console.log('SUCCESS: Signature image embedded.');
-            } catch (e) {
-                console.error(`FAILURE: Signature file NOT found or could not be loaded. Error: ${e.message}`);
-            }
-        } else {
-            console.log('Signature skipped — unauthenticated request.');
-        }
-
-        // 2. Check for the Field
-        if (signatureImage) {
-            console.log('Looking for field: [ATTORNEY_SIGNATURE]...');
-            let sigField = null;
-            try { sigField = form.getField('[ATTORNEY_SIGNATURE]'); } catch (_) {}
-            
-            if (!sigField) {
-                console.log('...Not found with brackets. Trying without: ATTORNEY_SIGNATURE...');
-                try { sigField = form.getField('ATTORNEY_SIGNATURE'); } catch (_) {}
-            }
-
-            if (sigField) {
-                console.log('SUCCESS: Signature field found!');
-                
-                try {
-                    const widgets = sigField.acroField.getWidgets();
-                    const widget = widgets[0];
-                    const rect = widget.getRectangle();
-                    console.log(`Target Box: x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}`);
-                    
-                    // ============================================================
-                    // 1. FAIL-PROOF PAGE LOOKUP (Dictionary Match)
-                    // ============================================================
-                    let pageIndex = -1;
-                    const pages = pdfDoc.getPages();
-                    
-                    // We need the underlying dictionary of our widget to compare identity
-                    const widgetDict = widget.dict;
-                    
-                    console.log('Starting Dictionary-Based Page Search...');
-                    
-                    pageLoop:
-                    for (let i = 0; i < pages.length; i++) {
-                        const page = pages[i];
-                        
-                        // Get the raw 'Annots' array from the page
-                        const annots = page.node.Annots && page.node.Annots();
-                        
-                        if (annots) {
-                            const size = annots.size();
-                            for (let j = 0; j < size; j++) {
-                                // Get the raw annotation reference or object
-                                const annotRef = annots.get(j);
-                                
-                                // Lookup the actual dictionary object (dereference it)
-                                const annotDict = pdfDoc.context.lookup(annotRef);
-                                
-                                // EXACT OBJECT COMPARISON
-                                if (annotDict === widgetDict) {
-                                    pageIndex = i;
-                                    console.log(`MATCH FOUND: Widget belongs to Page ${i + 1} (Index ${i})`);
-                                    break pageLoop;
-                                }
-                            }
-                        }
-                    }
-                    
-                    if (pageIndex === -1) {
-                        console.error('CRITICAL FAILURE: Could not find widget on ANY page even with dictionary match. Defaulting to 0.');
-                        pageIndex = 0;
-                    }
-                    
-                    // ============================================================
-                    // 2. DRAWING LOGIC
-                    // ============================================================
-                    console.log(`Drawing signature on Page Index: ${pageIndex}`);
-                    const page = pages[pageIndex];
-                    
-                    // Scale & Position
-                    const { width: imgW, height: imgH } = signatureImage.scale(1);
-                    
-                    // 1. Make it Bigger (Target Height 65 instead of 45)
-                    let targetH = rect.height;
-                    if (targetH < 20) targetH = 65; // Increased size
-                    
-                    // Calculate scale to fit width/height
-                    const scaleX = rect.width / imgW;
-                    const scaleY = targetH / imgH; // Use targetH instead of rect.height for the Y scale
-                    
-                    // Use the smaller scale to ensure it fits, but prioritize our new target height
-                    // We allow it to slightly overflow the tiny box height if needed (since it's a signature)
-                    const scale = Math.min(scaleX, scaleY);
-                    
-                    const drawW = imgW * scale;
-                    const drawH = imgH * scale;
-                    
-                    // 2. Move to Left (Left Align instead of Center)
-                    const drawX = rect.x; // Left align
-                    // const drawX = rect.x + (rect.width - drawW) / 2; // OLD: Center
-                    
-                    // Keep Vertical Center
-                    const drawY = rect.y + (rect.height - drawH) / 2;
-                    
-                    page.drawImage(signatureImage, {
-                        x: drawX,
-                        y: drawY,
-                        width: drawW,
-                        height: drawH
-                    });
-                    console.log(`SUCCESS: Image drawn at (${drawX}, ${drawY}) size (${drawW}x${drawH})`);
-                    
-                    // Clear the text field so it doesn't show through
-                    sigField.setText('');
-                    
-                } catch (drawErr) {
-                    console.error('FAILURE: Error during drawing calculation:', drawErr);
-                }
-            } else {
-                console.log('Signature field [ATTORNEY_SIGNATURE] not found in this PDF.');
-            }
-        } else {
-            console.log('Skipping stamping because image was not loaded.');
-        }
-        console.log('--- END SIGNATURE LOGIC ---');
-        // ============================================================
-
-        // Save the filled PDF (keep form fields editable - don't flatten)
-        let pdfBytes;
-        try {
-            pdfBytes = await pdfDoc.save();
-        } catch (saveError) {
-            console.error('PDF save error details:', {
-                error: saveError.message,
-                stack: saveError.stack,
-                templateName: templateName
-            });
-            
-            // Check if this is the specific corruption error
-            if (saveError.message.includes('Expected instance of PDFDict') || 
-                saveError.message.includes('but got instance of undefined')) {
-                return res.status(400).json({ 
-                    error: `PDF file appears to be corrupted or has invalid internal references. The PDF needs to be repaired before it can be filled. ` +
-                           `Try opening and re-saving the PDF in Adobe Acrobat or another PDF editor, or use a PDF repair tool. ` +
-                           `Original error: ${saveError.message}`
-                });
-            }
-            
-            return res.status(500).json({ 
-                error: `Failed to save PDF: ${saveError.message}` 
-            });
-        }
-        
-        // Store editable version in memory
-        currentFilledPDF = Buffer.from(pdfBytes);
+        // Store editable + court-ready versions in memory for /api/download
+        currentFilledPDF = result.pdfBytes;
+        currentCourtReadyPDF = result.flattenedBytes;
         currentPDFName = templateName.replace('.pdf', '_filled.pdf');
-        
-        // Create flattened court-ready version
-        let flattenedPdfBytes;
-        try {
-            form.flatten();
-            flattenedPdfBytes = await pdfDoc.save();
-            currentCourtReadyPDF = Buffer.from(flattenedPdfBytes);
-        } catch (flattenError) {
-            console.error('PDF flatten error:', flattenError);
-            // If flatten fails, just use the non-flattened version
-            currentCourtReadyPDF = Buffer.from(pdfBytes);
-        }
 
-        // Send back as base64 for preview
-        const base64PDF = currentFilledPDF.toString('base64');
-        
-        res.json({ 
-            success: true, 
-            pdfData: base64PDF,
-            filledFields: filledCount,
-            totalFields: fields.length,
-            availableFields: fieldInfo,
-            processedData: data
+        res.json({
+            success: true,
+            pdfData: result.pdfBytes.toString('base64'),
+            filledFields: result.filledCount,
+            totalFields: result.totalFields,
+            availableFields: result.fieldInfo,
+            processedData: result.processedData
         });
     } catch (error) {
         console.error('Error filling PDF:', error);
+        if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: 'Failed to fill PDF: ' + error.message });
     }
 });
