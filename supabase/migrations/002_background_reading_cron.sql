@@ -1,0 +1,12 @@
+-- OPTIONAL: read documents in the background even when nobody has the app open.
+-- Requires the pg_cron and pg_net extensions (Database → Extensions) and a CRON_SECRET
+-- environment variable set in Vercel. Replace both placeholders below before running.
+-- select cron.schedule(
+--   'jurisdraft-read-documents',
+--   '* * * * *',
+--   $$ select net.http_post(
+--        url := 'https://jurisdraft.com/api/jobs/tick',
+--        headers := '{"Content-Type": "application/json", "x-cron-secret": "REPLACE_WITH_CRON_SECRET"}'::jsonb,
+--        body := '{}'::jsonb
+--      ) $$
+-- );

@@ -68,6 +68,7 @@ const TOOLS = [{
         { name: 'add_deadline', description: 'Add a reminder / deadline to a case.', parameters: { type: 'OBJECT', properties: { case_id: { type: 'STRING' }, title: { type: 'STRING' }, date: { type: 'STRING', description: 'YYYY-MM-DD' }, notes: { type: 'STRING' } }, required: ['case_id', 'title', 'date'] } },
         { name: 'list_forms', description: 'Judicial Council forms and firm templates the system can fill, with the variables each one uses.' },
         { name: 'fill_form', description: 'Fill a form for a case from the case documents/facts (plus firm profile) and save it to the case. Returns what was filled and what is missing.', parameters: { type: 'OBJECT', properties: { case_id: { type: 'STRING' }, form: { type: 'STRING', description: 'Form file or code, e.g. "CIV-100 (R4D).pdf", "EJ-001", "SUM-100"' }, field_values: { type: 'ARRAY', description: 'Extra/override values for form variables', items: { type: 'OBJECT', properties: { variable: { type: 'STRING', description: 'e.g. [COSTS] or COSTS' }, value: { type: 'STRING' } }, required: ['variable', 'value'] } } }, required: ['case_id', 'form'] } },
+        { name: 'prepare_package', description: 'Prepare every form for one filing step at once. Packages: "complaint" (SUM-100, CM-010, LACIV 109), "default" (request for entry of default CIV-100), "judgment" (default judgment package: CIV-100 court judgment, CIV-110 dismissal of Does, proof of service by mail), "abstract" (EJ-001).', parameters: { type: 'OBJECT', properties: { case_id: { type: 'STRING' }, package: { type: 'STRING', description: 'complaint | default | judgment | abstract' }, field_values: { type: 'ARRAY', items: { type: 'OBJECT', properties: { variable: { type: 'STRING' }, value: { type: 'STRING' } }, required: ['variable', 'value'] } } }, required: ['case_id', 'package'] } },
         { name: 'cases_needing_attention', description: 'Overdue and upcoming deadlines and hearings across all cases (next 14 days).' }
     ]
 }];
@@ -204,6 +205,22 @@ async function runTool(name, args, ctx) {
             ctx.changedCases.add(m.id);
             ctx.actions.push({ type: 'form', caseId: m.id, formId: rec.id, label: `${rec.code} — ${rec.title}` });
             return { case: casework.caseLabel(m), prepared: `${rec.code} ${rec.title}`, fileName: rec.fileName, fieldsFilled: rec.filledCount, missing: rec.missing, note: 'A download button is shown to the user automatically.' };
+        }
+        case 'prepare_package': {
+            const m = await findCase(args.case_id);
+            const pkg = casework.PACKAGES.find(p => p.id === String(args.package || '').toLowerCase());
+            if (!pkg) throw new Error(`Unknown package "${args.package}". Use complaint, default, judgment or abstract.`);
+            const values = {};
+            for (const v of args.field_values || []) if (v && v.variable) values[v.variable] = v.value;
+            const prepared = [];
+            for (const file of pkg.forms) {
+                const rec = await casework.generateForm(m, file, values, ctx.session, 'assistant');
+                ctx.actions.push({ type: 'form', caseId: m.id, formId: rec.id, label: `${rec.code} — ${rec.title}` });
+                prepared.push({ form: `${rec.code} ${rec.title}`, missing: rec.missing });
+            }
+            await writeMatter(m.id, m);
+            ctx.changedCases.add(m.id);
+            return { case: casework.caseLabel(m), package: pkg.title, prepared, note: 'Buttons for each form are shown to the user automatically.' };
         }
         case 'cases_needing_attention': {
             return { today: intel.isoDate(intel.todayLA()), items: casework.attentionItems(ctx.matters).slice(0, 40) };
