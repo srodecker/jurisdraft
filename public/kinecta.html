@@ -251,7 +251,8 @@
     <div class="main">
         <div class="topbar">
             <div class="crumbs" id="crumbs"></div>
-            <div class="search">
+            <div id="queueStatus" class="hidden" style="margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary)"></div>
+            <div class="search" style="margin-left:12px">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                 <input id="caseSearch" list="caseList" placeholder="Jump to case — name or case #" onkeydown="if(event.key==='Enter')jumpToCase(this.value)" onchange="jumpToCase(this.value)" />
                 <datalist id="caseList"></datalist>
@@ -573,7 +574,9 @@ async function showCase(id, tab) {
         state.caseView = null;
         view.innerHTML = `<div class="empty">Loading case…</div>`;
         try { await loadCaseView(id); } catch (e) { view.innerHTML = `<div class="empty">Case not found. <a href="#/cases">Back to cases</a></div>`; return; }
-        if (state.caseView.documents.some(d => d.analysisStatus === 'none' || d.analysisStatus === 'error')) checkSchema();
+        if (state.caseView.documents.some(d => d.analysisStatus === 'queued' || d.analysisStatus === 'reading')) {
+            checkSchema().then(ok => { if (ok) driveQueue(id); });
+        }
     }
     state.tab = TABS.some(t => t[0] === tab) ? tab : 'overview';
     view.innerHTML = `<div id="caseHeader"></div><div id="caseProgress"></div><div id="tabBody"></div>`;
@@ -607,7 +610,7 @@ function renderCaseHeader() {
             <div class="actions">
                 <button class="btn btn-secondary" onclick="pickFiles()"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>Upload</button>
                 <button class="btn btn-secondary" onclick="openEditFacts()">Edit facts</button>
-                <button class="btn btn-secondary" id="refreshBtn" ${state.busy.refresh ? 'disabled' : ''} onclick="refreshFromDocuments()" title="Read any new documents and update the case from all documents">Refresh from documents</button>
+                <button class="btn btn-secondary" id="refreshBtn" onclick="refreshFromDocuments()" title="Rebuild the case summary and facts from every document">Re-analyze</button>
                 <a class="btn btn-primary" href="#/case/${m.id}/assistant">Ask AI</a>
             </div>
         </div>
@@ -634,9 +637,31 @@ async function reloadCase(caseId = state.caseId) {
 // ---------- Overview ----------
 function factRow(label, value, field) {
     const m = state.caseView.matter;
-    const src = field && m.fieldSources && m.fieldSources[field];
+    let src = field && m.fieldSources && m.fieldSources[field];
+    if (typeof src === 'string') src = { fileName: src };
     const edited = field && m.factOverrides && m.factOverrides[field] !== undefined;
-    return `<dt>${label}</dt><dd>${value ? esc(value) : '<span class="muted">—</span>'}${edited ? '<span class="src">edited</span>' : src ? `<span class="src" title="From ${attr(src)}">📄 ${esc(src)}</span>` : ''}</dd>`;
+    const conflict = field && (m.factConflicts || []).some(c => c.field === field);
+    const tip = src ? `From ${src.fileName}${src.quote ? ': “' + src.quote + '”' : ''}${src.count > 1 ? ` (+${src.count - 1} more)` : ''}` : '';
+    return `<dt>${label}</dt><dd>${value ? esc(value) : '<span class="muted">—</span>'}${conflict ? ' <span class="chip soon" title="Documents disagree — resolve above">check</span>' : ''}${edited ? '<span class="src">edited</span>' : src ? `<span class="src" title="${attr(tip)}">📄 ${esc(src.fileName)}</span>` : ''}</dd>`;
+}
+
+function conflictsCard(m) {
+    const list = m.factConflicts || [];
+    if (!list.length) return '';
+    return `<div class="card" style="border-color:#d97706"><h3 style="color:#d97706">Documents disagree — pick the right value</h3>
+        ${list.map(c => `<div style="margin-bottom:12px"><div style="font-weight:600;font-size:12.5px;margin-bottom:4px">${esc(c.label)}</div>
+            ${c.options.map(o => `<div class="row" style="padding:6px 4px"><div class="grow"><div class="t">${esc(c.field.startsWith('dates.') ? fmtDate(o.value) : o.value)}${o.value === c.chosen ? ' <span class="chip">in use</span>' : ''}</div>
+                <div class="d">${o.sources.map(x => `${esc(x.fileName)}${x.quote ? ` — “${esc(x.quote)}”` : ''}`).join('<br>')}</div></div>
+                <button class="btn btn-secondary btn-sm" onclick='resolveConflict(${JSON.stringify(c.field)}, ${JSON.stringify(o.value)})'>Use this</button></div>`).join('')}</div>`).join('')}
+    </div>`;
+}
+
+async function resolveConflict(field, value) {
+    try {
+        const r = await api(`/api/cases/${state.caseId}/facts`, { method: 'PATCH', json: { updates: { [field]: value } } });
+        state.caseView = { matter: r.matter, summary: r.summary, stage: r.stage, stages: r.stages, deadlines: r.deadlines, documents: r.documents };
+        renderCaseHeader(); renderTab(); toast('Saved — this value is kept from now on');
+    } catch (e) { toast(e.message, true); }
 }
 
 function renderOverview(body) {
@@ -645,16 +670,20 @@ function renderOverview(body) {
     const d = m.dates || {};
     const addr = [m.debtorAddress, m.debtorCity, [m.debtorState, m.debtorZip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
     const noDocs = !v.documents.length;
-    const unread = v.documents.filter(x => x.analysisStatus === 'none' || x.analysisStatus === 'error').length;
+    const failed = v.documents.filter(x => x.analysisStatus === 'error');
+    const reading = v.documents.filter(x => x.analysisStatus === 'queued' || x.analysisStatus === 'reading').length;
+    const money = [['Principal', m.principal, 'principal'], ['Interest', m.interestAmount, 'interestAmount'], ['Interest rate', m.interestRate, 'interestRate', true], ['Payoff balance', m.payoffBalance, 'payoffBalance'], ['Last payment', m.lastPaymentAmount ? `${fmtMoney(m.lastPaymentAmount)}${m.lastPaymentDate ? ' on ' + fmtDate(m.lastPaymentDate) : ''}` : '', 'lastPaymentAmount', true], ['Contract date', m.contractDate ? fmtDate(m.contractDate) : '', 'contractDate', true], ['Charge-off', m.chargeOffDate ? fmtDate(m.chargeOffDate) : '', 'chargeOffDate', true], ['Costs', m.costs, 'costs'], ['Attorney fees', m.attorneyFees, 'attorneyFees']].filter(r => r[1]);
     const forms = (m.generatedForms || []).slice(0, 4);
     const service = d.served ? `${fmtDate(d.served)}${m.serviceType || d.serviceType ? ' · ' + (m.serviceType || d.serviceType) : ''}` : '';
     body.innerHTML = `
         ${noDocs ? `<div class="card" style="text-align:center;padding:26px"><div style="font-size:15px;font-weight:600;margin-bottom:6px">Start by uploading this case's documents</div><div class="muted" style="margin-bottom:12px">Complaint, summons, proofs of service, court notices, emails. The AI reads each one once and fills in everything here.</div><button class="btn btn-primary" onclick="pickFiles()">Upload documents</button></div>` : ''}
-        ${unread ? `<div class="warnbox">${unread} document${unread === 1 ? '' : 's'} not read yet. <a href="javascript:refreshFromDocuments()">Read now</a></div>` : ''}
+        ${failed.length ? `<div class="warnbox">${failed.length} document${failed.length === 1 ? '' : 's'} couldn't be read (the case is built from the others): ${failed.map(x => esc(x.fileName)).join(', ')}. <a href="#/case/${m.id}/documents">See why / retry</a></div>` : ''}
+        ${m.nextStep ? `<div class="card" style="border-color:var(--accent-primary);display:flex;gap:12px;align-items:flex-start"><div style="font-size:18px">➜</div><div style="flex:1"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--accent-primary);font-weight:700;margin-bottom:3px">Next step</div><div style="font-size:13.5px;line-height:1.5">${esc(m.nextStep)}</div></div>${(v.deadlines.find(x => x.form && x.status !== 'done') || null) ? `<button class="btn btn-primary btn-sm" onclick="prepareForm('${m.id}','${attr(v.deadlines.find(x => x.form && x.status !== 'done').form)}')">Prepare ${esc(v.deadlines.find(x => x.form && x.status !== 'done').form.replace('.pdf', ''))}</button>` : ''}</div>` : ''}
+        ${conflictsCard(m)}
         <div class="grid2">
             <div>
                 <div class="card"><h3>Case summary ${m.summaryUpdatedAt || m.lastRebuiltAt ? `<span class="act muted">updated ${fmtDate(String(m.summaryUpdatedAt || m.lastRebuiltAt).slice(0, 10))}</span>` : ''}</h3>
-                    ${m.summary ? `<p class="summary">${esc(m.summary)}</p>` : `<p class="muted" style="margin:0">${noDocs ? 'No documents yet.' : 'Click “Refresh from documents” to build the summary.'}</p>`}
+                    ${m.summary ? `<p class="summary">${esc(m.summary)}</p>` : `<p class="muted" style="margin:0">${noDocs ? 'No documents yet.' : reading ? 'Reading the documents — the summary appears when they are done. Facts below fill in as each document is read.' : 'Click “Re-analyze” to build the summary.'}</p>`}
                     ${(m.keyFacts || []).length ? `<ul class="keyfacts">${m.keyFacts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
                     ${m.statusText ? `<div style="margin-top:10px;font-size:12px"><span class="muted">Status:</span> ${esc(m.statusText)}</div>` : ''}
                 </div>
@@ -671,6 +700,7 @@ function renderOverview(body) {
                         ${factRow('Judgment', m.judgmentAmount ? fmtMoney(m.judgmentAmount) : '', 'judgmentAmount')}
                     </dl>
                 </div>
+                ${money.length ? `<div class="card"><h3>Loan &amp; balance</h3><dl class="facts">${money.map(([l, val, f, raw]) => factRow(l, raw ? val : fmtMoney(val), f)).join('')}</dl></div>` : ''}
                 <div class="card"><h3>Service, default &amp; judgment <button class="btn btn-ghost btn-sm act" onclick="openEditFacts()">Edit</button></h3>
                     <dl class="facts">
                         ${factRow('Complaint filed', d.complaintFiled ? fmtDate(d.complaintFiled) : '', 'dates.complaintFiled')}
@@ -770,11 +800,11 @@ async function deleteDeadline(id) {
 
 // ---------- Documents ----------
 function docStatus(x) {
-    if (state.busy[x.id]) return '<span class="chip upcoming">Reading…</span>';
-    if (x.analysisStatus === 'done') return '<span class="chip done">Read</span>';
+    if (x.analysisStatus === 'done') return `<span class="chip done">${x.isDraft ? 'Read · draft' : 'Read'}</span>`;
+    if (x.analysisStatus === 'reading') return '<span class="chip upcoming">Reading…</span>';
     if (x.analysisStatus === 'unsupported') return `<span class="chip" title="${attr(x.analysisError || '')}">Not readable</span>`;
-    if (x.analysisStatus === 'error') return `<span class="chip overdue" title="${attr(x.analysisError || '')}">${/missing|not found/i.test(x.analysisError || '') ? 'File missing' : 'Error'}</span>`;
-    return '<span class="chip soon">Not read yet</span>';
+    if (x.analysisStatus === 'error') return `<span class="chip overdue" title="${attr(x.analysisError || '')}">${/missing|not found/i.test(x.analysisError || '') ? 'File missing' : 'Failed'}</span>`;
+    return `<span class="chip soon" title="${attr(x.analysisError ? 'Retrying: ' + x.analysisError : 'Waiting to be read')}">${x.attempts ? 'Retrying' : 'Queued'}</span>`;
 }
 function docIcon(name) { const ext = String(name).split('.').pop().toUpperCase().slice(0, 4); return `<div class="doc-icon">${esc(ext)}</div>`; }
 
@@ -793,13 +823,16 @@ function renderDocuments(body) {
                     ${docIcon(x.fileName)}
                     <div style="flex:1;min-width:0"><div class="name">${esc(x.fileName)}</div><div class="muted" style="font-size:11px">${esc(x.documentType || '')}${x.documentDate ? ' · dated ' + fmtDate(x.documentDate) : ''} · uploaded ${fmtDate(String(x.createdAt).slice(0, 10))}${x.size ? ' · ' + formatBytes(x.size) : ''}</div></div>
                     ${docStatus(x)}
+                    ${x.analysisStatus === 'error' ? `<button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();retryDoc('${x.id}')">Retry</button>` : ''}
                     <button class="btn btn-ghost btn-sm" title="Rename" onclick="event.stopPropagation();renameDoc('${x.id}')">Rename</button>
                     <button class="btn btn-ghost btn-sm" title="Remove" onclick="event.stopPropagation();removeDoc('${x.id}')">Remove</button>
                 </div>
                 <div class="doc-body hidden" id="docbody-${x.id}">
-                    ${x.summary ? `<p style="margin:0 0 8px">${esc(x.summary)}</p>` : `<p class="muted" style="margin:0 0 8px">${x.analysisStatus === 'done' ? 'No summary.' : esc(x.analysisError || 'Not read yet.')}</p>`}
+                    ${x.summary ? `<p style="margin:0 0 8px">${esc(x.summary)}</p>` : `<p class="muted" style="margin:0 0 8px">${x.analysisStatus === 'done' ? 'No summary.' : esc(x.analysisError || 'Waiting to be read.')}</p>`}
                     ${(x.keyFacts || []).length ? `<ul class="keyfacts">${x.keyFacts.map(f => `<li>${esc(f)}</li>`).join('')}</ul>` : ''}
-                    <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="downloadDoc('${x.id}')">Open original</button></div>
+                    <div style="margin-top:8px;display:flex;gap:6px"><button class="btn btn-ghost btn-sm" onclick="downloadDoc('${x.id}')">Open original</button>
+                        ${x.analysisStatus === 'done' ? `<button class="btn btn-ghost btn-sm" onclick="retryDoc('${x.id}','reextract')" title="Ask the AI to read the stored text again">Re-check facts</button>` : ''}
+                        ${x.analysisStatus === 'done' || x.analysisStatus === 'error' ? `<button class="btn btn-ghost btn-sm" onclick="retryDoc('${x.id}','reread')" title="Read the file from scratch (e.g. if the text came out wrong)">Re-read file</button>` : ''}</div>
                 </div>
             </div>`).join('')}`;
     bindDrop(document.getElementById('dropZone'));
@@ -886,15 +919,6 @@ async function uploadOne(caseId, file, onProgress) {
     await api(`/api/matters/${caseId}/documents/complete`, { json: { docId: init.docId, fileName: file.name, mimeType: file.type } });
 }
 
-// Read one document into stored text + summary (long scans finish over several requests)
-async function readDocumentOnce(caseId, docId) {
-    for (let i = 0; i < 4; i++) {
-        const d = await api(`/api/matters/${caseId}/documents/${docId}/analyze`, { method: 'POST' });
-        if (!d.continue) return d;
-    }
-    throw new Error('Reading did not finish — try Refresh again');
-}
-
 async function uploadFiles(files) {
     const caseId = state.caseId;
     const skipped = files.filter(f => !f.size || f.size > 50 * 1024 * 1024);
@@ -913,51 +937,64 @@ async function uploadFiles(files) {
         }
     } finally { state.busy.upload = false; setProgress(''); }
     if (!ok) return;
-    toast(`Uploaded ${ok} file${ok === 1 ? '' : 's'} — reading now`);
+    toast(`Uploaded ${ok} file${ok === 1 ? '' : 's'} — reading in the background`);
     await reloadCase(caseId);
-    await readAndRefresh(caseId);
+    driveQueue(caseId);
 }
 
-// Read every unread document once, then update the case from all documents
-async function readAndRefresh(caseId) {
-    if (state.busy.refresh) return;
-    state.busy.refresh = true;
-    const btn = document.getElementById('refreshBtn');
-    if (btn) btn.disabled = true;
+// ---------- Background reading ----------
+// The server reads documents in slices (POST /api/jobs/tick). This loop keeps asking while
+// work remains. Closing the page only pauses it; it resumes on the next visit.
+const queue = { running: false, caseId: null, remaining: 0, progress: {}, lastRebuild: 0 };
+
+function queueText(caseId) {
+    const p = caseId ? queue.progress[caseId] : Object.values(queue.progress).reduce((a, x) => ({ total: a.total + x.total, done: a.done + x.done, pending: a.pending + x.pending, upgrading: a.upgrading + x.upgrading }), { total: 0, done: 0, pending: 0, upgrading: 0 });
+    if (!p) return '';
+    if (p.pending) return `Reading documents — ${p.done} of ${p.total} read`;
+    if (p.upgrading) return `Re-checking documents for more detail — ${p.done - p.upgrading} of ${p.done} done`;
+    return '';
+}
+
+function renderQueue() {
+    const el = document.getElementById('queueStatus');
+    const text = queue.running || queue.remaining ? queueText(null) : '';
+    if (el) { el.innerHTML = text ? `<div class="spin"></div><span>${esc(text)}</span>` : ''; el.classList.toggle('hidden', !text); }
+    if (state.caseId) setProgress(queue.running ? esc(queueText(state.caseId)) : '');
+}
+
+async function driveQueue(caseId = null) {
+    if (caseId) queue.caseId = caseId;
+    if (queue.running) return;
+    queue.running = true;
     try {
-        const docs = state.caseView && state.caseId === caseId ? state.caseView.documents : (await api(`/api/cases/${caseId}`)).documents;
-        const pending = docs.filter(d => d.analysisStatus === 'none' || d.analysisStatus === 'error');
-        if (pending.length && !(await checkSchema())) return;
-        const failed = [];
-        for (let i = 0; i < pending.length; i++) {
-            state.busy[pending[i].id] = true;
-            setProgress(`Reading ${i + 1} of ${pending.length}: <b>${esc(pending[i].fileName)}</b> — scanned pages take longer`);
-            if (state.tab === 'documents' && state.caseId === caseId) renderTab();
-            try { await readDocumentOnce(caseId, pending[i].id); }
-            catch (e) {
-                delete state.busy[pending[i].id];
-                // Database not set up: every document would fail the same way, so stop and say so once
+        for (let i = 0; i < 500; i++) {
+            const focus = state.caseId || queue.caseId;
+            let r;
+            try {
+                r = await api('/api/jobs/tick', { json: { caseId: focus } });
+            } catch (e) {
                 if (e.data && e.data.code === 'SCHEMA') { showSchemaBanner(e.data.error, e.data.sql); return; }
-                failed.push(pending[i].fileName);
+                toast(`Background reading paused: ${e.message}`, true);
+                return;
             }
-            delete state.busy[pending[i].id];
+            queue.remaining = r.remaining;
+            queue.progress = { ...queue.progress, ...r.progress };
+            renderQueue();
+            const failed = (r.processed || []).filter(p => p.result === 'error');
+            if (failed.length) toast(`${failed.length} document${failed.length === 1 ? '' : 's'} couldn't be read — see the Documents tab (you can retry)`, 'warn');
+            const touchedOpen = state.caseId && ((r.rebuilt || []).some(x => x.id === state.caseId) || (r.processed || []).some(p => p.matterId === state.caseId));
+            if (touchedOpen) await reloadCase(state.caseId);
+            if ((r.rebuilt || []).length) loadCases();
+            if (!r.remaining) break;
+            // Nothing ready right now (only waiting for retries): wait before asking again
+            if (!(r.processed || []).length) await new Promise(res => setTimeout(res, Math.min(Math.max(r.retryInMs || 3000, 2000), 15000)));
         }
-        if (failed.length) toast(`${failed.length} of ${pending.length} document${pending.length === 1 ? '' : 's'} couldn't be read — see the Documents tab for the reason`, true);
-        setProgress('Updating the case from all documents — facts, dates, deadlines and form data…');
-        try {
-            await api(`/api/matters/${caseId}/rebuild-from-documents`, { method: 'POST' });
-            toast('Case updated from documents');
-        } catch (e) {
-            toast(e.data && e.data.pending ? `${e.data.pending.length} document(s) still need reading: ${e.message}` : e.message, true);
-        }
-    } catch (e) {
-        toast(e.message, true);
     } finally {
-        state.busy.refresh = false;
-        setProgress('');
-        await reloadCase(caseId);
+        queue.running = false;
+        renderQueue();
     }
 }
+
 // The documents table must have the AI columns before anything can be read
 const SCHEMA_SQL_FALLBACK = "ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS full_text TEXT, ADD COLUMN IF NOT EXISTS text_chars INTEGER; NOTIFY pgrst, 'reload schema';";
 async function checkSchema() {
@@ -976,9 +1013,25 @@ function copySchemaSql() {
     const sql = (state.schemaProblem && state.schemaProblem.sql) || SCHEMA_SQL_FALLBACK;
     (navigator.clipboard ? navigator.clipboard.writeText(sql) : Promise.reject()).then(() => toast('SQL copied — paste it into the Supabase SQL Editor and click Run'), () => prompt('Copy this SQL:', sql));
 }
-function refreshFromDocuments() {
+// Re-analyze: read anything pending, then rebuild the case (facts + summary) from every document
+async function refreshFromDocuments() {
     if (!state.caseView || !state.caseView.documents.length) return toast('Upload documents first', true);
-    readAndRefresh(state.caseId);
+    const caseId = state.caseId;
+    await driveQueue(caseId);
+    setProgress('Updating the case summary from all documents…');
+    try {
+        await api(`/api/matters/${caseId}/rebuild-from-documents`, { method: 'POST' });
+        toast('Case updated from documents');
+    } catch (e) { toast(e.message, true); }
+    finally { setProgress(''); await reloadCase(caseId); }
+}
+
+async function retryDoc(id, mode) {
+    try {
+        await api(`/api/matters/${state.caseId}/documents/${id}/retry`, { json: mode ? { [mode]: true } : {} });
+        await reloadCase();
+        driveQueue(state.caseId);
+    } catch (e) { toast(e.message, true); }
 }
 
 // ---------- Timeline ----------
@@ -1162,6 +1215,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (_) { return showLogin(); }
     showApp();
     route();
+    // Resume any reading left over from earlier visits
+    try { const st = await api('/api/jobs/status'); if (st.remaining) { queue.progress = st.progress; driveQueue(); } } catch (_) {}
 });
 </script>
 </body>

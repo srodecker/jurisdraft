@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const { deleteAllDocuments, listDocs, buildTextContext } = require('./documents');
+const { mergeFacts, isDraft, TEXT_FIELDS, AMOUNT_FIELDS, DATE_FIELDS: MERGE_DATE_FIELDS } = require('../lib/fact-merge');
 const { generateJson } = require('../lib/gemini');
 const { FORM_VARIABLES } = require('../lib/case-intel');
 
@@ -771,36 +772,26 @@ router.delete('/api/matters/:id/events/:eventId', async (req, res) => {
 });
 
 // ============================================================
-// REBUILD CASE FROM DOCUMENTS
-// Wipes all case data (fields, dates, status, tasks, timeline, chat) and rebuilds
-// it solely from the AI analyses of the case's uploaded documents.
+// BUILD CASE FROM DOCUMENTS
+// 1. Facts: merged from each document's own reading (lib/fact-merge) — no AI call,
+//    never blocked by documents that are unread or failed; those are listed as skipped.
+// 2. Narrative: one small AI call over the merged facts + per-document summaries writes
+//    the summary, key facts, status, next step and form data. If it fails, facts still update.
+// Manual work is kept: fact overrides (re-applied on top), reminders, prepared forms, chat, manual events.
 // ============================================================
-const REBUILD_PROMPT = `You are a senior litigation paralegal for a California collections law firm (Wright Legal Group) representing Kinecta Federal Credit Union in consumer-loan collection cases (limited civil).
-Below is the full text of every document in ONE case. Build a single, accurate case record from them. Use only facts from the documents — never guess.
+const SYNTH_PROMPT = `You are a senior litigation paralegal for a California collections law firm representing Kinecta Federal Credit Union in consumer-loan collection cases (limited civil).
+Below are (1) the case facts already merged from the documents, with the file each came from, and (2) a summary of every document in the case.
+Write the case record. Use only this information — never guess. Drafts/shells are unfiled and prove nothing happened.
 
-Conflict rules:
-- Prefer court-filed and court-issued documents over drafts, letters, emails and notes. Files named "draft" are unfiled drafts.
-- For the debtor's address prefer the most recent document (service address on a proof of service is strong evidence).
-- demandAmount = amount demanded in the complaint; judgmentAmount only if a judgment was entered.
-- Merge duplicate events/hearings. A hearing that a later document shows as continued, vacated or held must reflect that.
-- dates.served is the date service was completed on the defendant (personal) or the substituted-service delivery date; serviceType is personal or substituted.
-- dates.defaultRequested = date the request for entry of default (CIV-100) was filed; dates.defaultEntered = date the clerk entered default.
-
-Return ONE JSON object (omit unknown values):
+Return ONE JSON object:
 {
-  "summary": "3-6 sentence plain-English summary of the case and where it stands now",
-  "keyFacts": ["short factual statements a paralegal needs, each citing its file in parentheses"],
-  "fields": { "debtorName": "", "debtorAddress": "street only", "debtorCity": "", "debtorState": "", "debtorZip": "", "caseNumber": "", "courtName": "e.g. Superior Court of California, County of Kern", "courtBranch": "courthouse name", "courtAddress": "courthouse street, city, zip", "courtCounty": "", "demandAmount": "", "judgmentAmount": "", "loanType": "", "accountNumber": "", "creditorName": "", "serviceType": "personal | substituted", "servedBy": "process server / registered process server name", "serviceAddress": "where served", "defendantResponse": "e.g. No response / Answer filed" },
-  "dates": { "dvnSent": "", "responseDue": "", "complaintFiled": "", "served": "", "answerDue": "", "answerReceived": "", "defaultRequested": "", "defaultEntered": "", "judgmentEntered": "", "abstractFiled": "", "abstractRecorded": "", "writIssued": "", "closed": "" },
-  "events": [{ "type": "filing|hearing|service|correspondence|minute_order|court_order|payment|note", "title": "", "date": "YYYY-MM-DD", "description": "", "source": "file name" }],
-  "hearings": [{ "type": "", "date": "YYYY-MM-DD", "time": "", "department": "", "judge": "", "description": "", "status": "Scheduled | Continued | Vacated | Held", "source": "file name" }],
-  "statusText": "one line: the latest action/status of the case",
-  "formData": { FORM_VARIABLES_PLACEHOLDER },
-  "sources": { "fieldName": "file name the value came from" }
+  "summary": "4-7 sentence plain-English summary: the debt, the lawsuit, service, the defendant's response, and exactly where the case stands now",
+  "keyFacts": ["8-15 short facts a paralegal needs, each citing its file in parentheses"],
+  "statusText": "one line: the latest action/status",
+  "nextStep": "one or two sentences: the next thing to do in this case and by when, based on California collections procedure",
+  "formData": { FORM_VARIABLES_PLACEHOLDER }
 }
-Dates in "dates", "events" and "hearings": YYYY-MM-DD. Amounts as plain numbers.
-
-"formData" holds the values used to fill Judicial Council forms. Use these exact bracket keys and these rules:
+"formData" holds values used to fill Judicial Council forms. Use these exact bracket keys; omit unknown ones. Rules:
 FORM_RULES_PLACEHOLDER`;
 
 // The extraction rules (attorney/creditor/address logic) used by the Doc Generator, reused for formData
@@ -811,39 +802,47 @@ const FORM_RULES = (() => {
     } catch (_) { return ''; }
 })();
 
-const REBUILD_FIELDS = ['debtorName', 'debtorAddress', 'debtorCity', 'debtorState', 'debtorZip',
-    'caseNumber', 'courtName', 'courtBranch', 'courtAddress', 'courtCounty', 'demandAmount', 'judgmentAmount',
-    'loanType', 'accountNumber', 'creditorName', 'serviceType', 'servedBy', 'serviceAddress', 'defendantResponse'];
+const REBUILD_FIELDS = [...TEXT_FIELDS, ...AMOUNT_FIELDS, ...MERGE_DATE_FIELDS];
 
-// Rebuild a case from its documents. Document-derived data is replaced; manual work is kept:
-// fact overrides (re-applied on top), custom deadlines, generated forms, chat, workflow checklist, manual events.
-async function rebuildMatterFromDocuments(matterId) {
+function docIsDone(d) { return d.analysis && d.analysis.status === 'done' && d.textChars; }
+
+// Changes whenever a document is added, removed or re-read
+function docsSignature(docs) {
+    return crypto.createHash('sha1').update(docs.map(d => `${d.id}:${d.analyzedAt || ''}:${d.analysis ? d.analysis.status : ''}`).sort().join('|')).digest('hex').slice(0, 16);
+}
+
+async function synthesizeCase(matter, doneDocs) {
+    const facts = {};
+    for (const [k, src] of Object.entries(matter.fieldSources || {})) {
+        const value = k.startsWith('dates.') ? matter.dates[k.slice(6)] : matter[k];
+        if (value) facts[k] = { value, from: src.fileName };
+    }
+    const ordered = [...doneDocs].sort((a, b) => String((a.analysis.documentDate || a.createdAt)).localeCompare(String(b.analysis.documentDate || b.createdAt)));
+    const docLines = ordered.map(d => {
+        const a = d.analysis;
+        const flags = [a.documentType, a.documentDate, isDraft(d) ? 'DRAFT/UNFILED' : null].filter(Boolean).join(' · ');
+        return `=== ${d.fileName} (${flags}) ===\n${String(a.summary || '').slice(0, 1400)}${(a.keyFacts || []).length ? '\nKey facts: ' + a.keyFacts.slice(0, 10).join('; ') : ''}`;
+    });
+    const hearings = (matter.hearings || []).map(h => `${h.date} ${h.time || ''} ${h.type} (${h.status})`).join('; ');
+    const prompt = SYNTH_PROMPT
+        .replace('FORM_VARIABLES_PLACEHOLDER', FORM_VARIABLES.map(v => `"${v}": ""`).join(', '))
+        .replace('FORM_RULES_PLACEHOLDER', FORM_RULES);
+    return generateJson([{ text: `${prompt}\n\nMERGED CASE FACTS:\n${JSON.stringify(facts, null, 1)}\nHEARINGS: ${hearings || 'none'}\n\nDOCUMENTS (${ordered.length}):\n${docLines.join('\n\n')}` }], { maxOutputTokens: 16384 });
+}
+
+async function rebuildMatterFromDocuments(matterId, { synthesize = true } = {}) {
     const existing = await readMatter(matterId);
     const docs = await listDocs(existing.id);
     if (docs.length === 0) throw Object.assign(new Error('This case has no uploaded documents.'), { status: 400 });
-
-    const unanalyzed = docs.filter(d => !d.analysis || d.analysis.status === 'error');
-    if (unanalyzed.length) {
-        throw Object.assign(new Error('Some documents have not been read by AI yet.'), { status: 409, pending: unanalyzed.map(d => ({ id: d.id, fileName: d.fileName })) });
-    }
-    const usable = docs.filter(d => d.analysis.status === 'done');
-    if (usable.length === 0) throw Object.assign(new Error('None of the documents could be read by AI.'), { status: 400 });
-
-    // Full stored text of every document (summaries for any beyond the budget / not yet stored as text)
-    const ctx = await buildTextContext(usable, { maxChars: 1200000 });
-    const withoutText = usable.filter(d => !d.textChars && d.analysis && d.analysis.summary)
-        .map(d => `=== Document (summary only): ${d.fileName} ===\n${d.analysis.summary}\nKey facts: ${(d.analysis.keyFacts || []).join('; ')}`);
-    const prompt = REBUILD_PROMPT
-        .replace('FORM_VARIABLES_PLACEHOLDER', FORM_VARIABLES.map(v => `"${v}": ""`).join(', '))
-        .replace('FORM_RULES_PLACEHOLDER', FORM_RULES);
-    const synthesized = await generateJson([{ text: `${prompt}\n\nCASE DOCUMENTS:\n${[ctx.text, ...withoutText].join('\n\n')}` }], { maxOutputTokens: 32768 });
+    const done = docs.filter(docIsDone);
+    const merged = mergeFacts(done, { overrides: existing.factOverrides || {} });
 
     const now = new Date().toISOString();
     const matter = createMatterObject({});
     matter.id = existing.id;
     matter.createdAt = existing.createdAt || now;
     matter.updatedAt = now;
-    matter.statusText = '';
+    matter.statusText = existing.statusText || '';
     matter.colorCode = '';
     matter.creditorName = '';
     matter.clientMatter = '';
@@ -858,62 +857,69 @@ async function rebuildMatterFromDocuments(matterId) {
     matter.customDeadlines = existing.customDeadlines || [];
     matter.generatedForms = existing.generatedForms || [];
     matter.factOverrides = existing.factOverrides || {};
+    matter.notesLog = existing.notesLog || [];
+    matter.reportNote = existing.reportNote || '';
     matter.status = existing.status === 'closed' ? 'closed' : 'active';
+    // Narrative from the last synthesis stays until a new one succeeds
+    matter.summary = existing.summary || '';
+    matter.keyFacts = existing.keyFacts || [];
+    matter.nextStep = existing.nextStep || '';
+    matter.formData = existing.formData || {};
+    matter.summaryUpdatedAt = existing.summaryUpdatedAt || null;
 
-    const fields = synthesized.fields || {};
-    for (const f of REBUILD_FIELDS) {
-        if (fields[f] !== undefined && fields[f] !== null && String(fields[f]).trim() !== '') matter[f] = String(fields[f]).trim();
-    }
+    for (const f of REBUILD_FIELDS) if (merged.fields[f]) matter[f] = merged.fields[f];
     if (!matter.debtorName) matter.debtorName = existing.debtorName || '';
-
-    const dates = synthesized.dates || {};
-    for (const key of Object.keys(matter.dates)) {
-        if (key === 'serviceType') continue;
-        const d = normalizeDate(dates[key]);
-        if (d) matter.dates[key] = d;
-    }
+    for (const [k, v] of Object.entries(merged.dates)) if (k in matter.dates) matter.dates[k] = v;
     if (/^(personal|substituted)/i.test(matter.serviceType || '')) matter.dates.serviceType = /^sub/i.test(matter.serviceType) ? 'substituted' : 'personal';
+    matter.fieldSources = merged.sources;
+    matter.factConflicts = merged.conflicts;
 
-    if (synthesized.statusText) matter.statusText = String(synthesized.statusText);
-    matter.summary = synthesized.summary ? String(synthesized.summary) : '';
-    matter.notes = matter.summary;
-    matter.summaryUpdatedAt = now;
-    matter.keyFacts = Array.isArray(synthesized.keyFacts) ? synthesized.keyFacts.map(String) : [];
-    matter.fieldSources = synthesized.sources && typeof synthesized.sources === 'object' ? synthesized.sources : {};
-    matter.formData = {};
-    for (const [k, v] of Object.entries(synthesized.formData || {})) {
-        if (/^\[[A-Z0-9_]+\]$/.test(k) && v !== null && v !== undefined && String(v).trim() !== '' && v !== false) matter.formData[k] = v;
-    }
-
-    for (const h of Array.isArray(synthesized.hearings) ? synthesized.hearings : []) {
-        const date = normalizeDate(h.date);
-        if (!date) continue;
-        matter.hearings.push({
-            id: crypto.randomUUID(), type: h.type || 'Hearing', date, time: h.time || null,
-            department: h.department || null, judge: h.judge || null,
-            description: h.description || h.type || 'Hearing', status: h.status || 'Scheduled',
-            source: h.source ? `document: ${h.source}` : 'documents', uploadedAt: now
-        });
-    }
-
+    matter.hearings = merged.hearings.map(h => ({
+        id: crypto.randomUUID(), type: h.type, date: h.date, time: h.time, department: h.department, judge: h.judge,
+        location: h.location, description: h.type, status: h.status || 'Scheduled', source: h.sources.join(', '), uploadedAt: now
+    }));
     const validTypes = new Set(EVENT_TYPES.map(t => t.id));
-    for (const e of Array.isArray(synthesized.events) ? synthesized.events : []) {
-        const date = normalizeDate(e.date);
-        if (!date) continue;
-        matter.events.push({
-            id: crypto.randomUUID(), type: validTypes.has(e.type) ? e.type : 'note',
-            title: e.title || 'Document event', description: e.description || '', source: e.source || null,
-            date, addedBy: 'documents', createdAt: now
-        });
-    }
+    matter.events = merged.events.map(e => ({
+        id: crypto.randomUUID(), type: validTypes.has(e.type) ? e.type : 'note', title: e.title, description: e.description,
+        source: e.sources.join(', '), docId: e.docId, date: e.date, addedBy: 'documents', createdAt: now
+    }));
     // Keep events added by people or the assistant
     for (const e of existing.events || []) {
         if (!['documents', 'system', 'extraction'].includes(e.addedBy)) matter.events.push(e);
     }
 
+    matter.docsSkipped = docs.filter(d => !docIsDone(d)).map(d => ({
+        id: d.id, fileName: d.fileName,
+        status: d.analysis ? d.analysis.status : 'queued',
+        error: d.analysis ? d.analysis.error || d.analysis.lastError || null : null
+    }));
+    matter.factsSignature = docsSignature(docs);
+    matter.factsBuiltAt = now;
     applyFactOverrides(matter);
+
+    if (synthesize && done.length) {
+        try {
+            const synth = await synthesizeCase(matter, done);
+            if (synth.summary) matter.summary = String(synth.summary);
+            if (Array.isArray(synth.keyFacts)) matter.keyFacts = synth.keyFacts.map(String);
+            if (synth.statusText) matter.statusText = String(synth.statusText);
+            if (synth.nextStep) matter.nextStep = String(synth.nextStep);
+            matter.formData = {};
+            for (const [k, v] of Object.entries(synth.formData || {})) {
+                if (/^\[[A-Z0-9_]+\]$/.test(k) && v !== null && v !== undefined && String(v).trim() !== '' && v !== false) matter.formData[k] = v;
+            }
+            matter.summaryUpdatedAt = now;
+            matter.synthesisSignature = docsSignature(done);
+            matter.synthesisError = null;
+            applyFactOverrides(matter);
+        } catch (e) {
+            console.error('[Rebuild] Summary step failed (facts still updated):', e.message);
+            matter.synthesisError = e.message;
+        }
+    }
+    matter.notes = matter.summary;
     await writeMatter(matter.id, matter);
-    return { matter, documentsUsed: usable.length, skipped: docs.filter(d => d.analysis.status === 'unsupported').map(d => d.fileName) };
+    return { matter, documentsUsed: done.length, skipped: matter.docsSkipped };
 }
 
 // Manual corrections (from the case page or the assistant) win over document-derived values
@@ -927,7 +933,7 @@ function applyFactOverrides(matter) {
 
 router.post('/api/matters/:id/rebuild-from-documents', async (req, res) => {
     try {
-        const result = await rebuildMatterFromDocuments(req.params.id);
+        const result = await rebuildMatterFromDocuments(req.params.id, { synthesize: req.query.facts !== 'only' });
         res.json({ success: true, ...result });
     } catch (err) {
         console.error('[Rebuild] Failed:', err.message);
@@ -2370,6 +2376,8 @@ router.get('/api/docket/uploads', async (req, res) => {
 
 module.exports = router;
 module.exports.rebuildMatterFromDocuments = rebuildMatterFromDocuments;
+module.exports.docsSignature = docsSignature;
+module.exports.docIsDone = docIsDone;
 module.exports.applyFactOverrides = applyFactOverrides;
 module.exports.createMatterObject = createMatterObject;
 module.exports.EVENT_TYPES = EVENT_TYPES;
