@@ -194,6 +194,8 @@ async function insertDoc(doc) {
 
 async function removeDoc(doc) {
     if (useSupabase) {
+        const { data: exists } = await supabase.storage.from(BUCKET).exists(doc.storagePath);
+        if (!exists) { try { await relinkIfMoved(doc); } catch (_) {} }
         const { error: rmErr } = await supabase.storage.from(BUCKET).remove([doc.storagePath]);
         if (rmErr) console.error('[Documents] Storage remove failed:', rmErr.message);
         const { error } = await supabase.from(TABLE).delete().eq('id', doc.id);
@@ -206,7 +208,82 @@ async function removeDoc(doc) {
     await writeIndex(doc.matterId, docs);
 }
 
+// ---- Moved-file recovery ----
+// Files are stored at <matterId>/<docId>/<name>. If someone moves the folders in the Supabase
+// dashboard (e.g. into "Erick Acevedo Files/"), the <docId>/<name> part is kept, so the file can be
+// found again under any top-level folder.
+let rootFoldersCache = { at: 0, folders: null };
+async function listRootFolders() {
+    if (rootFoldersCache.folders && Date.now() - rootFoldersCache.at < 60000) return rootFoldersCache.folders;
+    const { data, error } = await supabase.storage.from(BUCKET).list('', { limit: 1000 });
+    if (error) throw new Error(error.message);
+    const folders = (data || []).filter(o => !o.id).map(o => o.name);
+    rootFoldersCache = { at: Date.now(), folders };
+    return folders;
+}
+
+async function locateMovedFile(doc) {
+    const original = String(doc.storagePath || '').split('/').pop();
+    const pick = names => names.find(n => n === original) || names.find(n => n !== '.emptyFolderPlaceholder');
+    if (useSupabase) {
+        const candidates = [doc.id, ...(await listRootFolders()).map(f => `${f}/${doc.id}`)];
+        for (const folder of candidates) {
+            const { data } = await supabase.storage.from(BUCKET).list(folder, { limit: 20 });
+            const name = pick((data || []).filter(o => o.id).map(o => o.name));
+            if (name) return `${folder}/${name}`;
+        }
+        return null;
+    }
+    let dirs = [];
+    try { dirs = await fs.readdir(DOCS_DIR); } catch (_) { return null; }
+    for (const dir of dirs) {
+        try {
+            const name = pick(await fs.readdir(path.join(DOCS_DIR, dir, doc.id)));
+            if (name) return `${dir}/${doc.id}/${name}`;
+        } catch (_) {}
+    }
+    return null;
+}
+
+async function saveStoragePath(doc, storagePath) {
+    const clearMissing = doc.analysis && doc.analysis.error === MISSING_FILE_MESSAGE;
+    if (useSupabase) {
+        const update = { storage_path: storagePath };
+        if (clearMissing) update.analysis = null;
+        const { error } = await supabase.from(TABLE).update(update).eq('id', doc.id);
+        if (error) throw new Error(friendlyDbError(error));
+    } else {
+        await updateIndex(doc.matterId, docs => {
+            const target = docs.find(d => d.id === doc.id);
+            if (target) {
+                target.storagePath = storagePath;
+                if (clearMissing) target.analysis = null;
+            }
+        });
+    }
+    doc.storagePath = storagePath;
+    if (clearMissing) doc.analysis = null;
+}
+
+// If the file isn't at its recorded path, look for it and repair the record. Returns true if fixed.
+async function relinkIfMoved(doc) {
+    const found = await locateMovedFile(doc);
+    if (!found || found === doc.storagePath) return false;
+    console.log(`[Documents] "${doc.fileName}" was moved in storage: ${doc.storagePath} → ${found}`);
+    await saveStoragePath(doc, found);
+    return true;
+}
+
 async function readDocBuffer(doc) {
+    try {
+        return await readDocBufferAt(doc);
+    } catch (e) {
+        if (e.missing && await relinkIfMoved(doc)) return readDocBufferAt(doc);
+        throw e;
+    }
+}
+
+async function readDocBufferAt(doc) {
     if (useSupabase) {
         const { data, error } = await supabase.storage.from(BUCKET).download(doc.storagePath);
         if (error) {
@@ -542,6 +619,8 @@ router.get('/api/matters/:id/documents/:docId/download', async (req, res) => {
         const doc = await getDoc(req.params.id, req.params.docId);
         if (!doc) return res.status(404).json({ error: 'Document not found' });
         if (useSupabase) {
+            const { data: exists } = await supabase.storage.from(BUCKET).exists(doc.storagePath);
+            if (!exists) await relinkIfMoved(doc);
             const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(doc.storagePath, 60, { download: doc.fileName });
             if (error) throw new Error(error.message);
             return res.json({ url: data.signedUrl });
@@ -549,7 +628,7 @@ router.get('/api/matters/:id/documents/:docId/download', async (req, res) => {
         res.set('Content-Type', doc.mimeType || 'application/octet-stream');
         res.set('X-Content-Type-Options', 'nosniff');
         res.attachment(doc.fileName);
-        res.send(await fs.readFile(path.join(DOCS_DIR, doc.storagePath)));
+        res.send(await readDocBuffer(doc));
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
