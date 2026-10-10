@@ -11,6 +11,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const { generateJson, uploadToFileApi, geminiMimeFor, geminiUploadBody } = require('../lib/gemini');
+const { extractDocumentText, UnsupportedFileError } = require('../lib/extract-text');
 
 const router = express.Router();
 
@@ -63,7 +64,8 @@ function rowToDoc(row) {
         analysis: row.analysis || null,
         analyzedAt: row.analyzed_at || null,
         geminiFileUri: row.gemini_file_uri || null,
-        geminiFileExpiresAt: row.gemini_file_expires_at || null
+        geminiFileExpiresAt: row.gemini_file_expires_at || null,
+        textChars: row.text_chars || null
     };
 }
 
@@ -82,10 +84,13 @@ function docToRow(doc) {
 
 // Client-facing shape: no storage path, analysis reduced to status + type
 function publicDoc(doc) {
-    const { storagePath, analysis, geminiFileUri, geminiFileExpiresAt, ...rest } = doc;
+    const { storagePath, analysis, geminiFileUri, geminiFileExpiresAt, fullText, ...rest } = doc;
+    let status = analysis ? analysis.status : 'none';
+    // Read before full text was stored (or summary still pending) → needs reading
+    if (status === 'done' && !doc.textChars) status = 'none';
     return {
         ...rest,
-        analysisStatus: analysis ? analysis.status : 'none',
+        analysisStatus: status,
         analysisError: analysis && analysis.status !== 'done' ? analysis.error || null : null,
         documentType: analysis && analysis.documentType ? analysis.documentType : null,
         documentDate: analysis && analysis.documentDate ? analysis.documentDate : null
@@ -97,8 +102,8 @@ function friendlyDbError(error) {
     if (/relation .*case_documents.* does not exist|Could not find the table/i.test(msg)) {
         return 'Documents table missing. Run supabase-schema.sql in the Supabase SQL Editor.';
     }
-    if (/analy[sz]ed?_at|column .*analysis|gemini_file/i.test(msg)) {
-        return 'Documents table needs the AI columns. Run: ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ;';
+    if (/analy[sz]ed?_at|column .*analysis|gemini_file|full_text|text_chars/i.test(msg)) {
+        return 'Documents table needs the AI columns. Run in the Supabase SQL Editor: ALTER TABLE case_documents ADD COLUMN IF NOT EXISTS analysis JSONB, ADD COLUMN IF NOT EXISTS analyzed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS gemini_file_uri TEXT, ADD COLUMN IF NOT EXISTS gemini_file_expires_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS full_text TEXT, ADD COLUMN IF NOT EXISTS text_chars INTEGER;';
     }
     return msg;
 }
@@ -161,11 +166,27 @@ function updateIndex(matterId, mutate) {
 }
 
 // --- Backend-agnostic data access ---
+// Every column except full_text (which can be megabytes); fetched separately with getDocTexts
+const DOC_COLUMNS = 'id, matter_id, file_name, storage_path, mime_type, size_bytes, uploaded_by, created_at, analysis, analyzed_at, gemini_file_uri, gemini_file_expires_at, text_chars';
+let textColumnsMissing = false;
+async function selectDocRows(build) {
+    if (!textColumnsMissing) {
+        const { data, error } = await build(DOC_COLUMNS);
+        if (!error) return data;
+        if (!/text_chars|gemini_file|analy/i.test(error.message)) throw new Error(friendlyDbError(error));
+        console.error('[Documents] AI columns missing — run the ALTER TABLE in supabase-schema.sql');
+        textColumnsMissing = true;
+    }
+    const { data, error } = await build('*');
+    if (error) throw new Error(friendlyDbError(error));
+    const strip = r => { if (!r) return r; const { full_text, ...rest } = r; return rest; };
+    return Array.isArray(data) ? data.map(strip) : strip(data);
+}
+
 async function listDocs(matterId) {
     if (useSupabase) {
-        const { data, error } = await supabase.from(TABLE).select('*').eq('matter_id', matterId).order('created_at', { ascending: false });
-        if (error) throw new Error(friendlyDbError(error));
-        return data.map(r => ({ ...rowToDoc(r), storagePath: r.storage_path }));
+        const rows = await selectDocRows(cols => supabase.from(TABLE).select(cols).eq('matter_id', matterId).order('created_at', { ascending: false }));
+        return rows.map(r => ({ ...rowToDoc(r), storagePath: r.storage_path }));
     }
     const docs = await readIndex(matterId);
     return docs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -174,8 +195,7 @@ async function listDocs(matterId) {
 async function getDoc(matterId, docId) {
     if (!UUID_RE.test(docId)) return null;
     if (useSupabase) {
-        const { data, error } = await supabase.from(TABLE).select('*').eq('id', docId).eq('matter_id', matterId).maybeSingle();
-        if (error) throw new Error(friendlyDbError(error));
+        const data = await selectDocRows(cols => supabase.from(TABLE).select(cols).eq('id', docId).eq('matter_id', matterId).maybeSingle());
         return data ? { ...rowToDoc(data), storagePath: data.storage_path } : null;
     }
     return (await readIndex(matterId)).find(d => d.id === docId) || null;
@@ -397,10 +417,65 @@ async function buildFileParts(docs, { force = false, labelPrefix = '' } = {}) {
     return { parts, included, skipped };
 }
 
-// File parts for one case, oldest document first
-async function getCaseFileParts(matterId, opts = {}) {
-    const docs = (await listDocs(matterId)).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-    return buildFileParts(docs, opts);
+
+// ---- Stored full text: each document is read once; chat uses the saved text ----
+async function saveText(doc, text) {
+    if (useSupabase) {
+        const { error } = await supabase.from(TABLE).update({ full_text: text, text_chars: text.length }).eq('id', doc.id);
+        if (error) throw new Error(friendlyDbError(error));
+    } else {
+        await updateIndex(doc.matterId, docs => {
+            const target = docs.find(d => d.id === doc.id);
+            if (target) { target.fullText = text; target.textChars = text.length; }
+        });
+    }
+    doc.textChars = text.length;
+}
+
+// Map(docId → full text) for documents that have stored text
+async function getDocTexts(docs) {
+    const out = new Map();
+    const withText = docs.filter(d => d.textChars);
+    if (!useSupabase) {
+        withText.forEach(d => out.set(d.id, d.fullText || ''));
+        return out;
+    }
+    for (let i = 0; i < withText.length; i += 50) {
+        const ids = withText.slice(i, i + 50).map(d => d.id);
+        const { data, error } = await supabase.from(TABLE).select('id, full_text').in('id', ids);
+        if (error) throw new Error(friendlyDbError(error));
+        (data || []).forEach(r => out.set(r.id, r.full_text || ''));
+    }
+    return out;
+}
+
+// Chat context from stored text. Returns:
+//   text        — labelled full text of every read document (oldest first), within maxChars;
+//                 documents over the budget fall back to their summary
+//   unread      — documents not read yet (the caller attaches their files instead)
+//   unsupported — file names that can't be read
+async function buildTextContext(docs, { labelPrefix = '', maxChars = 2400000 } = {}) {
+    const ordered = [...docs].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const isUnsupported = d => d.analysis && d.analysis.status === 'unsupported';
+    const texts = await getDocTexts(ordered);
+    const blocks = [];
+    const summaries = [];
+    let used = 0;
+    for (const d of ordered.filter(x => x.textChars)) {
+        const block = `=== ${labelPrefix}Document: ${d.fileName} (uploaded ${String(d.createdAt || '').slice(0, 10)}) ===\n${texts.get(d.id) || ''}`;
+        if (used + block.length <= maxChars) {
+            blocks.push(block);
+            used += block.length;
+        } else if (d.analysis && d.analysis.summary) {
+            summaries.push(`=== ${labelPrefix}Document (summary only — too long to include in full): ${d.fileName} ===\n${d.analysis.summary}`);
+        }
+    }
+    return {
+        text: [...blocks, ...summaries].join('\n\n'),
+        included: blocks.length,
+        unread: ordered.filter(d => !d.textChars && !isUnsupported(d)),
+        unsupported: ordered.filter(isUnsupported).map(d => d.fileName)
+    };
 }
 
 // All documents for a matter with their stored AI analysis (server-side use only)
@@ -417,9 +492,8 @@ async function listAllDocs() {
         byMatter.get(d.matterId).push(d);
     };
     if (useSupabase) {
-        const { data, error } = await supabase.from(TABLE).select('*').order('created_at', { ascending: true });
-        if (error) throw new Error(friendlyDbError(error));
-        data.forEach(r => add({ ...rowToDoc(r), storagePath: r.storage_path }));
+        const rows = await selectDocRows(cols => supabase.from(TABLE).select(cols).order('created_at', { ascending: true }));
+        rows.forEach(r => add({ ...rowToDoc(r), storagePath: r.storage_path }));
         return byMatter;
     }
     let dirs = [];
@@ -431,7 +505,7 @@ async function listAllDocs() {
 }
 
 const ANALYSIS_PROMPT = `You are a legal document analyst for a California debt collection law firm (client: Kinecta Federal Credit Union).
-Read the attached case document completely and return ONE JSON object describing it. Use only information actually in the document — never guess. Omit fields you cannot find.
+Read the case document below completely and return ONE JSON object describing it. Use only information actually in the document — never guess. Omit fields you cannot find.
 
 {
   "documentType": "short type, e.g. Complaint, Summons, Proof of Service, Demand Letter / DVN, Default Judgment, Minute Order, Notice of Hearing, Answer, Correspondence, Account Statement, Loan Agreement, Writ, Abstract of Judgment",
@@ -638,21 +712,39 @@ router.get('/api/matters/:id/documents/:docId/download', async (req, res) => {
 router.post('/api/matters/:id/documents/:docId/analyze', async (req, res) => {
     let doc;
     try {
+        const started = Date.now();
         doc = await getDoc(req.params.id, req.params.docId);
         if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-        // Upload the real file to Gemini (cached for chat), then read it
-        const filePart = await ensureGeminiFile(doc, { force: true });
-        let analysis;
-        if (!filePart) {
-            analysis = { status: 'unsupported', error: `File type not readable by AI (${doc.mimeType || 'unknown'})` };
-        } else {
-            const result = await generateJson([
-                { text: `${ANALYSIS_PROMPT}\n\nFile name: ${doc.fileName}` },
-                filePart
-            ]);
-            analysis = { status: 'done', ...result };
+        // Step 1 (once): turn the file into text and store it
+        let text = null;
+        let method = doc.analysis && doc.analysis.method;
+        if (!doc.textChars || req.query.reread === '1') {
+            const buffer = await readDocBuffer(doc);
+            let extracted;
+            try {
+                extracted = await extractDocumentText(buffer, doc.mimeType, doc.fileName);
+            } catch (e) {
+                if (!(e instanceof UnsupportedFileError)) throw e;
+                const analysis = { status: 'unsupported', error: e.message };
+                await saveAnalysis(doc, analysis);
+                return res.json(publicDoc({ ...doc, analysis }));
+            }
+            text = extracted.text || '(no readable text found)';
+            method = extracted.method;
+            await saveText(doc, text);
+            // Long transcriptions: finish the summary in a second request to stay within time limits
+            if (Date.now() - started > 25000) {
+                return res.json({ ...publicDoc({ ...doc, analysis: null }), continue: true });
+            }
         }
+        if (text === null) text = (await getDocTexts([doc])).get(doc.id) || '';
+
+        // Step 2: summary, key facts, dates and events from the stored text
+        const result = await generateJson([
+            { text: `${ANALYSIS_PROMPT}\n\nFile name: ${doc.fileName}\n\nDOCUMENT TEXT:\n${text.slice(0, 1500000)}` }
+        ]);
+        const analysis = { status: 'done', method, ...result };
         await saveAnalysis(doc, analysis);
         res.json(publicDoc({ ...doc, analysis }));
     } catch (err) {
@@ -700,4 +792,4 @@ router.delete('/api/matters/:id/documents/:docId', async (req, res) => {
     }
 });
 
-module.exports = { router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, getCaseFileParts, buildFileParts };
+module.exports = { router, deleteAllDocuments, listDocs, listAllDocs, listDocAnalyses, buildFileParts, buildTextContext };
