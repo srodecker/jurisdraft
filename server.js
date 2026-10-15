@@ -1960,8 +1960,13 @@ function httpError(status, message) {
     return err;
 }
 
-async function fillPdfTemplate(templateName, jsonData, session) {
+// opts.raw: values are already final, keyed by the template's exact field names (forms v2 engine) —
+//           skip the legacy clean-up, profile injection and VAR_ composition.
+// opts.templatesDir: folder to load the template from (forms v2 keeps renamed copies separately).
+// opts.boldFields: field names drawn in bold.
+async function fillPdfTemplate(templateName, jsonData, session, opts = {}) {
     if (!templateName || /[\\/]|\.\./.test(templateName)) throw httpError(400, 'Invalid template name');
+    if (opts.raw) return writePdfTemplate(templateName, sanitizeAllValues({ ...jsonData }), session, opts);
     let data = { ...jsonData };
     // ============================================================
     // SANITIZATION BLOCK: Anti-Double-Esq
@@ -1999,8 +2004,12 @@ async function fillPdfTemplate(templateName, jsonData, session) {
     // that weren't present when sanitizeAllValues ran above, so sanitize again after.
     data = await processDynamicVariables(data);
     data = sanitizeAllValues(data);
+    return writePdfTemplate(templateName, data, session, opts);
+}
 
-    const templatePath = path.join(__dirname, 'templates', templateName);
+// Load a template, fill fields by name, stamp the signature, return bytes
+async function writePdfTemplate(templateName, data, session, opts = {}) {
+    const templatePath = path.join(opts.templatesDir || path.join(__dirname, 'templates'), templateName);
 
     // Check if file exists
     try {
@@ -2108,7 +2117,7 @@ async function fillPdfTemplate(templateName, jsonData, session) {
     let filledCount = 0;
     for (const [key, value] of Object.entries(data)) {
         let field = fieldMap[key] || fieldMap[String(key).toLowerCase()];
-        if (!field) {
+        if (!field && !opts.raw) {
             // Try partial match (suffix / contains) if exact not found
             field = fields.find(f => {
                 const n = f.getName();
@@ -2126,7 +2135,7 @@ async function fillPdfTemplate(templateName, jsonData, session) {
                 field.setText(String(value));
                 
                 // Apply font based on field type
-                if (key === '[VAR_COURT_COUNTY]') {
+                if (key === '[VAR_COURT_COUNTY]' || (opts.boldFields || []).includes(key)) {
                     field.updateAppearances(helveticaBold);
                 } else {
                     field.updateAppearances(helvetica);

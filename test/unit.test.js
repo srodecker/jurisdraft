@@ -84,3 +84,33 @@ test('form data: case facts fill form variables; court address is split', () => 
     assert.strictEqual(fd['[COSTS]'], '435.00');
     assert.strictEqual(fd['[USE_CASE_COURT]'], true);
 });
+
+// ---------- forms v2 engine ----------
+const engine = require('../lib/forms/engine');
+const { buildContext } = require('../lib/forms/dictionary');
+
+test('forms v2: field names parse into fact, formats, checks, manual and preset', () => {
+    assert.deepStrictEqual(engine.parseFieldName('[COURT_COUNTY:UPPER:BOLD]'), { kind: 'fact', fact: 'COURT_COUNTY', formats: ['UPPER', 'BOLD'] });
+    assert.deepStrictEqual(engine.parseFieldName('[PLAINTIFF#p2]'), { kind: 'fact', fact: 'PLAINTIFF', formats: [] });
+    assert.deepStrictEqual(engine.parseFieldName('[CHECK:LIMITED_CIVIL]'), { kind: 'check', condition: 'LIMITED_CIVIL' });
+    assert.strictEqual(engine.parseFieldName('[MANUAL:2F_TOTAL]').kind, 'manual');
+    assert.strictEqual(engine.parseFieldName('Check Box12').kind, 'preset');
+});
+
+test('forms v2: facts, formats, form-script formats, checks and overrides resolve', () => {
+    const ctx = buildContext({
+        matter: { debtorName: 'Erick Alonso Acevedo', debtorAddress: '123 MAIN ST', debtorCity: 'BAKERSFIELD', debtorState: 'CA', debtorZip: '93301', creditorName: 'Kinecta Federal Credit Union', demandAmount: '18450.22', dates: { complaintFiled: '2025-10-28' } },
+        profile: { attorneys: [{ name: 'Gwen H. Ribar, Esq.', sbn: '188024' }] }
+    });
+    const r = (name, scriptFormat = null, overrides) => engine.resolveField({ name, scriptFormat, parsed: engine.parseFieldName(name) }, ctx, overrides);
+    assert.strictEqual(r('[DEFENDANT:ET_AL]').value, 'Erick Alonso Acevedo, et al.');
+    assert.strictEqual(r('[DEFENDANT_ADDRESS:NAME_ADDRESS]').value, 'Erick Alonso Acevedo\n123 Main St\nBakersfield, CA 93301');
+    assert.strictEqual(r('[COMPLAINT_FILED]', 'MDY').value, '10/28/2025', 'uses the field\'s own Acrobat date format');
+    assert.strictEqual(r('[DEMAND_AMOUNT]', 'MONEY').value, '18,450.22');
+    assert.strictEqual(r('[ATTORNEYS:NAME_SBN]').value, 'Gwen H. Ribar, Esq., SBN 188024', 'no doubled Esq.');
+    assert.strictEqual(r('[CHECK:LIMITED_CIVIL]').value, true);
+    assert.strictEqual(r('[COSTS]').status, 'missing');
+    assert.strictEqual(r('[COSTS]', 'MONEY', { COSTS: '435' }).value, '435.00', 'fact override, then formatted');
+    assert.strictEqual(r('[MANUAL:2F_TOTAL]', null, { '[MANUAL:2F_TOTAL]': '1,000.00' }).value, '1,000.00');
+    assert.strictEqual(r('[NOT_A_FACT]').status, 'unknown');
+});

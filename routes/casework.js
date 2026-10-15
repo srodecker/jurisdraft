@@ -14,6 +14,7 @@ const { listDocs, listAllDocs, saveGeneratedFile, getGeneratedFile, readGenerate
 const intel = require('../lib/case-intel');
 const { candidatesFrom, LABELS } = require('../lib/fact-merge');
 const services = require('../lib/services');
+const formsV2 = require('../lib/forms/engine');
 const { applyFactOverrides, createMatterObject } = require('./matters');
 
 const router = express.Router();
@@ -188,13 +189,27 @@ async function formVariables(form) {
     return vars;
 }
 
-async function generateForm(matter, formRef, values, session, by = 'user') {
+async function generateForm(matter, formRef, values, session, by = 'user', opts = {}) {
     const form = intel.findForm(formRef);
     if (!form) throw Object.assign(new Error(`Unknown form "${formRef}". Available: ${intel.FORM_CATALOG.map(f => f.code + ' ' + f.title).join('; ')}`), { status: 400 });
     if (!services.fillPdfTemplate) throw new Error('Form engine not available');
     const data = intel.buildFormData(matter, values || {});
     const isDocx = form.file.endsWith('.docx');
     let buffer, emptyFields = [], filledCount = 0, used = data;
+    // Forms v2 (standard field names + fact dictionary): used when asked for, or enabled with FORMS_ENGINE=v2,
+    // and only for templates that have been converted (templates/v2/)
+    const wantV2 = (opts.engine || process.env.FORMS_ENGINE) === 'v2';
+    if (!isDocx && wantV2 && await formsV2.hasV2Template(form.file)) {
+        const r = await formsV2.fillTemplateV2(form.file, {
+            matter, fd: intel.buildFormData(matter, {}), profile: session && session.profile, today: intel.todayLA(),
+            overrides: values || {}, session, fillPdf: services.fillPdfTemplate
+        });
+        return saveRecord(matter, form, r.pdfBytes, 'application/pdf', {
+            filledCount: r.filledCount, missing: r.missing, values: values || {}, engine: 'v2',
+            filled: Object.fromEntries(Object.entries(r.values).filter(([, v]) => typeof v === 'string')),
+            unknown: r.unknown
+        }, by);
+    }
     if (isDocx) {
         const r = await services.fillDocxTemplate(form.file, data, session);
         buffer = r.buffer;
@@ -216,15 +231,22 @@ async function generateForm(matter, formRef, values, session, by = 'user') {
         if (val === undefined || val === null || val === '' || typeof val === 'boolean' || typeof val === 'object') continue;
         filled[v] = String(val).slice(0, 300);
     }
+    return saveRecord(matter, form, buffer, isDocx ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/pdf', {
+        filledCount, missing: intel.importantMissing(emptyFields), values: values || {}, filled, engine: 'v1'
+    }, by);
+}
+
+// Store a generated form on the case and log it
+async function saveRecord(matter, form, buffer, contentType, extra, by) {
+    const isDocx = contentType.includes('word');
     const now = new Date();
     const id = crypto.randomUUID();
     const ext = isDocx ? 'docx' : 'pdf';
     const fileName = `${form.code} ${form.title.split(' (')[0].split(' — ')[0]} - ${matter.debtorName || 'case'} - ${intel.isoDate(intel.todayLA())}.${ext}`.replace(/[\\/:*?"<>|]+/g, ' ');
-    const contentType = isDocx ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/pdf';
     const storagePath = await saveGeneratedFile(matter.id, id, fileName, buffer, contentType);
     const record = {
         id, form: form.file, code: form.code, title: form.title, fileName, storagePath, contentType,
-        filledCount, missing: intel.importantMissing(emptyFields), values: values || {}, filled,
+        ...extra,
         createdBy: by, createdAt: now.toISOString()
     };
     matter.generatedForms = matter.generatedForms || [];
@@ -395,7 +417,7 @@ router.get('/api/cases/:id/forms-merged', async (req, res) => {
 router.post('/api/cases/:id/forms', async (req, res) => {
     try {
         const matter = await readMatter(req.params.id);
-        const record = await generateForm(matter, req.body.form, req.body.values, req.session, req.session ? req.session.username : 'user');
+        const record = await generateForm(matter, req.body.form, req.body.values, req.session, req.session ? req.session.username : 'user', { engine: req.body.engine });
         await writeMatter(matter.id, matter);
         res.status(201).json(record);
     } catch (err) {
