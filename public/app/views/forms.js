@@ -33,7 +33,7 @@ export async function renderCaseForms(body) {
     body.innerHTML = `
         <div class="card"><div class="card-h">${icon('file')} Prepared for this case</div>
             ${gen.length ? gen.map(f => `<div class="row link" data-act="show-form" data-case="${m.id}" data-form="${f.id}">
-                <div class="grow"><div class="t">${esc(f.code)} — ${esc(f.title)}</div><div class="d">${esc(fmtDate(String(f.createdAt).slice(0, 10)))} · ${esc(f.createdBy || '')} · ${f.filledCount || 0} fields${f.missing && f.missing.length ? ` · <span style="color:var(--amber)">${f.missing.length} key field${f.missing.length === 1 ? '' : 's'} blank</span>` : ' · key fields filled'}</div></div>
+                <div class="grow"><div class="t">${esc(f.code)} — ${esc(f.title)}${f.engine === 'v2' ? ' <span class="muted small">· v2</span>' : ''}</div><div class="d">${esc(fmtDate(String(f.createdAt).slice(0, 10)))} · ${esc(f.createdBy || '')} · ${f.filledCount || 0} fields${f.missing && f.missing.length ? ` · <span style="color:var(--amber)">${f.missing.length} key field${f.missing.length === 1 ? '' : 's'} blank</span>` : ' · key fields filled'}</div></div>
                 <button class="btn ghost sm" data-act="form-open" data-stop data-case="${m.id}" data-form="${f.id}">${icon('eye')}Open</button></div>`).join('')
             : '<div class="empty">Nothing prepared yet.</div>'}
         </div>

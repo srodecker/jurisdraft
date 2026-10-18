@@ -21,7 +21,9 @@ const INTENDED = {
     '[VAR_ATTY_NAME2]': 'Fixed: same "Esq., Esq." doubling',
     '[VAR_ATTY2_NAME]': 'Fixed: "Esq." from Settings leaked into "Name, SBN: #" (documents never include it)',
     '[PLAINTIFF_NAME_P2]': 'Fixed: original left the page-2 caption plaintiff blank',
-    '[AGAINST_DEFENDANT_NAME]': 'Changed: item 1d (court judgment) stays blank on a request for entry of default — it was filled with the defendant name'
+    '[AGAINST_DEFENDANT_NAME]': 'Fixed: item 1d (court judgment) stays blank on a request for entry of default — it was filled with the defendant name',
+    '[COSTS]': 'Fixed: item 2 (judgment amounts) stays blank on a request for entry of default — costs were filled in 2d',
+    '[VAR_ATTY2_NAME]': 'Fixed: item 7 (memorandum of costs) stays blank on a request for entry of default — the declarant name was filled'
 };
 
 let server, mock, base, token;
@@ -89,7 +91,7 @@ test('CIV-100 (R4D): new engine fills every box the same as the original', async
 
     const rows = [];
     const diffs = [];
-    for (const [oldName, newName] of Object.entries(MAP)) {
+    for (const [oldName, newName] of Object.entries({ ...MAP, ...MAP._unnamed })) {
         if (oldName.startsWith('_')) continue;
         const was = a[oldName] ?? '(no field)';
         const now = b[newName] ?? '(no field)';
@@ -106,4 +108,13 @@ test('CIV-100 (R4D): new engine fills every box the same as the original', async
     }
     assert.deepStrictEqual(diffs, [], 'fields differ:\n' + diffs.join('\n'));
     assert.ok(rows.filter(r => r.was && r.was !== '☐').length > 15, 'the comparison actually covered filled fields');
+
+    // Request for ENTRY OF DEFAULT rules: items 1d, 2 and 7 empty; 1c and 8a checked
+    const blank = Object.entries(b).filter(([n, v]) => /^\[MANUAL:(1D|2[A-G]|7)/.test(n) && v && v !== '☐');
+    assert.deepStrictEqual(blank, [], 'items 1d, 2 and 7 are empty');
+    assert.strictEqual(b['[MANUAL:7_DECLARATION_DATE]'], '', 'item 7 date is empty');
+    assert.strictEqual(b['[PRESET:1C_ENTER_DEFAULT]'], '☑');
+    assert.strictEqual(b['[PRESET:8A_SCRA_SEARCH]'], '☑');
+    assert.strictEqual(b['[TODAY]'], a['[DATE_SIGNED]'], 'other dates still filled');
+    assert.ok(b['[DEFENDANT:INDIVIDUAL]'] && b['[DEFENDANT_ADDRESS:NAME_ADDRESS]'], 'item 1c and item 6 filled');
 });

@@ -189,6 +189,16 @@ async function formVariables(form) {
     return vars;
 }
 
+// Which engine fills a form: an explicit request wins, then FORMS_ENGINE for every form,
+// then FORMS_V2_ON (comma-separated template files). Preview deployments default to the R4D on v2.
+const V2_PREVIEW_DEFAULT = 'CIV-100 (R4D).pdf';
+function useV2(file, requested) {
+    if (requested) return requested === 'v2';
+    if (process.env.FORMS_ENGINE) return process.env.FORMS_ENGINE === 'v2';
+    const on = process.env.FORMS_V2_ON !== undefined ? process.env.FORMS_V2_ON : process.env.VERCEL_ENV === 'preview' ? V2_PREVIEW_DEFAULT : '';
+    return on.split(',').map(s => s.trim()).includes(file);
+}
+
 async function generateForm(matter, formRef, values, session, by = 'user', opts = {}) {
     const form = intel.findForm(formRef);
     if (!form) throw Object.assign(new Error(`Unknown form "${formRef}". Available: ${intel.FORM_CATALOG.map(f => f.code + ' ' + f.title).join('; ')}`), { status: 400 });
@@ -196,10 +206,8 @@ async function generateForm(matter, formRef, values, session, by = 'user', opts 
     const data = intel.buildFormData(matter, values || {});
     const isDocx = form.file.endsWith('.docx');
     let buffer, emptyFields = [], filledCount = 0, used = data;
-    // Forms v2 (standard field names + fact dictionary): used when asked for, or enabled with FORMS_ENGINE=v2,
-    // and only for templates that have been converted (templates/v2/)
-    const wantV2 = (opts.engine || process.env.FORMS_ENGINE) === 'v2';
-    if (!isDocx && wantV2 && await formsV2.hasV2Template(form.file)) {
+    // Forms v2 (standard field names + fact dictionary), only for templates that have been converted (templates/v2/)
+    if (!isDocx && useV2(form.file, opts.engine) && await formsV2.hasV2Template(form.file)) {
         const r = await formsV2.fillTemplateV2(form.file, {
             matter, fd: intel.buildFormData(matter, {}), profile: session && session.profile, today: intel.todayLA(),
             overrides: values || {}, session, fillPdf: services.fillPdfTemplate

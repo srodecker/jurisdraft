@@ -1,6 +1,6 @@
 # CIV-100 (R4D).pdf: original engine vs forms v2
 
-71 of 76 fields identical.
+96 of 102 fields identical.
 
 | Old field | New field | Original output | New output | |
 |---|---|---|---|---|
@@ -29,9 +29,9 @@
 | `[IS_COURT_JUDGMENT]` | `[PRESET:REQUEST_COURT_JUDGMENT]` | ☐ | ☐ | ✓ |
 | `[COMPLAINT_FILED]` | `[COMPLAINT_FILED:LONG]` | October 28, 2025 | October 28, 2025 | ✓ |
 | `[VAR_DEFENDANT_INDIVIDUAL]` | `[DEFENDANT:INDIVIDUAL]` | Erick Alonso Acevedo, an individual | Erick Alonso Acevedo, an individual | ✓ |
-| `[AGAINST_DEFENDANT_NAME]` | `[MANUAL:1D_COURT_JUDGMENT_AGAINST]` | Erick Alonso Acevedo | · | **Changed: item 1d (court judgment) stays blank on a request for entry of default — it was filled with the defendant name** |
+| `[AGAINST_DEFENDANT_NAME]` | `[MANUAL:1D_COURT_JUDGMENT_AGAINST]` | Erick Alonso Acevedo | · | **Fixed: item 1d (court judgment) stays blank on a request for entry of default — it was filled with the defendant name** |
 | `[DATE1]` | `[MANUAL:1E3_DEFAULT_PREVIOUSLY_ENTERED_ON]` | · | · | ✓ |
-| `[JUDGMENT_TOTAL_AMOUNT]` | `[JUDGMENT_AMOUNT]` | · | · | ✓ |
+| `[JUDGMENT_TOTAL_AMOUNT]` | `[MANUAL:2A_DEMAND_AMOUNT]` | · | · | ✓ |
 | `[CREDIT_1]` | `[MANUAL:2A_DEMAND_CREDITS]` | · | · | ✓ |
 | `[VAR_JUDGMENT_TOTAL_AMOUNT]` | `[MANUAL:2A_DEMAND_BALANCE]` | · | · | ✓ |
 | `[AMUONT_2]` | `[MANUAL:2B1_SPECIAL_DAMAGES]` | · | · | ✓ |
@@ -43,10 +43,10 @@
 | `[AMOUNT_4]` | `[MANUAL:2C_INTEREST]` | · | · | ✓ |
 | `[CREDIT_4]` | `[MANUAL:2C_INTEREST_CREDITS]` | · | · | ✓ |
 | `[BALANCE_4]` | `[MANUAL:2C_INTEREST_BALANCE]` | · | · | ✓ |
-| `[COSTS]` | `[COSTS]` | 435.00 | 435.00 | ✓ |
+| `[COSTS]` | `[MANUAL:2D_COSTS]` | 435.00 | · | **Fixed: item 2 (judgment amounts) stays blank on a request for entry of default — costs were filled in 2d** |
 | `[CREDIT_5]` | `[MANUAL:2D_COSTS_CREDITS]` | · | · | ✓ |
 | `[VAR_COSTS]` | `[MANUAL:2D_COSTS_BALANCE]` | · | · | ✓ |
-| `[ATTY_FEES]` | `[ATTORNEY_FEES]` | · | · | ✓ |
+| `[ATTY_FEES]` | `[MANUAL:2E_ATTORNEY_FEES]` | · | · | ✓ |
 | `[CREDIT_6]` | `[MANUAL:2E_FEES_CREDITS]` | · | · | ✓ |
 | `[VAR_ATTY_FEES]` | `[MANUAL:2E_FEES_BALANCE]` | · | · | ✓ |
 | `[TOTAL_AMOUNT]` | `[MANUAL:2F_TOTAL]` | · | · | ✓ |
@@ -54,7 +54,7 @@
 | `[VAR_TOTAL_AMOUNT]` | `[MANUAL:2F_TOTAL_BALANCE]` | · | · | ✓ |
 | `[DAILY_DAMAGE]` | `[MANUAL:2G_DAILY_DAMAGES_RATE]` | · | · | ✓ |
 | `[DATE]` | `[MANUAL:2G_DAILY_DAMAGES_FROM]` | · | · | ✓ |
-| `[DATE_SIGNED]` | `[TODAY]` | October 14, 2026 | October 14, 2026 | ✓ |
+| `[DATE_SIGNED]` | `[TODAY]` | October 17, 2026 | October 17, 2026 | ✓ |
 | `[VAR_ATTY_NAME2]` | `[ATTORNEY_2:ESQ]` | Sabaa Ghomashchi, Esq., Esq. | Sabaa Ghomashchi, Esq. | **Fixed: same "Esq., Esq." doubling** |
 | `[DID_NOT]` | `[PRESET:4_LDA_DID_NOT]` | ☐ | ☐ | ✓ |
 | `[ASSISTANT_NAME]` | `[MANUAL:4A_ASSISTANT_NAME]` | · | · | ✓ |
@@ -76,7 +76,33 @@
 | `[OTHER2]` | `[MANUAL:7D_OTHER_COST_DESCRIPTION]` | · | · | ✓ |
 | `[FEES4]` | `[MANUAL:7D_OTHER_COST_AMOUNT]` | · | · | ✓ |
 | `[FEES5]` | `[MANUAL:7E_COSTS_TOTAL]` | · | · | ✓ |
-| `[VAR_ATTY2_NAME]` | `[ATTORNEY_2:NAME_SBN_COLON]` | Sabaa Ghomashchi, Esq., SBN: 352285 | Sabaa Ghomashchi, SBN: 352285 | **Fixed: "Esq." from Settings leaked into "Name, SBN: #" (documents never include it)** |
+| `[VAR_ATTY2_NAME]` | `[MANUAL:7_DECLARANT_NAME]` | Sabaa Ghomashchi, Esq., SBN: 352285 | · | **Fixed: item 7 (memorandum of costs) stays blank on a request for entry of default — the declarant name was filled** |
 | `[DATE9]` | `[MANUAL:8D_DISCHARGED_FROM_MILITARY_ON]` | · | · | ✓ |
 | `[SPECIFY]` | `[MANUAL:8F_OTHER_MILITARY_STATUS]` | · | · | ✓ |
 | `[PRINT_NAME_1]` | `[MANUAL:8_DECLARANT_NAME]` | · | · | ✓ |
+| `Check Box10` | `[PRESET:CAPTION_CLERKS_JUDGMENT]` | ☐ | ☐ | ✓ |
+| `Check Box11` | `[PRESET:1C_ENTER_DEFAULT]` | ☑ | ☑ | ✓ |
+| `Check Box12` | `[PRESET:1D_COURT_JUDGMENT]` | ☐ | ☐ | ✓ |
+| `Check Box13` | `[PRESET:1E_CLERKS_JUDGMENT]` | ☐ | ☐ | ✓ |
+| `Check Box14` | `[PRESET:1E1_RESTITUTION]` | ☐ | ☐ | ✓ |
+| `Check Box15` | `[PRESET:1E1_INCLUDE_OCCUPANTS]` | ☐ | ☐ | ✓ |
+| `Check Box16` | `[PRESET:1E2_CCP_585A]` | ☐ | ☐ | ✓ |
+| `Check Box17` | `[PRESET:1E3_DEFAULT_PREVIOUSLY_ENTERED]` | ☐ | ☐ | ✓ |
+| `Check Box18` | `[PRESET:3_UNLAWFUL_DETAINER_ASSISTANT]` | ☐ | ☐ | ✓ |
+| `Check Box19` | `[PRESET:5_DECLARATION_585_5]` | ☐ | ☐ | ✓ |
+| `Check Box20` | `[PRESET:7F_COSTS_WAIVED]` | ☐ | ☐ | ✓ |
+| `Check Box21` | `[PRESET:8A_SCRA_SEARCH]` | ☑ | ☑ | ✓ |
+| `Check Box22` | `[PRESET:8B_REGULAR_COMMUNICATION]` | ☐ | ☐ | ✓ |
+| `Check Box23` | `[PRESET:8C_RECENTLY_CONTACTED]` | ☐ | ☐ | ✓ |
+| `Check Box24` | `[PRESET:8D_DISCHARGED]` | ☐ | ☐ | ✓ |
+| `Check Box25` | `[PRESET:8E_NOT_ELIGIBLE]` | ☐ | ☐ | ✓ |
+| `Check Box26` | `[PRESET:8E_INCARCERATED]` | ☐ | ☐ | ✓ |
+| `Check Box27` | `[PRESET:8E_BUSINESS_ENTITY]` | ☐ | ☐ | ✓ |
+| `Check Box28` | `[PRESET:8F_OTHER]` | ☐ | ☐ | ✓ |
+| `GROUP2` | `[PRESET:4_LDA_DID_OR_DID_NOT]` | (no field) | (no field) | ✓ |
+| `GROUP3` | `[PRESET:5A_UNRUH_IS_OR_IS_NOT]` | (no field) | (no field) | ✓ |
+| `GROUP4` | `[PRESET:5B_REES_LEVERING_IS_OR_IS_NOT]` | (no field) | (no field) | ✓ |
+| `GROUP5` | `[PRESET:5C_395B_IS_OR_IS_NOT]` | (no field) | (no field) | ✓ |
+| `GROUP6` | `[PRESET:6_MAILED_OR_NOT_MAILED]` | (no field) | (no field) | ✓ |
+| `Group1` | `[PRESET:CLERK_DEFAULT_ENTERED]` | (no field) | (no field) | ✓ |
+| `Group0` | `[PRESET:CLERK_DEFAULT_NOT_ENTERED]` | (no field) | (no field) | ✓ |

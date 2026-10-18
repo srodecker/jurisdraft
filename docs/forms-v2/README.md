@@ -15,19 +15,34 @@
 - **CIV-100 (R4D), old vs new output, field by field:** [CIV-100-R4D-comparison.md](CIV-100-R4D-comparison.md)
 
 ## CIV-100 (R4D) result
-**71 of 76 fields identical.** The other 5 are intended:
-- **Fixed:** "Esq., Esq." doubled when the attorney name in Settings already ends in "Esq." (3 fields).
-- **Fixed:** the page-2 caption plaintiff was left blank.
-- **Changed:** item 1d (court judgment against…) now stays blank on a request for *entry of default*. It had been filled with the defendant name.
+Rules for a request for **entry of default** (confirmed by you):
+- Items **1d, 2 and 7 stay empty**. They belong to a request for court judgment.
+- Item **8a** is always checked.
 
-**Questions for you:**
-1. **Item 2 amount table** (demand, costs, totals, credits, balances): it stays blank as before, except Costs and Attorney fees when the case has them. Should a request for entry of default show the complaint demand in 2a? It's one line in the map either way.
-2. **Item 1d on the request for entry of default:** OK to leave it blank?
+The new engine is checked against the original on every box. All boxes match, except these fixes:
+- **"Esq., Esq."** was doubled when the attorney name in Settings already ends in "Esq." (3 fields).
+- **The page-2 caption plaintiff** was left blank.
+- **Item 1d** was filled with the defendant name. It is now empty.
+- **Item 2d** was filled with costs. It is now empty.
+- **Item 7**: the declarant name and date were filled. They are now empty. Item 7's date was one field shared with every other date on the form; it is now a separate field.
+
+Acrobat's 26 unnamed boxes (`Check Box10`–`28`, radio groups) now have readable names, e.g. `[PRESET:8A_SCRA_SEARCH]`. They keep the template's state.
+
+## Trying it before it goes live
+- **Preview deployment (`VERCEL_ENV=preview`):** the R4D uses the new engine. Production is unchanged.
+- **Which engine made a form:** a prepared form made by the new engine shows "· v2" next to its name.
+- **Switches:**
+
+  | Variable | Effect |
+  |---|---|
+  | `FORMS_V2_ON="CIV-100 (R4D).pdf"` | turns the new engine on for the listed forms (comma-separated) |
+  | `FORMS_ENGINE=v2` | turns it on for every converted form |
+  | `FORMS_ENGINE=v1` | turns it off everywhere |
 
 ## How it works
-1. `templates/v2/maps/<form>.json`: old name → new name, reviewed by you.
+1. `templates/v2/maps/<form>.json`: old name → new name, reviewed by you. `_unnamed` names Acrobat's own boxes; `_widgets` splits one place out of a shared field (`"[DATE_SIGNED]@4"`).
 2. `node scripts/rename-form-fields.js "<form>.pdf"` writes `templates/v2/<form>.pdf`. Same PDF, same positions and scripts; only the names change.
-3. Generating a form uses the v2 engine when asked (`engine: "v2"`) or when `FORMS_ENGINE=v2` is set, and only for forms that have a v2 template. Everything else uses the original engine.
+3. Generating a form uses the v2 engine per the switches above, and only for forms that have a v2 template. Everything else uses the original engine.
 4. `npm test` fills the same case with both engines and fails if any field differs, other than the listed intended ones.
 
 ## Next
