@@ -1,6 +1,6 @@
 # Forms v2: standard field names + one fact dictionary
 
-**Status:** first form converted (CIV-100 Request for Entry of Default). This is on a branch and **off by default**: the live site still uses the original engine.
+**Status:** first form converted and live: CIV-100 Request for Entry of Default. Every other form still uses the original engine.
 
 ## What changed
 | Before | After |
@@ -28,8 +28,8 @@ The new engine is checked against the original on every box. All boxes match, ex
 
 Acrobat's 26 unnamed boxes (`Check Box10`–`28`, radio groups) now have readable names, e.g. `[PRESET:8A_SCRA_SEARCH]`. They keep the template's state.
 
-## Trying it before it goes live
-- **Preview deployment (`VERCEL_ENV=preview`):** the R4D uses the new engine. Production is unchanged.
+## Live
+- **The R4D uses the new engine** everywhere. Other forms still use the original engine.
 - **Which engine made a form:** a prepared form made by the new engine shows "· v2" next to its name.
 - **Switches:**
 

@@ -190,12 +190,12 @@ async function formVariables(form) {
 }
 
 // Which engine fills a form: an explicit request wins, then FORMS_ENGINE for every form,
-// then FORMS_V2_ON (comma-separated template files). Preview deployments default to the R4D on v2.
-const V2_PREVIEW_DEFAULT = 'CIV-100 (R4D).pdf';
+// then FORMS_V2_ON (comma-separated template files). By default the converted R4D uses v2.
+const V2_DEFAULT = 'CIV-100 (R4D).pdf';
 function useV2(file, requested) {
     if (requested) return requested === 'v2';
     if (process.env.FORMS_ENGINE) return process.env.FORMS_ENGINE === 'v2';
-    const on = process.env.FORMS_V2_ON !== undefined ? process.env.FORMS_V2_ON : process.env.VERCEL_ENV === 'preview' ? V2_PREVIEW_DEFAULT : '';
+    const on = process.env.FORMS_V2_ON !== undefined ? process.env.FORMS_V2_ON : V2_DEFAULT;
     return on.split(',').map(s => s.trim()).includes(file);
 }
 
