@@ -1,0 +1,8 @@
+{
+  "_about": "CM-010 field fixes: the attorney block names were one box off.",
+  "[VAR_ATTY_WITH_SBN]": "[ATTY_SBN]",
+  "[FIRM_NAME]": "[VAR_ATTY_WITH_SBN]",
+  "[VAR_FIRM_FULL_ADDR]": "[FIRM_ADDRESS]",
+  "[FIRM_ZIP_CODE]": "[FIRM_ZIP]",
+  "CASE_NUMBER": "[CASE_NUMBER]"
+}

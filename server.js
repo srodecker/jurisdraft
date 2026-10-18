@@ -188,17 +188,22 @@ function injectProfileData(data, session) {
     }
     if (p.attorneys && p.attorneys.length > 0) {
         const a1 = p.attorneys[0];
-        if (a1.name  && empty(result['[ATTY_NAME]']))  result['[ATTY_NAME]']  = a1.name;
+        if (a1.name  && empty(result['[ATTY_NAME]']))  result['[ATTY_NAME]']  = stripEsq(a1.name);
         if (a1.sbn   && empty(result['[ATTY_SBN]']))   result['[ATTY_SBN]']   = a1.sbn;
         if (a1.email && empty(result['[ATTY_EMAIL]'])) result['[ATTY_EMAIL]'] = a1.email;
     }
     if (p.attorneys && p.attorneys.length > 1) {
         const a2 = p.attorneys[1];
-        if (a2.name  && empty(result['[ATTY_NAME2]']))  result['[ATTY_NAME2]']  = a2.name;
+        if (a2.name  && empty(result['[ATTY_NAME2]']))  result['[ATTY_NAME2]']  = stripEsq(a2.name);
         if (a2.sbn   && empty(result['[ATTY_SBN2]']))   result['[ATTY_SBN2]']   = a2.sbn;
         if (a2.email && empty(result['[ATTY_EMAIL2]'])) result['[ATTY_EMAIL2]'] = a2.email;
     }
     return result;
+}
+
+// "Jane Doe, Esq." → "Jane Doe" (the forms add Esq. themselves)
+function stripEsq(name) {
+    return String(name || '').trim().replace(/(,\s*)?Esq\.?$/i, '').trim().replace(/,$/, '');
 }
 
 /**
@@ -1022,6 +1027,17 @@ async function processDynamicVariables(data) {
     if (emails.length > 0) {
         data['[VAR_ATTY_EMAIL]'] = emails.join(', ');
     }
+
+    // VAR_ATTY_BLOCK: caption box "Name, State Bar number, and address", one item per line
+    {
+        const block = [...attorneys, formattedFirmName, standardizeAddress(firmAddress), firmCity ? `${firmCity}, ${firmState} ${firmZip}`.trim() : ''].filter(Boolean);
+        if (block.length) data['[VAR_ATTY_BLOCK]'] = block.join('\n');
+    }
+
+    // CM-180 Notice of Stay: usual case is the debtor's bankruptcy, filed by plaintiff's attorney
+    // (1b, attorney for plaintiff; 2a all parties; 3a automatic stay). Values sent with the request win.
+    const stayDefaults = { '[IS_STAY_1B]': true, '[IS_STAY_1B_ATTORNEY]': true, '[IS_STAY_ALL_PARTIES]': true, '[IS_STAY_BANKRUPTCY]': true };
+    for (const [k, v] of Object.entries(stayDefaults)) if (data[k] === undefined) data[k] = v;
     
     // Handle VAR_FIRM_FULL_ADDR
     if (formattedFirmName || firmAddress || firmCity) {

@@ -1,0 +1,18 @@
+{
+  "_about": "LASC (LACIV 109) field fixes: the case name and number on every page share one field each; 0604 keeps the name the app checks for breach of contract.",
+  "[VAR_CASE_NAME2]": "[VAR_CASE_NAME]",
+  "[VAR_CASE_NAME3]": "[VAR_CASE_NAME]",
+  "[VAR_CASE_NAME4]": "[VAR_CASE_NAME]",
+  "[VAR_CASE_NAME5]": "[VAR_CASE_NAME]",
+  "[VAR_CASE_NUMBER]": "[CASE_NUMBER]",
+  "[VAR_CASE_NUMBER2]": "[CASE_NUMBER]",
+  "[VAR_CASE_NUMBER3]": "[CASE_NUMBER]",
+  "[VAR_CASE_NUMBER4]": "[CASE_NUMBER]",
+  "[VAR_CASE_NUMBER5]": "[CASE_NUMBER]",
+  "[IS_BREACH_OF_CONTRACT_0604]": "[IS_BREACH_OF_CONTRACT_06]",
+  "_fontSize": {
+    "[DEBTOR1_ADDRESS]": 10,
+    "[VAR_CASE_NAME]": 8,
+    "[CASE_NUMBER]": 9
+  }
+}
