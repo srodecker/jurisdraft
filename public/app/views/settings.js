@@ -10,6 +10,8 @@ export async function renderSettings(view) {
     let status = null;
     try { profile = await api('/api/profile'); } catch (e) { view.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
     try { status = await api('/api/system/status'); } catch (_) {}
+    let prefs = { items: [] };
+    try { prefs = await api('/api/form-prefs'); } catch (_) {}
     const f = profile.firm || {};
     const atts = (profile.attorneys && profile.attorneys.length ? profile.attorneys : [{}, {}]).concat([{}]).slice(0, Math.max(2, (profile.attorneys || []).length + 1));
     view.innerHTML = `
@@ -42,10 +44,27 @@ export async function renderSettings(view) {
                         <dt>Background schedule</dt><dd>${status.cron ? '<span class="chip green">CRON_SECRET set</span>' : '<span class="muted">Reading runs while the app is open</span>'}</dd>
                     </dl>` : '<div class="empty">Status unavailable.</div>'}
                 </div>
+                <div class="card"><div class="card-h">Form preferences <span class="r muted">learned by asking</span></div>
+                    <div id="prefRows">${prefRows(prefs.items)}</div>
+                </div>
                 <div class="card"><div class="card-h">Signed in</div><p style="margin:0">${esc(profile.username || '')}</p></div>
             </div>
         </div>`;
 }
+
+// Answers remembered when a form asked (who signs, nicknames). Forget one and the next form asks again.
+function prefRows(items) {
+    if (!items.length) return '<p class="small muted" style="margin:0">Nothing yet. When a form needs a choice the documents can\'t settle, it asks you and can remember the answer here.</p>';
+    return items.map(p => `<div class="row"><div class="grow"><div class="t">${esc(p.label)}</div><div class="d">${esc(p.value)}</div></div><button class="btn ghost sm" data-act="forget-pref" data-id="${esc(p.id)}">Forget</button></div>`).join('');
+}
+
+action('forget-pref', async d => {
+    try {
+        const r = await api(`/api/form-prefs/${encodeURIComponent(d.id)}`, { method: 'DELETE' });
+        document.getElementById('prefRows').innerHTML = prefRows(r.items);
+        toast('Forgotten — the next form will ask again', 'ok');
+    } catch (e) { toast(e.message, 'err'); }
+});
 
 function attyRow(a, i) {
     return `<div class="fgrid atty" style="grid-template-columns:2fr 1fr 2fr;margin-bottom:10px">

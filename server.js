@@ -60,6 +60,8 @@ function createToken(username, passwordHash) {
 
 // Helper: read a profile from disk, or from environment variable if not found
 const settingsStore = require('./lib/settings-store');
+const formPrefs = require('./lib/form-prefs');
+const { bareName } = require('./lib/forms/formatters');
 
 // Profile from disk (or env var) with the user's saved settings (firm, attorneys) on top
 async function readProfile(username) {
@@ -550,6 +552,8 @@ const services = require('./lib/services');
 services.fillPdfTemplate = fillPdfTemplate;
 services.fillDocxTemplate = fillDocxTemplate;
 services.readProfile = readProfile;
+services.loadFormPrefs = loadFormPrefs;
+services.saveFormPrefs = saveFormPrefs;
 
 const mattersRouter = require('./routes/matters');
 // Protect all matter/workflow/notification/chat/import endpoints
@@ -832,7 +836,13 @@ async function processDynamicVariables(data) {
             data[key] = '';
         }
     });
-    
+
+    // Party names alone: documents often already say "Name, et al." or "Name, an individual",
+    // and the forms below add those themselves
+    for (const k of ['[DEFENDANT_NAME]', '[DEBTOR1_NAME]', '[DEFENDANT_NAME_P2]']) {
+        if (typeof data[k] === 'string' && data[k]) data[k] = bareName(data[k]);
+    }
+
     // --- SANITIZE: LAST 4 DIGITS ONLY ---
     // Force DL and SSN fields to take only the last 4 characters, ignoring extra digits or spaces.
     const sanitizeLast4 = (val) => {
@@ -2015,10 +2025,17 @@ async function fillPdfTemplate(templateName, jsonData, session, opts = {}) {
     // Sanitize all values (replace curly quotes / Cyrillic lookalikes with ASCII)
     data = sanitizeAllValues(data);
 
+    // Choices the documents can't settle (who signs, nicknames): remembered answer, answer given now,
+    // or — when the caller can ask the user — stop and return the questions
+    const decided = formPrefs.decide(data, opts.prefs || {}, opts.answers || {}, !!opts.ask);
+    if (decided.questions.length) throw Object.assign(new Error('A few choices are needed before filling this form'), { status: 409, questions: decided.questions });
+    data = decided.data;
+
     // Process dynamic variables (e.g., VAR_ATTY_NAME_WITH_ADDRESS)
     // NOTE: processDynamicVariables introduces NEW fields (court data, composed strings)
     // that weren't present when sanitizeAllValues ran above, so sanitize again after.
     data = await processDynamicVariables(data);
+    formPrefs.applySigner(data, decided.chosen);
     data = sanitizeAllValues(data);
     return writePdfTemplate(templateName, data, session, opts);
 }
@@ -2371,6 +2388,38 @@ async function writePdfTemplate(templateName, data, session, opts = {}) {
 }
 
 // Fill PDF with provided JSON data
+// Learned form preferences (lib/form-prefs.js): remembered answers live in the user's settings.
+// body.ask: the page can show questions; body.answers: answers given now; body.remember: keep them.
+async function loadFormPrefs(session, body = {}) {
+    const prefs = session && session.username ? ((await settingsStore.getSettings(session.username)).formPrefs || {}) : {};
+    return { prefs, answers: body.answers || {}, ask: !!body.ask };
+}
+async function saveFormPrefs(session, body = {}) {
+    if (!session || !session.username || !body.remember || !body.answers) return;
+    const current = await settingsStore.getSettings(session.username);
+    await settingsStore.saveSettings(session.username, { ...current, formPrefs: formPrefs.remember(current.formPrefs, body.answers) });
+}
+
+app.get('/api/form-prefs', async (req, res) => {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: 'Sign in to see your form preferences' });
+    const prefs = (await settingsStore.getSettings(session.username)).formPrefs || {};
+    res.json({ prefs, items: formPrefs.describe(prefs) });
+});
+
+// Forget one remembered answer (or all, with no id): the next form asks again
+async function forgetFormPrefs(req, res) {
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: 'Sign in first' });
+    const current = await settingsStore.getSettings(session.username);
+    const prefs = { ...(current.formPrefs || {}) };
+    if (req.params.id) delete prefs[req.params.id]; else for (const k of Object.keys(prefs)) delete prefs[k];
+    await settingsStore.saveSettings(session.username, { ...current, formPrefs: prefs });
+    res.json({ prefs, items: formPrefs.describe(prefs) });
+}
+app.delete('/api/form-prefs', forgetFormPrefs);
+app.delete('/api/form-prefs/:id', forgetFormPrefs);
+
 app.post('/api/fill-pdf', async (req, res) => {
     try {
         const { templateName, jsonData } = req.body;
@@ -2387,7 +2436,10 @@ app.post('/api/fill-pdf', async (req, res) => {
             return res.status(400).json({ error: 'Invalid JSON format' });
         }
 
-        const result = await fillPdfTemplate(templateName, data, getSession(req));
+        const session = getSession(req);
+        const prefOpts = await loadFormPrefs(session, req.body);
+        const result = await fillPdfTemplate(templateName, data, session, prefOpts);
+        await saveFormPrefs(session, req.body);
 
         // Store editable + court-ready versions in memory for /api/download
         currentFilledPDF = result.pdfBytes;
@@ -2403,6 +2455,7 @@ app.post('/api/fill-pdf', async (req, res) => {
             processedData: result.processedData
         });
     } catch (error) {
+        if (error.questions) return res.status(409).json({ error: error.message, questions: error.questions });
         console.error('Error filling PDF:', error);
         if (error.status) return res.status(error.status).json({ error: error.message });
         res.status(500).json({ error: 'Failed to fill PDF: ' + error.message });

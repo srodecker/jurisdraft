@@ -15,6 +15,7 @@ const intel = require('../lib/case-intel');
 const { candidatesFrom, LABELS } = require('../lib/fact-merge');
 const services = require('../lib/services');
 const formsV2 = require('../lib/forms/engine');
+const formPrefs = require('../lib/form-prefs');
 const { applyFactOverrides, createMatterObject } = require('./matters');
 
 const router = express.Router();
@@ -199,6 +200,20 @@ function useV2(file, requested) {
     return on.split(',').map(s => s.trim()).includes(file);
 }
 
+// Attorneys from Settings fill in when the documents name none, so preferences see the real list
+function withProfileAttorneys(fd, session) {
+    const out = { ...fd };
+    const list = (session && session.profile && session.profile.attorneys) || [];
+    list.slice(0, 2).forEach((a, i) => {
+        const sfx = i ? '2' : '';
+        if (out[`[ATTY_NAME${sfx}]`] || !a || !a.name) return;
+        out[`[ATTY_NAME${sfx}]`] = a.name;
+        if (!out[`[ATTY_SBN${sfx}]`] && a.sbn) out[`[ATTY_SBN${sfx}]`] = a.sbn;
+        if (!out[`[ATTY_EMAIL${sfx}]`] && a.email) out[`[ATTY_EMAIL${sfx}]`] = a.email;
+    });
+    return out;
+}
+
 async function generateForm(matter, formRef, values, session, by = 'user', opts = {}) {
     const form = intel.findForm(formRef);
     if (!form) throw Object.assign(new Error(`Unknown form "${formRef}". Available: ${intel.FORM_CATALOG.map(f => f.code + ' ' + f.title).join('; ')}`), { status: 400 });
@@ -206,10 +221,15 @@ async function generateForm(matter, formRef, values, session, by = 'user', opts 
     const data = intel.buildFormData(matter, values || {});
     const isDocx = form.file.endsWith('.docx');
     let buffer, emptyFields = [], filledCount = 0, used = data;
+    // Learned preferences (who signs, nicknames): remembered answers, answers given now, or ask (opts.ask)
+    const prefOpts = services.loadFormPrefs ? await services.loadFormPrefs(session, { ask: opts.ask, answers: opts.answers }) : {};
     // Forms v2 (standard field names + fact dictionary), only for templates that have been converted (templates/v2/)
     if (!isDocx && useV2(form.file, opts.engine) && await formsV2.hasV2Template(form.file)) {
+        const decided = formPrefs.decide(withProfileAttorneys(intel.buildFormData(matter, {}), session), prefOpts.prefs, prefOpts.answers, prefOpts.ask);
+        if (decided.questions.length) throw Object.assign(new Error('A few choices are needed before filling this form'), { status: 409, questions: decided.questions });
         const r = await formsV2.fillTemplateV2(form.file, {
-            matter, fd: intel.buildFormData(matter, {}), profile: session && session.profile, today: intel.todayLA(),
+            matter, fd: decided.data, profile: session && session.profile, today: intel.todayLA(),
+            signer: formPrefs.signerIndex(decided.data, decided.chosen),
             overrides: values || {}, session, fillPdf: services.fillPdfTemplate
         });
         return saveRecord(matter, form, r.pdfBytes, 'application/pdf', {
@@ -226,7 +246,7 @@ async function generateForm(matter, formRef, values, session, by = 'user', opts 
         const xml = new PizZip(buffer).file('word/document.xml').asText().replace(/<[^>]+>/g, '');
         emptyFields = [...new Set((xml.match(/\[[A-Z0-9_]+\]/g) || []))].filter(v => !['[PROPOSED]', '[X]'].includes(v));
     } else {
-        const r = await services.fillPdfTemplate(form.file, data, session);
+        const r = await services.fillPdfTemplate(form.file, data, session, prefOpts);
         buffer = r.pdfBytes;
         filledCount = r.filledCount;
         emptyFields = r.emptyFields;
@@ -386,13 +406,21 @@ router.post('/api/cases/:id/packages', async (req, res) => {
         if (!pkg) return res.status(400).json({ error: 'Unknown package' });
         const matter = await readMatter(req.params.id);
         const by = req.session ? req.session.username : 'user';
+        // Ask the open choices once for the whole package, before any form is made
+        const opts = { ask: req.body.ask, answers: req.body.answers };
+        if (opts.ask && services.loadFormPrefs) {
+            const p = await services.loadFormPrefs(req.session, req.body);
+            const open = formPrefs.decide(withProfileAttorneys(intel.buildFormData(matter, {}), req.session), p.prefs, p.answers, true).questions;
+            if (open.length) return res.status(409).json({ error: 'A few choices are needed before filling these forms', questions: open });
+        }
         const records = [];
         const errors = [];
         for (const file of pkg.forms) {
-            try { records.push(await generateForm(matter, file, req.body.values || {}, req.session, by)); }
+            try { records.push(await generateForm(matter, file, req.body.values || {}, req.session, by, opts)); }
             catch (e) { errors.push(`${file}: ${e.message}`); }
         }
         await writeMatter(matter.id, matter);
+        if (services.saveFormPrefs) await services.saveFormPrefs(req.session, req.body);
         res.status(201).json({ package: pkg.id, title: pkg.title, records, errors });
     } catch (err) {
         res.status(err.status || 500).json({ error: err.message });
@@ -425,10 +453,12 @@ router.get('/api/cases/:id/forms-merged', async (req, res) => {
 router.post('/api/cases/:id/forms', async (req, res) => {
     try {
         const matter = await readMatter(req.params.id);
-        const record = await generateForm(matter, req.body.form, req.body.values, req.session, req.session ? req.session.username : 'user', { engine: req.body.engine });
+        const record = await generateForm(matter, req.body.form, req.body.values, req.session, req.session ? req.session.username : 'user', { engine: req.body.engine, ask: req.body.ask, answers: req.body.answers });
         await writeMatter(matter.id, matter);
+        if (services.saveFormPrefs) await services.saveFormPrefs(req.session, req.body);
         res.status(201).json(record);
     } catch (err) {
+        if (err.questions) return res.status(409).json({ error: err.message, questions: err.questions });
         console.error('[Forms] Generate failed:', err.message);
         res.status(err.status || 500).json({ error: err.message });
     }

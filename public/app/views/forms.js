@@ -57,9 +57,43 @@ export async function renderFormsCatalog(view) {
         <div class="formgrid">${forms.map(f => `<div class="fcard"><div class="c">${esc(f.code)}</div><div class="n">${esc(f.title)}</div><div class="p">${esc(f.purpose)}</div><div class="small muted">Stage: ${esc(f.stage)}</div></div>`).join('')}</div>`;
 }
 
+// A choice the documents can't settle (who signs, nicknames): the server answers 409 with questions.
+// Ask them, optionally remember the answers, and send the request again.
+function askChoices(questions) {
+    return new Promise(resolve => {
+        modal('Before filling', `
+            ${questions.map(q => `<div class="field" style="margin-bottom:14px"><div class="t" style="margin-bottom:6px">${esc(q.question)}</div>
+                ${q.options.map((o, i) => `<label class="row" style="cursor:pointer;gap:8px"><input type="radio" name="q-${esc(q.id)}" value="${esc(o.value)}" ${i === 0 ? 'checked' : ''}>${esc(o.label)}</label>`).join('')}</div>`).join('')}
+            <label class="row small" style="cursor:pointer;gap:8px"><input type="checkbox" id="qRemember" checked>Remember my answers (change them in Settings)</label>`,
+            `<button class="btn ghost" data-act="choices-cancel">Cancel</button><button class="btn primary" data-act="choices-ok">Fill form</button>`);
+        pendingChoices = { questions, resolve };
+    });
+}
+let pendingChoices = null;
+action('choices-ok', () => {
+    if (!pendingChoices) return;
+    const { questions, resolve } = pendingChoices;
+    const answers = {};
+    for (const q of questions) { const el = document.querySelector(`input[name="q-${q.id}"]:checked`); if (el) answers[q.id] = el.value; }
+    const remember = !!(document.getElementById('qRemember') || {}).checked;
+    pendingChoices = null; closeModal(); resolve({ answers, remember });
+});
+action('choices-cancel', () => { if (pendingChoices) { pendingChoices.resolve(null); pendingChoices = null; } closeModal(); });
+
+// POST that may need answers first
+async function postAsking(url, body) {
+    try { return await api(url, { json: { ...body, ask: true } }); }
+    catch (e) {
+        if (e.status !== 409 || !e.data || !e.data.questions) throw e;
+        const picked = await askChoices(e.data.questions);
+        if (!picked) throw new Error('Cancelled');
+        return api(url, { json: { ...body, ask: true, ...picked } });
+    }
+}
+
 async function prepare(caseId, file, values) {
     toast('Preparing form…', 'info', 2000);
-    const rec = await api(`/api/cases/${caseId}/forms`, { json: { form: file, values } });
+    const rec = await postAsking(`/api/cases/${caseId}/forms`, { form: file, values });
     emit('cases-changed', [caseId]);
     return rec;
 }
@@ -67,7 +101,7 @@ async function prepare(caseId, file, values) {
 action('prepare-package', async d => {
     toast('Preparing package…', 'info', 2500);
     try {
-        const r = await api(`/api/cases/${d.case}/packages`, { json: { package: d.pkg } });
+        const r = await postAsking(`/api/cases/${d.case}/packages`, { package: d.pkg });
         emit('cases-changed', [d.case]);
         const pdfIds = r.records.filter(x => /pdf/.test(x.contentType || '')).map(x => x.id);
         const blanks = r.records.reduce((n, x) => n + (x.missing || []).length, 0);
