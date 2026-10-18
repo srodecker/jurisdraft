@@ -1084,7 +1084,8 @@
 
     // A choice the documents can't settle (who signs, nicknames): ask, optionally remember.
     // Resolves to { answers, remember } or null when cancelled.
-    function askChoices(questions) {
+    // change=true: questions carry the value used (preselected) and remembering is opt-in
+    function askChoices(questions, change) {
         return new Promise(resolve => {
             const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
             const box = document.createElement('div');
@@ -1092,8 +1093,8 @@
             box.innerHTML = `<form style="background:#fff;color:#111;border-radius:10px;max-width:520px;width:100%;padding:20px;font:14px system-ui,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,.3)">
                 <div style="font-weight:600;font-size:16px;margin-bottom:12px">Before filling this form</div>
                 ${questions.map(q => `<fieldset style="border:0;padding:0;margin:0 0 14px"><legend style="margin-bottom:6px">${esc(q.question)}</legend>
-                    ${q.options.map((o, i) => `<label style="display:block;padding:4px 0;cursor:pointer"><input type="radio" name="${esc(q.id)}" value="${esc(o.value)}" ${i === 0 ? 'checked' : ''}> ${esc(o.label)}</label>`).join('')}</fieldset>`).join('')}
-                <label style="display:block;margin:6px 0 16px;cursor:pointer"><input type="checkbox" name="__remember" checked> Remember my answers (change them later in Settings)</label>
+                    ${q.options.map((o, i) => `<label style="display:block;padding:4px 0;cursor:pointer"><input type="radio" name="${esc(q.id)}" value="${esc(o.value)}" ${(q.value !== undefined ? o.value === q.value : i === 0) ? 'checked' : ''}> ${esc(o.label)}</label>`).join('')}</fieldset>`).join('')}
+                <label style="display:block;margin:6px 0 16px;cursor:pointer"><input type="checkbox" name="__remember" ${change ? '' : 'checked'}> ${change ? 'Make these my usual' : 'Remember my answers as my usual (change them any time)'}</label>
                 <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" data-x style="padding:8px 14px">Cancel</button><button type="submit" style="padding:8px 14px;background:#2563eb;color:#fff;border:0;border-radius:6px">Fill form</button></div></form>`;
             const form = box.querySelector('form');
             const done = v => { box.remove(); resolve(v); };
@@ -1163,7 +1164,20 @@
                 fieldStatsHTML += `<br><span class="badge badge-warning mt-2">Zip ${debtorZip} not found</span>`;
             }
 
+            // Choices used (who signs, caption, nicknames), with a one-click change for this form
+            if (result.choices && result.choices.length) {
+                const src = { usual: 'your usual', answer: 'this form', default: 'default' };
+                const h = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+                const label = c => (c.options.find(o => o.value === c.value) || {}).label || c.value;
+                fieldStatsHTML += `<div style="margin-top:8px;font-size:12px;line-height:1.5">${result.choices.map(c => `<div><b>${h(c.question.replace(/\?$/, ''))}:</b> ${h(label(c))} <span style="opacity:.7">(${h(src[c.source] || c.source)})</span></div>`).join('')}<button type="button" id="changeChoicesBtn" style="margin-top:4px;padding:3px 10px">Change</button></div>`;
+            }
+
             fieldStats.innerHTML = fieldStatsHTML;
+            const changeBtn = document.getElementById('changeChoicesBtn');
+            if (changeBtn) changeBtn.onclick = async () => {
+                const picked = await askChoices(result.choices, true);
+                if (picked) fillPDFInternal(templateName, jsonData, picked);
+            };
 
             downloadBtn.disabled = false;
             downloadCourtBtn.disabled = false;

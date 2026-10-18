@@ -2035,9 +2035,10 @@ async function fillPdfTemplate(templateName, jsonData, session, opts = {}) {
     // NOTE: processDynamicVariables introduces NEW fields (court data, composed strings)
     // that weren't present when sanitizeAllValues ran above, so sanitize again after.
     data = await processDynamicVariables(data);
-    formPrefs.applySigner(data, decided.chosen);
+    formPrefs.applyAttorneys(data, decided.chosen, decided.data);
     data = sanitizeAllValues(data);
-    return writePdfTemplate(templateName, data, session, opts);
+    const written = await writePdfTemplate(templateName, data, session, opts);
+    return { ...written, choices: decided.applied };
 }
 
 // Load a template, fill fields by name, stamp the signature, return bytes
@@ -2452,7 +2453,8 @@ app.post('/api/fill-pdf', async (req, res) => {
             filledFields: result.filledCount,
             totalFields: result.totalFields,
             availableFields: result.fieldInfo,
-            processedData: result.processedData
+            processedData: result.processedData,
+            choices: result.choices || []
         });
     } catch (error) {
         if (error.questions) return res.status(409).json({ error: error.message, questions: error.questions });

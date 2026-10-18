@@ -59,12 +59,13 @@ export async function renderFormsCatalog(view) {
 
 // A choice the documents can't settle (who signs, nicknames): the server answers 409 with questions.
 // Ask them, optionally remember the answers, and send the request again.
-function askChoices(questions) {
+// change=true: the questions carry the value used last time (preselected), and remembering is opt-in
+function askChoices(questions, change = false) {
     return new Promise(resolve => {
-        modal('Before filling', `
+        modal(change ? 'Change for this form' : 'Before filling', `
             ${questions.map(q => `<div class="field" style="margin-bottom:14px"><div class="t" style="margin-bottom:6px">${esc(q.question)}</div>
-                ${q.options.map((o, i) => `<label class="row" style="cursor:pointer;gap:8px"><input type="radio" name="q-${esc(q.id)}" value="${esc(o.value)}" ${i === 0 ? 'checked' : ''}>${esc(o.label)}</label>`).join('')}</div>`).join('')}
-            <label class="row small" style="cursor:pointer;gap:8px"><input type="checkbox" id="qRemember" checked>Remember my answers (change them in Settings)</label>`,
+                ${q.options.map((o, i) => `<label class="row" style="cursor:pointer;gap:8px"><input type="radio" name="q-${esc(q.id)}" value="${esc(o.value)}" ${(q.value !== undefined ? o.value === q.value : i === 0) ? 'checked' : ''}>${esc(o.label)}</label>`).join('')}</div>`).join('')}
+            <label class="row small" style="cursor:pointer;gap:8px"><input type="checkbox" id="qRemember" ${change ? '' : 'checked'}>${change ? 'Make these my usual' : 'Remember my answers as my usual (change them any time)'}</label>`,
             `<button class="btn ghost" data-act="choices-cancel">Cancel</button><button class="btn primary" data-act="choices-ok">Fill form</button>`);
         pendingChoices = { questions, resolve };
     });
@@ -137,6 +138,27 @@ action('show-form', async d => {
 action('form-open', d => openFile(`/api/cases/${d.case}/forms/${d.form}/download?inline=1`, { inline: true }));
 
 let editing = null;
+// "Signs: Sabaa Ghomashchi (your usual) · Caption: …  Change"
+function choicesLine(choices = []) {
+    if (!choices.length) return '';
+    const label = c => (c.options.find(o => o.value === c.value) || {}).label || c.value;
+    const src = { usual: 'your usual', answer: 'this form', default: 'default' };
+    return `<div class="banner info" style="align-items:center">${icon('check')}<div class="grow small">${choices.map(c => `<div><b>${esc(c.question.replace(/\?$/, ''))}:</b> ${esc(label(c))} <span class="muted">(${esc(src[c.source] || c.source)})</span></div>`).join('')}</div>
+        <button class="btn ghost sm" data-act="form-change-choices">Change</button></div>`;
+}
+
+action('form-change-choices', async () => {
+    const { caseId, rec } = editing;
+    const picked = await askChoices(rec.choices || [], true);
+    if (!picked) return showRecord(caseId, rec);
+    try {
+        toast('Preparing form…', 'info', 2000);
+        const fresh = await api(`/api/cases/${caseId}/forms`, { json: { form: rec.form, values: rec.values || {}, ask: true, ...picked } });
+        emit('cases-changed', [caseId]);
+        showRecord(caseId, fresh);
+    } catch (e) { toast(e.message, 'err'); }
+});
+
 function showRecord(caseId, rec) {
     editing = { caseId, rec };
     const filled = Object.entries(rec.filled || {});
@@ -144,6 +166,7 @@ function showRecord(caseId, rec) {
     const isDocx = (rec.contentType || '').includes('word');
     modal(`${rec.code} — ${rec.title}`, `
         <div class="muted small" style="margin-bottom:12px">Prepared ${esc(fmtDate(String(rec.createdAt).slice(0, 10)))} by ${esc(rec.createdBy || '')} · ${rec.filledCount || 0} fields filled · edit any value below and regenerate</div>
+        ${choicesLine(rec.choices)}
         ${missing.length ? `<div class="banner">${icon('warn')}<div><b>${missing.length} key field${missing.length === 1 ? '' : 's'} blank.</b> Fill them in below and click Regenerate — or set firm details once in Settings.</div></div>` : ''}
         <div class="kv" id="formVals">
             ${missing.map(k => `<div title="${esc(k)}"><b style="color:var(--amber)">${esc(varLabel(k))}</b></div><div><input class="input" data-var="${esc(k)}" placeholder="blank"></div>`).join('')}

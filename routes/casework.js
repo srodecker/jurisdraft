@@ -220,7 +220,7 @@ async function generateForm(matter, formRef, values, session, by = 'user', opts 
     if (!services.fillPdfTemplate) throw new Error('Form engine not available');
     const data = intel.buildFormData(matter, values || {});
     const isDocx = form.file.endsWith('.docx');
-    let buffer, emptyFields = [], filledCount = 0, used = data;
+    let buffer, emptyFields = [], filledCount = 0, used = data, choices = [];
     // Learned preferences (who signs, nicknames): remembered answers, answers given now, or ask (opts.ask)
     const prefOpts = services.loadFormPrefs ? await services.loadFormPrefs(session, { ask: opts.ask, answers: opts.answers }) : {};
     // Forms v2 (standard field names + fact dictionary), only for templates that have been converted (templates/v2/)
@@ -229,13 +229,13 @@ async function generateForm(matter, formRef, values, session, by = 'user', opts 
         if (decided.questions.length) throw Object.assign(new Error('A few choices are needed before filling this form'), { status: 409, questions: decided.questions });
         const r = await formsV2.fillTemplateV2(form.file, {
             matter, fd: decided.data, profile: session && session.profile, today: intel.todayLA(),
-            signer: formPrefs.signerIndex(decided.data, decided.chosen),
+            signer: formPrefs.signerIndex(decided.data, decided.chosen), captionSignerOnly: decided.chosen.caption === 'signer',
             overrides: values || {}, session, fillPdf: services.fillPdfTemplate
         });
         return saveRecord(matter, form, r.pdfBytes, 'application/pdf', {
             filledCount: r.filledCount, missing: r.missing, values: values || {}, engine: 'v2',
             filled: Object.fromEntries(Object.entries(r.values).filter(([, v]) => typeof v === 'string')),
-            unknown: r.unknown
+            unknown: r.unknown, choices: decided.applied
         }, by);
     }
     if (isDocx) {
@@ -247,6 +247,7 @@ async function generateForm(matter, formRef, values, session, by = 'user', opts 
         emptyFields = [...new Set((xml.match(/\[[A-Z0-9_]+\]/g) || []))].filter(v => !['[PROPOSED]', '[X]'].includes(v));
     } else {
         const r = await services.fillPdfTemplate(form.file, data, session, prefOpts);
+        choices = r.choices || [];
         buffer = r.pdfBytes;
         filledCount = r.filledCount;
         emptyFields = r.emptyFields;
@@ -260,7 +261,7 @@ async function generateForm(matter, formRef, values, session, by = 'user', opts 
         filled[v] = String(val).slice(0, 300);
     }
     return saveRecord(matter, form, buffer, isDocx ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/pdf', {
-        filledCount, missing: intel.importantMissing(emptyFields), values: values || {}, filled, engine: 'v1'
+        filledCount, missing: intel.importantMissing(emptyFields), values: values || {}, filled, engine: 'v1', choices
     }, by);
 }
 
